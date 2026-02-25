@@ -3,11 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로또 번호 추첨기</title>
+    <title>AI 나이 구분기 (아기 vs 초등학생)</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <button id="theme-toggle">다크 모드</button>
+    
+    <div class="container">
+        <h1>AI 나이 구분기</h1>
+        <p>아기인지 초등학생인지 AI가 판단해줍니다.</p>
+        
+        <div id="upload-container">
+            <input type="file" id="image-input" accept="image/*" style="display: none;">
+            <button id="upload-button">사진 업로드하기</button>
+        </div>
+        
+        <div id="image-preview-container" style="display: none; margin-top: 20px;">
+            <img id="image-preview" src="#" alt="미리보기" style="max-width: 100%; border-radius: 10px;">
+        </div>
+
+        <div id="result-container" style="margin-top: 20px; font-size: 20px; font-weight: bold;">
+            <!-- 결과가 여기에 표시됩니다 -->
+        </div>
+        
+        <div id="label-container" style="margin-top: 10px;">
+            <!-- 상세 확률이 여기에 표시됩니다 -->
+        </div>
+    </div>
+
     <div class="container">
         <h1>로또 번호 추첨기</h1>
         <div class="lotto-numbers">
@@ -43,6 +66,9 @@
         </script>
         <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
     <script src="main.js"></script>
 </body>
 </html>
