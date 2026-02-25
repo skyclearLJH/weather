@@ -3,72 +3,124 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 나이 구분기 (아기 vs 초등학생)</title>
+    <title>AI 나이 구분기 & 로또 번호 생성기 | 스마트 라이프 툴</title>
+    <meta name="description" content="AI를 활용한 아기/초등학생 사진 구분 서비스와 행운의 로또 번호 추첨 기능을 제공하는 고품질 웹 도구입니다.">
+    
+    <!-- Google AdSense -->
     <meta name="google-adsense-account" content="ca-pub-4036553228368243">
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4036553228368243"
      crossorigin="anonymous"></script>
+    
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
 </head>
 <body>
-    <button id="theme-toggle">다크 모드</button>
-    
-    <div class="container">
-        <h1>AI 나이 구분기</h1>
-        <p>아기인지 초등학생인지 AI가 판단해줍니다.</p>
-        
-        <div id="upload-container">
-            <input type="file" id="image-input" accept="image/*" style="display: none;">
-            <button id="upload-button">사진 업로드하기</button>
-        </div>
-        
-        <div id="image-preview-container" style="display: none; margin-top: 20px;">
-            <img id="image-preview" src="#" alt="미리보기" style="max-width: 100%; border-radius: 10px;">
-        </div>
-
-        <div id="result-container" style="margin-top: 20px; font-size: 20px; font-weight: bold;">
-            <!-- 결과가 여기에 표시됩니다 -->
-        </div>
-        
-        <div id="label-container" style="margin-top: 10px;">
-            <!-- 상세 확률이 여기에 표시됩니다 -->
-        </div>
-    </div>
-
-    <div class="container">
-        <h1>로또 번호 추첨기</h1>
-        <div class="lotto-numbers">
-        </div>
-        <button id="draw-button">번호 추첨하기</button>
-    </div>
-
-    <div class="container partnership-container">
-        <h2>제휴 문의</h2>
-        <form action="https://formspree.io/f/xlgwaovq" method="POST" id="partnership-form">
-            <div class="form-group">
-                <input type="text" name="name" placeholder="이름" required>
+    <nav>
+        <div class="nav-content">
+            <a href="#" class="logo">SmartTools</a>
+            <div class="nav-links">
+                <a href="#ai-section">AI 구분기</a>
+                <a href="#lotto-section">로또 생성기</a>
+                <a href="#contact-section">문의하기</a>
+                <button id="theme-toggle">다크 모드</button>
             </div>
-            <div class="form-group">
-                <input type="email" name="email" placeholder="이메일 주소" required>
-            </div>
-            <div class="form-group">
-                <textarea name="message" placeholder="문의 내용" required></textarea>
-            </div>
-            <button type="submit" id="submit-button">문의 보내기</button>
-        </form>
-    </div>
+        </div>
+    </nav>
 
-    <div class="container">
-        <div id="disqus_thread"></div>
-        <script>
-            (function() { // DON'T EDIT BELOW THIS LINE
-            var d = document, s = d.createElement('script');
-            s.src = 'https://weather-9.disqus.com/embed.js';
-            s.setAttribute('data-timestamp', +new Date());
-            (d.head || d.body).appendChild(s);
-            })();
-        </script>
-        <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
-    </div>
+    <main>
+        <!-- AI Classifier Section -->
+        <section id="ai-section" class="section">
+            <h1>AI 나이 구분 서비스</h1>
+            <p class="description">인공지능 딥러닝 기술을 활용하여 업로드한 사진 속 인물이 아기인지 초등학생인지 정교하게 분석합니다. Teachable Machine 모델을 기반으로 한 고성능 이미지 분류 엔진입니다.</p>
+            
+            <div id="upload-container" onclick="document.getElementById('image-input').click()">
+                <input type="file" id="image-input" accept="image/*" style="display: none;">
+                <p>📷 이곳을 클릭하거나 사진을 드래그하여 업로드하세요</p>
+                <button id="upload-button">사진 선택하기</button>
+            </div>
+            
+            <div id="image-preview-container" style="display: none; margin-top: 20px;">
+                <img id="image-preview" src="#" alt="미리보기">
+            </div>
+
+            <div id="result-container" style="margin-top: 25px; font-size: 1.25rem; font-weight: 800; color: var(--button-bg);"></div>
+            <div id="label-container" style="margin-top: 15px; color: var(--text-muted); font-size: 0.9rem;"></div>
+            
+            <hr style="margin: 30px 0; border: 0; border-top: 1px solid var(--shadow-color);">
+            <div class="info-text" style="font-size: 0.9rem; text-align: left;">
+                <h3>💡 이용 안내</h3>
+                <ul>
+                    <li>정면 사진을 사용하면 정확도가 더 높아집니다.</li>
+                    <li>개인 정보 보호를 위해 사진은 서버에 저장되지 않고 브라우저에서 즉시 분석됩니다.</li>
+                    <li>본 서비스는 오락용이며, 실제 나이와 차이가 있을 수 있습니다.</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Lotto Section -->
+        <section id="lotto-section" class="section">
+            <h2>행운의 로또 번호 추첨</h2>
+            <p class="description">무작위 난수 생성 알고리즘을 사용하여 당신에게 행운을 가져다줄 6개의 숫자를 추천해 드립니다. 번호는 실시간으로 정렬되어 제공됩니다.</p>
+            
+            <div class="lotto-numbers">
+                <!-- 번호가 여기에 동적으로 추가됩니다 -->
+                <div class="lotto-number">?</div>
+                <div class="lotto-number">?</div>
+                <div class="lotto-number">?</div>
+                <div class="lotto-number">?</div>
+                <div class="lotto-number">?</div>
+                <div class="lotto-number">?</div>
+            </div>
+            <button id="draw-button">오늘의 행운 번호 받기</button>
+        </section>
+
+        <!-- Contact Section -->
+        <section id="contact-section" class="section">
+            <h2>제휴 및 서비스 문의</h2>
+            <p class="description">서비스 이용 중 불편한 점이나 제휴 제안이 있으시면 아래 양식을 통해 보내주세요. 신속하게 확인 후 답변 드리겠습니다.</p>
+            
+            <form action="https://formspree.io/f/xlgwaovq" method="POST" id="partnership-form">
+                <div class="form-group">
+                    <label>이름</label>
+                    <input type="text" name="name" placeholder="성함을 입력해주세요" required>
+                </div>
+                <div class="form-group">
+                    <label>이메일</label>
+                    <input type="email" name="email" placeholder="답변받을 이메일을 입력해주세요" required>
+                </div>
+                <div class="form-group">
+                    <label>문의 내용</label>
+                    <textarea name="message" placeholder="자세한 문의 내용을 입력해주세요" style="height: 120px;" required></textarea>
+                </div>
+                <button type="submit" id="submit-button" style="width: 100%; padding: 15px; background: var(--button-bg); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;">문의 보내기</button>
+            </form>
+        </section>
+
+        <!-- Comments Section -->
+        <section class="section">
+            <h2>사용자 후기 및 자유게판</h2>
+            <div id="disqus_thread"></div>
+            <script>
+                (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://weather-9.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+                })();
+            </script>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-links">
+            <a href="#">홈</a>
+            <a href="#">개인정보처리방침</a>
+            <a href="#">이용약관</a>
+            <a href="#contact-section">문의하기</a>
+        </div>
+        <p>&copy; 2026 SmartTools. All rights reserved.</p>
+        <p style="margin-top: 10px; font-size: 0.75rem;">본 사이트는 Google AdSense 정책을 준수하며 사용자 경험을 최우선으로 생각합니다.</p>
+    </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
