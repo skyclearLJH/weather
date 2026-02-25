@@ -1,23 +1,47 @@
+:root {
+    --bg-color: #f0f0f0;
+    --container-bg: #ffffff;
+    --text-color: #333333;
+    --shadow-color: rgba(0, 0, 0, 0.1);
+    --button-bg: #008CBA;
+    --button-hover: #005f7a;
+    --number-bg: #4CAF50;
+    --number-text: #ffffff;
+}
+
+body.dark-mode {
+    --bg-color: #1a1a1a;
+    --container-bg: #2d2d2d;
+    --text-color: #e0e0e0;
+    --shadow-color: rgba(0, 0, 0, 0.5);
+    --button-bg: #00a8e0;
+    --button-hover: #00c4ff;
+    --number-bg: #66bb6a;
+}
+
 body {
-    background-color: #f0f0f0;
+    background-color: var(--bg-color);
+    color: var(--text-color);
     font-family: 'Montserrat', sans-serif;
     display: flex;
     justify-content: center;
     align-items: center;
     height: 100vh;
     margin: 0;
+    transition: background-color 0.3s, color 0.3s;
 }
 
 .container {
     text-align: center;
-    background-color: #ffffff;
+    background-color: var(--container-bg);
     padding: 40px;
     border-radius: 20px;
-    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1), 0 6px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 10px 20px var(--shadow-color), 0 6px 6px var(--shadow-color);
+    transition: background-color 0.3s, box-shadow 0.3s;
 }
 
 h1 {
-    color: #333333;
+    color: var(--text-color);
     margin-bottom: 30px;
 }
 
@@ -30,8 +54,8 @@ h1 {
 .lotto-number {
     width: 60px;
     height: 60px;
-    background-color: #4CAF50;
-    color: #ffffff;
+    background-color: var(--number-bg);
+    color: var(--number-text);
     font-size: 24px;
     font-weight: bold;
     border-radius: 50%;
@@ -43,7 +67,7 @@ h1 {
 }
 
 #draw-button {
-    background-color: #008CBA;
+    background-color: var(--button-bg);
     color: #ffffff;
     font-size: 18px;
     padding: 15px 30px;
@@ -55,5 +79,23 @@ h1 {
 }
 
 #draw-button:hover {
-    background-color: #005f7a;
+    background-color: var(--button-hover);
+}
+
+#theme-toggle {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 10px 20px;
+    border-radius: 5px;
+    border: none;
+    background-color: var(--button-bg);
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+#theme-toggle:hover {
+    background-color: var(--button-hover);
 }
