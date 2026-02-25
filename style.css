@@ -1,1 +1,59 @@
-/* Add styles here */
+body {
+    background-color: #f0f0f0;
+    font-family: 'Montserrat', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+}
+
+.container {
+    text-align: center;
+    background-color: #ffffff;
+    padding: 40px;
+    border-radius: 20px;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1), 0 6px 6px rgba(0, 0, 0, 0.1);
+}
+
+h1 {
+    color: #333333;
+    margin-bottom: 30px;
+}
+
+.lotto-numbers {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 30px;
+}
+
+.lotto-number {
+    width: 60px;
+    height: 60px;
+    background-color: #4CAF50;
+    color: #ffffff;
+    font-size: 24px;
+    font-weight: bold;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 0 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+#draw-button {
+    background-color: #008CBA;
+    color: #ffffff;
+    font-size: 18px;
+    padding: 15px 30px;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+#draw-button:hover {
+    background-color: #005f7a;
+}
