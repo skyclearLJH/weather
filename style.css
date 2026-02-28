@@ -227,3 +227,25 @@ footer {
         font-size: 1rem;
     }
 }
+
+/* Weather Specific */
+#weather-result-container {
+    transition: all 0.3s ease;
+}
+
+.weather-info {
+    transition: background-color 0.2s;
+}
+
+#fetch-weather-button {
+    transition: transform 0.1s, background-color 0.2s;
+}
+
+#fetch-weather-button:active {
+    transform: scale(0.98);
+}
+
+.dark-mode #weather-result-container {
+    background-color: #2c2c2c;
+    border-color: #444;
+}

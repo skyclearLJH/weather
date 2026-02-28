@@ -115,5 +115,110 @@ imageInput.addEventListener('change', async (e) => {
     }
 });
 
-// Initialize AI model on page load (optional, can also be lazy loaded)
-// window.addEventListener('load', initAI);
+// Weather logic
+const fetchWeatherButton = document.getElementById('fetch-weather-button');
+const weatherResultContainer = document.getElementById('weather-result-container');
+const highestStationElement = document.getElementById('highest-station');
+const highestTempElement = document.getElementById('highest-temp');
+const observationTimeElement = document.getElementById('observation-time');
+const weatherStatus = document.getElementById('weather-status');
+
+let cachedStationMapping = null;
+
+async function getStationMapping(authKey) {
+    if (cachedStationMapping) return cachedStationMapping;
+    
+    try {
+        const url = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
+        const response = await fetch(url);
+        if (!response.ok) return {};
+        
+        const text = await response.text();
+        const lines = text.split('\n');
+        const mapping = {};
+        
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+            
+            // The format is fixed-width or space-separated. STN_ID is the first column, STN_KO is around columns 9-10.
+            // Based on curl output: ID is parts[0], STN_KO is parts[8] or [9]
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 9) {
+                const id = parts[0];
+                const name = parts[8];
+                mapping[id] = name;
+            }
+        }
+        cachedStationMapping = mapping;
+        return mapping;
+    } catch (e) {
+        console.error('Failed to fetch station mapping:', e);
+        return {};
+    }
+}
+
+if (fetchWeatherButton) {
+    fetchWeatherButton.addEventListener('click', async () => {
+        weatherStatus.textContent = '기상청 데이터를 불러오는 중...';
+        fetchWeatherButton.disabled = true;
+        
+        try {
+            const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
+            
+            // 1. Fetch station names first (or use cache)
+            const stationNames = await getStationMapping(authKey);
+            
+            // 2. Fetch AWS Every Minute Data
+            const url = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                throw new Error('데이터를 불러오는데 실패했습니다 (HTTP ' + response.status + ')');
+            }
+            
+            const text = await response.text();
+            const lines = text.split('\n');
+            
+            let highestTemp = -999;
+            let highestStationId = '';
+            let obsTime = '';
+            
+            for (const line of lines) {
+                if (line.startsWith('#') || line.trim() === '') continue;
+                
+                const parts = line.split(',');
+                if (parts.length < 9) continue;
+                
+                const time = parts[0];
+                const stnId = parts[1].trim();
+                const temp = parseFloat(parts[8]);
+                
+                if (!isNaN(temp) && temp > highestTemp && temp < 60 && temp > -50) {
+                    highestTemp = temp;
+                    highestStationId = stnId;
+                    obsTime = time;
+                }
+            }
+            
+            if (highestStationId) {
+                const stationName = stationNames[highestStationId] || `지점 ${highestStationId}`;
+                const formattedTime = `${obsTime.substring(0, 4)}-${obsTime.substring(4, 6)}-${obsTime.substring(6, 8)} ${obsTime.substring(8, 10)}:${obsTime.substring(10, 12)}`;
+                
+                highestStationElement.textContent = stationName;
+                highestTempElement.textContent = `${highestTemp.toFixed(1)} °C`;
+                observationTimeElement.textContent = formattedTime;
+                
+                weatherResultContainer.style.display = 'block';
+                weatherStatus.textContent = '조회가 완료되었습니다.';
+            } else {
+                weatherStatus.textContent = '유효한 기상 데이터를 찾을 수 없습니다.';
+            }
+            
+        } catch (error) {
+            console.error('Weather fetch error:', error);
+            weatherStatus.innerHTML = '오류가 발생했습니다. <br><small>브라우저 CORS 정책으로 인해 차단되었을 수 있습니다. <br>이 경우 서버 프록시 설정이 필요합니다.</small>';
+        } finally {
+            fetchWeatherButton.disabled = false;
+        }
+    });
+}
