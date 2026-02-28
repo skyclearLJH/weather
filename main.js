@@ -125,23 +125,25 @@ const weatherStatus = document.getElementById('weather-status');
 
 let cachedStationMapping = null;
 
+// CORS Proxy URL
+const PROXY_URL = "https://api.allorigins.win/get?url=";
+
 async function getStationMapping(authKey) {
     if (cachedStationMapping) return cachedStationMapping;
     
     try {
-        const url = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
-        const response = await fetch(url);
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
         if (!response.ok) return {};
         
-        const text = await response.text();
+        const data = await response.json();
+        const text = data.contents;
         const lines = text.split('\n');
         const mapping = {};
         
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
             
-            // The format is fixed-width or space-separated. STN_ID is the first column, STN_KO is around columns 9-10.
-            // Based on curl output: ID is parts[0], STN_KO is parts[8] or [9]
             const parts = line.trim().split(/\s+/);
             if (parts.length >= 9) {
                 const id = parts[0];
@@ -165,18 +167,19 @@ if (fetchWeatherButton) {
         try {
             const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
             
-            // 1. Fetch station names first (or use cache)
+            // 1. Fetch station names first
             const stationNames = await getStationMapping(authKey);
             
             // 2. Fetch AWS Every Minute Data
-            const url = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
-            const response = await fetch(url);
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
             
             if (!response.ok) {
                 throw new Error('데이터를 불러오는데 실패했습니다 (HTTP ' + response.status + ')');
             }
             
-            const text = await response.text();
+            const data = await response.json();
+            const text = data.contents;
             const lines = text.split('\n');
             
             let highestTemp = -999;
@@ -216,7 +219,7 @@ if (fetchWeatherButton) {
             
         } catch (error) {
             console.error('Weather fetch error:', error);
-            weatherStatus.innerHTML = '오류가 발생했습니다. <br><small>브라우저 CORS 정책으로 인해 차단되었을 수 있습니다. <br>이 경우 서버 프록시 설정이 필요합니다.</small>';
+            weatherStatus.innerHTML = '오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
         } finally {
             fetchWeatherButton.disabled = false;
         }
