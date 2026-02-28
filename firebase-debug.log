@@ -1,0 +1,28 @@
+[debug] [2026-02-28T06:59:04.316Z] ----------------------------------------------------------------------
+[debug] [2026-02-28T06:59:04.321Z] Command:       /nix/store/ws50yvm6vzlzf7jzz6n7xh4szddrack1-nodejs-20.19.1/bin/node /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/lib/bin/firebase.js use --add
+[debug] [2026-02-28T06:59:04.322Z] CLI Version:   15.1.0
+[debug] [2026-02-28T06:59:04.323Z] Platform:      linux
+[debug] [2026-02-28T06:59:04.323Z] Node Version:  v20.19.1
+[debug] [2026-02-28T06:59:04.323Z] Time:          Sat Feb 28 2026 06:59:04 GMT+0000 (Coordinated Universal Time)
+[debug] [2026-02-28T06:59:04.323Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-02-28T06:59:04.914Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform","https://www.googleapis.com/auth/userinfo.email"]
+[debug] [2026-02-28T06:59:04.915Z] > authorizing via signed-in user (opensea0@gmail.com)
+[debug] [2026-02-28T06:59:04.917Z] Checked if tokens are valid: true, expires at: 1772265394843
+[debug] [2026-02-28T06:59:04.918Z] Checked if tokens are valid: true, expires at: 1772265394843
+[debug] [2026-02-28T06:59:04.921Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects pageSize=1000
+[debug] [2026-02-28T06:59:05.499Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects 200
+[debug] [2026-02-28T06:59:05.500Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects [omitted]
+[debug] [2026-02-28T06:59:05.536Z] ValidationError: [select prompt] No selectable choices. All choices are disabled.
+    at /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/select/dist/commonjs/index.js:57:19
+    at /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/use-memo.js:11:27
+    at withPointer (/nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/hook-engine.js:79:25)
+    at useMemo (/nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/use-memo.js:6:45)
+    at /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/select/dist/commonjs/index.js:53:39
+    at /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/create-prompt.js:113:38
+    at store.handleChange (/nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/hook-engine.js:31:17)
+    at cycle (/nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/hook-engine.js:33:19)
+    at /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/create-prompt.js:111:13
+    at /nix/store/gm9mcvzb17vv8cla08khrg29vxn3sq4r-firebase-tools-15.1.0/lib/node_modules/firebase-tools/node_modules/@inquirer/core/dist/commonjs/lib/hook-engine.js:35:16
+[error] 
+[error] Error: An unexpected error has occurred.
