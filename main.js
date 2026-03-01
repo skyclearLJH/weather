@@ -132,67 +132,67 @@ async function getStationMapping(authKey) {
     if (cachedStationMapping) return cachedStationMapping;
     
     try {
-        // Try SFC (Surface) stations first as they often have more complete names
-        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=SFC&stn=0&authKey=${authKey}`;
-        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-        if (!response.ok) throw new Error('Failed to fetch SFC stations');
+        const mapping = {
+            '793': '고산',
+            '108': '서울',
+            '159': '부산',
+            '143': '대구',
+            '156': '광주',
+            '133': '대전',
+            '112': '인천',
+            '131': '청주',
+            '138': '포항',
+            '184': '제주'
+        };
         
-        const buffer = await response.arrayBuffer();
         const decoder = new TextDecoder('euc-kr');
-        const text = decoder.decode(buffer);
-        const lines = text.split('\n');
-        const mapping = {};
-        
-        // Find STN_KO index from header
-        let stnKoIndex = 8; // Default
-        for (const line of lines) {
-            if (line.includes('STN_KO')) {
-                const headerParts = line.trim().split(/\s+/);
-                stnKoIndex = headerParts.indexOf('STN_KO');
-                if (stnKoIndex === -1) stnKoIndex = 8;
-                break;
-            }
-        }
-        
-        for (const line of lines) {
-            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+
+        const fetchAndParse = async (type) => {
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=${type}&stn=0&authKey=${authKey}`;
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            if (!response.ok) return;
             
-            const parts = line.trim().split(/\s+/);
-            if (parts.length > stnKoIndex) {
-                const id = parts[0];
-                const name = parts[stnKoIndex];
-                if (name && name !== '----') {
-                    mapping[id] = name;
+            const buffer = await response.arrayBuffer();
+            const text = decoder.decode(buffer);
+            const lines = text.split('\n');
+            
+            let stnKoIndex = -1;
+            for (const line of lines) {
+                if (line.includes('STN_KO')) {
+                    const headerParts = line.trim().split(/\s+/);
+                    stnKoIndex = headerParts.indexOf('STN_KO');
+                    // Header has '#' at index 0, but data lines don't.
+                    // So we subtract 1 to align with data line indices.
+                    if (stnKoIndex !== -1) stnKoIndex -= 1;
+                    break;
                 }
             }
-        }
-
-        // Also fetch AWS stations to complement
-        const targetUrlAws = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
-        const responseAws = await fetch(PROXY_URL + encodeURIComponent(targetUrlAws));
-        if (responseAws.ok) {
-            const bufferAws = await responseAws.arrayBuffer();
-            const textAws = decoder.decode(bufferAws);
-            const linesAws = textAws.split('\n');
             
-            for (const line of linesAws) {
+            if (stnKoIndex === -1) stnKoIndex = 8; // Fallback to common index
+
+            for (const line of lines) {
                 if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+                
                 const parts = line.trim().split(/\s+/);
                 if (parts.length > stnKoIndex) {
                     const id = parts[0];
                     const name = parts[stnKoIndex];
-                    if (name && name !== '----' && !mapping[id]) {
+                    if (name && name !== '----' && !/^\d+$/.test(name)) {
                         mapping[id] = name;
                     }
                 }
             }
-        }
+        };
+
+        // Fetch SFC first, then AWS (AWS will only fill in missing ones)
+        await fetchAndParse('SFC');
+        await fetchAndParse('AWS');
 
         cachedStationMapping = mapping;
         return mapping;
     } catch (e) {
         console.error('Failed to fetch station mapping:', e);
-        return {};
+        return cachedStationMapping || {};
     }
 }
 
