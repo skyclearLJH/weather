@@ -125,32 +125,69 @@ const weatherStatus = document.getElementById('weather-status');
 
 let cachedStationMapping = null;
 
-// CORS Proxy URL
-const PROXY_URL = "https://api.allorigins.win/get?url=";
+// New faster CORS Proxy URL
+const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
 
 async function getStationMapping(authKey) {
     if (cachedStationMapping) return cachedStationMapping;
     
     try {
-        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
+        // Try SFC (Surface) stations first as they often have more complete names
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=SFC&stn=0&authKey=${authKey}`;
         const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-        if (!response.ok) return {};
+        if (!response.ok) throw new Error('Failed to fetch SFC stations');
         
-        const data = await response.json();
-        const text = data.contents;
+        const buffer = await response.arrayBuffer();
+        const decoder = new TextDecoder('euc-kr');
+        const text = decoder.decode(buffer);
         const lines = text.split('\n');
         const mapping = {};
+        
+        // Find STN_KO index from header
+        let stnKoIndex = 8; // Default
+        for (const line of lines) {
+            if (line.includes('STN_KO')) {
+                const headerParts = line.trim().split(/\s+/);
+                stnKoIndex = headerParts.indexOf('STN_KO');
+                if (stnKoIndex === -1) stnKoIndex = 8;
+                break;
+            }
+        }
         
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
             
             const parts = line.trim().split(/\s+/);
-            if (parts.length >= 9) {
+            if (parts.length > stnKoIndex) {
                 const id = parts[0];
-                const name = parts[8];
-                mapping[id] = name;
+                const name = parts[stnKoIndex];
+                if (name && name !== '----') {
+                    mapping[id] = name;
+                }
             }
         }
+
+        // Also fetch AWS stations to complement
+        const targetUrlAws = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
+        const responseAws = await fetch(PROXY_URL + encodeURIComponent(targetUrlAws));
+        if (responseAws.ok) {
+            const bufferAws = await responseAws.arrayBuffer();
+            const textAws = decoder.decode(bufferAws);
+            const linesAws = textAws.split('\n');
+            
+            for (const line of linesAws) {
+                if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+                const parts = line.trim().split(/\s+/);
+                if (parts.length > stnKoIndex) {
+                    const id = parts[0];
+                    const name = parts[stnKoIndex];
+                    if (name && name !== '----' && !mapping[id]) {
+                        mapping[id] = name;
+                    }
+                }
+            }
+        }
+
         cachedStationMapping = mapping;
         return mapping;
     } catch (e) {
@@ -178,8 +215,9 @@ if (fetchWeatherButton) {
                 throw new Error('데이터를 불러오는데 실패했습니다 (HTTP ' + response.status + ')');
             }
             
-            const data = await response.json();
-            const text = data.contents;
+            const buffer = await response.arrayBuffer();
+            const decoder = new TextDecoder('euc-kr');
+            const text = decoder.decode(buffer);
             const lines = text.split('\n');
             
             let highestTemp = -999;
