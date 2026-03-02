@@ -41,7 +41,6 @@ const lowTempStatus = document.getElementById('low-temp-status');
 
 // Precipitation elements
 const fetchPrecip1hButton = document.getElementById('fetch-precip-1h');
-const fetchPrecip3hButton = document.getElementById('fetch-precip-3h');
 const fetchPrecipTodayButton = document.getElementById('fetch-precip-today');
 const precipResultContainer = document.getElementById('precip-result-container');
 const precipTableBody = document.getElementById('precip-table-body');
@@ -258,7 +257,6 @@ if (fetchLowCurrentButton) fetchLowCurrentButton.addEventListener('click', () =>
 async function fetchPrecipRanking(type) {
     const typeNames = {
         '1h': '1시간 강수량',
-        '3h': '3시간 강수량',
         'today': '오늘 강수량'
     };
     
@@ -271,56 +269,28 @@ async function fetchPrecipRanking(type) {
         const stations = [];
         let lastTm = "";
 
-        if (type === '1h' || type === 'today') {
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-            if (!response.ok) throw new Error('HTTP ' + response.status);
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        
+        const buffer = await response.arrayBuffer();
+        const text = new TextDecoder('euc-kr').decode(buffer);
+        const lines = text.split('\n');
+        
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '') continue;
+            const parts = line.split(',');
+            if (parts.length < 14) continue;
             
-            const buffer = await response.arrayBuffer();
-            const text = new TextDecoder('euc-kr').decode(buffer);
-            const lines = text.split('\n');
+            const tm = parts[0];
+            const stnId = parts[1].trim();
+            const val = parseFloat(type === '1h' ? parts[11] : parts[13]); // index 11: RN-60m, index 13: RN-DAY
             
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '') continue;
-                const parts = line.split(',');
-                if (parts.length < 14) continue;
-                
-                const tm = parts[0];
-                const stnId = parts[1].trim();
-                const val = parseFloat(type === '1h' ? parts[11] : parts[13]); // index 11: RN-60m, index 13: RN-DAY
-                
-                if (!isNaN(val) && val > 0 && val < 1000) {
-                    const name = stationData[stnId]?.name || `지점 ${stnId}`;
-                    const address = stationData[stnId]?.adr || "주소 정보 없음";
-                    stations.push({ id: stnId, val, name, address });
-                    if (tm) lastTm = tm;
-                }
-            }
-        } else {
-            // 3-hour precipitation using kma_sfctm2.php (AWS hourly)
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_sfctm2.php?stn=0&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            
-            const buffer = await response.arrayBuffer();
-            const text = new TextDecoder('euc-kr').decode(buffer);
-            const lines = text.split('\n');
-            
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '') continue;
-                const parts = line.trim().split(/\s+/);
-                if (parts.length < 20) continue;
-                
-                const tm = parts[0];
-                const stnId = parts[1];
-                const val = parseFloat(parts[19]); // index 19: RN_HR3
-                
-                if (!isNaN(val) && val > 0 && val < 1000) {
-                    const name = stationData[stnId]?.name || `지점 ${stnId}`;
-                    const address = stationData[stnId]?.adr || "주소 정보 없음";
-                    stations.push({ id: stnId, val, name, address });
-                    if (tm) lastTm = tm;
-                }
+            if (!isNaN(val) && val > 0 && val < 1000) {
+                const name = stationData[stnId]?.name || `지점 ${stnId}`;
+                const address = stationData[stnId]?.adr || "주소 정보 없음";
+                stations.push({ id: stnId, val, name, address });
+                if (tm) lastTm = tm;
             }
         }
         
@@ -361,7 +331,6 @@ async function fetchPrecipRanking(type) {
 }
 
 if (fetchPrecip1hButton) fetchPrecip1hButton.addEventListener('click', () => fetchPrecipRanking('1h'));
-if (fetchPrecip3hButton) fetchPrecip3hButton.addEventListener('click', () => fetchPrecipRanking('3h'));
 if (fetchPrecipTodayButton) fetchPrecipTodayButton.addEventListener('click', () => fetchPrecipRanking('today'));
 
 async function fetchSnowRanking(type) {
