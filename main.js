@@ -126,7 +126,7 @@ async function getStationMapping(authKey) {
         // 2. AWS 지점 정보 API에서 가져오기 (stations.txt에 없는 지점 보충)
         if (authKey) {
             const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
-            const awsResponse = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            const awsResponse = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
             if (awsResponse.ok) {
                 const buffer = await awsResponse.arrayBuffer();
                 const text = decoder.decode(buffer);
@@ -181,10 +181,9 @@ async function fetchWeatherRanking(type, mode = 'highest') {
         let lastTm = "";
 
         if (type === 'current') {
-            // Target exactly 4 minutes ago for safety
             const targetTime = getKMATimeString(4);
             const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}&tm=${targetTime}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
             if (!response.ok) throw new Error('HTTP ' + response.status);
             
             const buffer = await response.arrayBuffer();
@@ -207,10 +206,9 @@ async function fetchWeatherRanking(type, mode = 'highest') {
                 }
             }
         } else {
-            // Today's Max/Min Temp using sfc_aws_day.php
             const obs = isHighest ? 'ta_max' : 'ta_min';
             const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=${obs}&stn=0&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
             if (!response.ok) throw new Error('HTTP ' + response.status);
 
             const buffer = await response.arrayBuffer();
@@ -235,7 +233,6 @@ async function fetchWeatherRanking(type, mode = 'highest') {
                 }
             }
             
-            // For today's extreme data (8-digit date only), append current time
             if (lastTm && lastTm.length === 8) {
                 const now = new Date();
                 lastTm += now.getHours().toString().padStart(2, '0') + 
@@ -243,7 +240,6 @@ async function fetchWeatherRanking(type, mode = 'highest') {
             }
         }
         
-        // Sort: Descending for highest, Ascending for lowest
         if (isHighest) {
             stations.sort((a, b) => b.val - a.val);
         } else {
@@ -304,10 +300,9 @@ async function fetchPrecipRanking(type) {
         const stations = [];
         let lastTm = "";
 
-        // Target exactly 4 minutes ago for safety
         const targetTime = getKMATimeString(4);
         const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}&tm=${targetTime}`;
-        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
         if (!response.ok) throw new Error('HTTP ' + response.status);
         
         const buffer = await response.arrayBuffer();
@@ -321,7 +316,7 @@ async function fetchPrecipRanking(type) {
             
             const tm = parts[0];
             const stnId = parts[1].trim();
-            const val = parseFloat(type === '1h' ? parts[11] : parts[13]); // index 11: RN-60m, index 13: RN-DAY
+            const val = parseFloat(type === '1h' ? parts[11] : parts[13]); 
             
             if (!isNaN(val) && val > 0 && val < 1000) {
                 const name = stationData[stnId]?.name || `지점 ${stnId}`;
@@ -383,7 +378,7 @@ async function fetchSnowRanking(type) {
         const stationData = await getStationMapping(authKey);
         
         const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=${type === 'day' ? 'day' : 'tot'}&authKey=${authKey}`;
-        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
         
         if (!response.ok) throw new Error('HTTP ' + response.status);
         
