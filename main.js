@@ -180,8 +180,8 @@ async function getStationMapping(authKey) {
                     const name = parts[stnKoIndex];
                     let adr = "";
                     if (adrIndex !== -1 && parts.length > adrIndex) {
-                        // Address might contain spaces, so join remaining parts if it's the last column
-                        adr = parts.slice(adrIndex).join(' ');
+                        // Address might contain spaces, so join remaining parts
+                        adr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
                     }
                     
                     if (name && name !== '----' && !/^\d+$/.test(name)) {
