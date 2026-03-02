@@ -226,6 +226,10 @@ footer {
         height: 40px;
         font-size: 1rem;
     }
+    #snow-section table th, #snow-section table td {
+        padding: 8px;
+        font-size: 0.8rem;
+    }
 }
 
 /* Weather Specific */

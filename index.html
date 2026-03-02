@@ -22,6 +22,7 @@
                 <a href="#ai-section">AI 구분기</a>
                 <a href="#lotto-section">로또 생성기</a>
                 <a href="#weather-section">전국 최고 기온</a>
+                <a href="#snow-section">신적설량 TOP 10</a>
                 <a href="#contact-section">문의하기</a>
                 <button id="theme-toggle">다크 모드</button>
             </div>
@@ -97,6 +98,34 @@
             
             <button id="fetch-weather-button" style="width: 100%; background-color: var(--button-bg); color: white; border: none; padding: 15px; border-radius: 8px; font-size: 1.1rem; font-weight: 700; cursor: pointer;">최고 기온 지역 조회하기</button>
             <div id="weather-status" style="margin-top: 15px; font-size: 0.9rem; color: var(--text-muted); text-align: center;"></div>
+        </section>
+
+        <!-- Snowfall Section -->
+        <section id="snow-section" class="section">
+            <h2>전국 신적설량 TOP 10</h2>
+            <p class="description">기상청 지상 관측 자료(ASOS)를 분석하여 오늘 하루 동안 새로 쌓인 눈(신적설)이 가장 많은 10개 지점을 실시간으로 보여드립니다.</p>
+            
+            <div id="snow-result-container" style="display: none; background-color: var(--bg-color); border-radius: 12px; margin: 20px 0; border: 1px solid var(--shadow-color); overflow: hidden;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                    <thead style="background-color: var(--button-bg); color: white;">
+                        <tr>
+                            <th style="padding: 12px; font-size: 0.9rem;">순위</th>
+                            <th style="padding: 12px; font-size: 0.9rem;">지점명</th>
+                            <th style="padding: 12px; font-size: 0.9rem;">신적설</th>
+                            <th style="padding: 12px; font-size: 0.9rem;">주소</th>
+                        </tr>
+                    </thead>
+                    <tbody id="snow-table-body">
+                        <!-- 데이터가 여기에 동적으로 추가됩니다 -->
+                    </tbody>
+                </table>
+                <div id="snow-time" style="padding: 15px; font-size: 0.85rem; color: var(--text-muted); text-align: right; border-top: 1px solid var(--shadow-color);">
+                    기준 시간: -
+                </div>
+            </div>
+            
+            <button id="fetch-snow-button" style="width: 100%; background-color: var(--accent-color); color: white; border: none; padding: 15px; border-radius: 8px; font-size: 1.1rem; font-weight: 700; cursor: pointer;">신적설량 순위 조회하기</button>
+            <div id="snow-status" style="margin-top: 15px; font-size: 0.9rem; color: var(--text-muted); text-align: center;"></div>
         </section>
 
         <!-- Contact Section -->
