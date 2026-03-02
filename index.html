@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 나이 구분기 & 로또 번호 생성기 | 스마트 라이프 툴</title>
-    <meta name="description" content="AI를 활용한 아기/초등학생 사진 구분 서비스와 행운의 로또 번호 추첨 기능을 제공하는 고품질 웹 도구입니다.">
+    <title>전국 실시간 기상 및 적설 정보 | 스마트 웨더</title>
+    <meta name="description" content="기상청 실시간 데이터를 분석하여 전국 최고 기온 지역과 적설량(현재 적설, 일 신적설, 3시간 신적설) 순위 정보를 제공합니다.">
     
     <!-- Google AdSense -->
     <meta name="google-adsense-account" content="ca-pub-4036553228368243">
@@ -17,10 +17,8 @@
 <body>
     <nav>
         <div class="nav-content">
-            <a href="#" class="logo">SmartTools</a>
+            <a href="#" class="logo">SmartWeather</a>
             <div class="nav-links">
-                <a href="#ai-section">AI 구분기</a>
-                <a href="#lotto-section">로또 생성기</a>
                 <a href="#weather-section">전국 최고 기온</a>
                 <a href="#snow-section">전국 적설량 TOP 10</a>
                 <a href="#contact-section">문의하기</a>
@@ -30,52 +28,6 @@
     </nav>
 
     <main>
-        <!-- AI Classifier Section -->
-        <section id="ai-section" class="section">
-            <h1>AI 나이 구분 서비스</h1>
-            <p class="description">인공지능 딥러닝 기술을 활용하여 업로드한 사진 속 인물이 아기인지 초등학생인지 정교하게 분석합니다. Teachable Machine 모델을 기반으로 한 고성능 이미지 분류 엔진입니다.</p>
-            
-            <div id="upload-container" onclick="document.getElementById('image-input').click()">
-                <input type="file" id="image-input" accept="image/*" style="display: none;">
-                <p>📷 이곳을 클릭하거나 사진을 드래그하여 업로드하세요</p>
-                <button id="upload-button">사진 선택하기</button>
-            </div>
-            
-            <div id="image-preview-container" style="display: none; margin-top: 20px;">
-                <img id="image-preview" src="#" alt="미리보기">
-            </div>
-
-            <div id="result-container" style="margin-top: 25px; font-size: 1.25rem; font-weight: 800; color: var(--button-bg);"></div>
-            <div id="label-container" style="margin-top: 15px; color: var(--text-muted); font-size: 0.9rem;"></div>
-            
-            <hr style="margin: 30px 0; border: 0; border-top: 1px solid var(--shadow-color);">
-            <div class="info-text" style="font-size: 0.9rem; text-align: left;">
-                <h3>💡 이용 안내</h3>
-                <ul>
-                    <li>정면 사진을 사용하면 정확도가 더 높아집니다.</li>
-                    <li>개인 정보 보호를 위해 사진은 서버에 저장되지 않고 브라우저에서 즉시 분석됩니다.</li>
-                    <li>본 서비스는 오락용이며, 실제 나이와 차이가 있을 수 있습니다.</li>
-                </ul>
-            </div>
-        </section>
-
-        <!-- Lotto Section -->
-        <section id="lotto-section" class="section">
-            <h2>행운의 로또 번호 추첨</h2>
-            <p class="description">무작위 난수 생성 알고리즘을 사용하여 당신에게 행운을 가져다줄 6개의 숫자를 추천해 드립니다. 번호는 실시간으로 정렬되어 제공됩니다.</p>
-            
-            <div class="lotto-numbers">
-                <!-- 번호가 여기에 동적으로 추가됩니다 -->
-                <div class="lotto-number">?</div>
-                <div class="lotto-number">?</div>
-                <div class="lotto-number">?</div>
-                <div class="lotto-number">?</div>
-                <div class="lotto-number">?</div>
-                <div class="lotto-number">?</div>
-            </div>
-            <button id="draw-button">오늘의 행운 번호 받기</button>
-        </section>
-
         <!-- Weather Section -->
         <section id="weather-section" class="section">
             <h2>전국 최고 기온 지역 조회</h2>
@@ -177,12 +129,10 @@
             <a href="#">이용약관</a>
             <a href="#contact-section">문의하기</a>
         </div>
-        <p>&copy; 2026 SmartTools. All rights reserved.</p>
-        <p style="margin-top: 10px; font-size: 0.75rem;">본 사이트는 Google AdSense 정책을 준수하며 사용자 경험을 최우선으로 생각합니다.</p>
+        <p>&copy; 2026 SmartWeather. All rights reserved.</p>
+        <p style="margin-top: 10px; font-size: 0.75rem;">본 사이트는 기상청 API 허브 데이터를 활용하여 공익 목적으로 정보를 제공합니다.</p>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
     <script src="main.js"></script>
 </body>
 </html>
