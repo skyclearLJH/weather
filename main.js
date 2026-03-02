@@ -211,8 +211,9 @@ async function fetchSnowRanking(type) {
                 const stnKoInData = parts[2].trim();
                 const val = parseFloat(parts[6].trim());
                 
-                // Filter out missing values (often -99.9 or -9.0 in KMA APIs)
-                if (!isNaN(val) && val > 0 && val < 900) {
+                // KMA APIs use -99.9 or -9.0 for missing data. 
+                // We should only include valid non-negative values.
+                if (!isNaN(val) && val >= 0 && val < 900) {
                     const name = stationData[stnId]?.name || stnKoInData || `지점 ${stnId}`;
                     const address = stationData[stnId]?.adr || "주소 정보 없음";
                     
