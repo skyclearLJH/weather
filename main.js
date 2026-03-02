@@ -155,31 +155,15 @@ async function fetchWeatherRanking(type) {
             }
         } else {
             // Today's Max Temp using sfc_aws_day.php
-            // We fetch both ta_max and ta_max_tm
-            const [respMax, respTime] = await Promise.all([
-                fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max&stn=0&authKey=${authKey}`)),
-                fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max_tm&stn=0&authKey=${authKey}`))
-            ]);
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max&stn=0&authKey=${authKey}`;
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            if (!response.ok) throw new Error('HTTP ' + response.status);
 
-            const decoder = new TextDecoder('euc-kr');
-            const textMax = decoder.decode(await respMax.arrayBuffer());
-            const textTime = decoder.decode(await respTime.arrayBuffer());
+            const buffer = await response.arrayBuffer();
+            const text = new TextDecoder('euc-kr').decode(buffer);
+            const lines = text.split('\n');
             
-            const timeMap = {};
-            textTime.split('\n').forEach(line => {
-                if (line.startsWith('#') || line.trim() === '') return;
-                const parts = line.split(',');
-                if (parts.length >= 6) {
-                    const stnId = parts[1].trim();
-                    const timeVal = parts[5].trim();
-                    if (timeVal && timeVal !== '-9.0') {
-                        timeMap[stnId] = timeVal;
-                    }
-                }
-            });
-
-            const linesMax = textMax.split('\n');
-            for (const line of linesMax) {
+            for (const line of lines) {
                 if (line.startsWith('#') || line.trim() === '') continue;
                 const parts = line.split(',');
                 if (parts.length < 6) continue;
@@ -193,21 +177,7 @@ async function fetchWeatherRanking(type) {
                     const name = stationData[stnId]?.name || nameInApi || `지점 ${stnId}`;
                     const address = stationData[stnId]?.adr || "주소 정보 없음";
                     
-                    const timeVal = timeMap[stnId] || "";
-                    let timeStr = "";
-                    if (timeVal.length === 4) {
-                        timeStr = `${timeVal.substring(0, 2)}:${timeVal.substring(2, 4)}`;
-                    } else if (timeVal) {
-                        timeStr = timeVal;
-                    }
-                    
-                    stations.push({ 
-                        id: stnId, 
-                        val, 
-                        name, 
-                        address, 
-                        timeStr: timeStr ? `(${timeStr})` : "" 
-                    });
+                    stations.push({ id: stnId, val, name, address });
                     if (tm) lastTm = tm;
                 }
             }
@@ -225,7 +195,7 @@ async function fetchWeatherRanking(type) {
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">
-                        ${item.val.toFixed(1)} °C <span style="font-size: 0.85rem; font-weight: 400; color: var(--text-muted);">${item.timeStr || ''}</span>
+                        ${item.val.toFixed(1)} °C
                     </td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
                 `;
