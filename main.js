@@ -319,7 +319,7 @@ async function fetchPrecipRanking(type) {
         const top10 = stations.slice(0, 10);
         
         if (top10.length > 0) {
-            precipValueHeader.textContent = '강수량';
+            precipValueHeader.textContent = '강수량(mm)';
             precipTableBody.innerHTML = '';
             top10.forEach((item, index) => {
                 const row = document.createElement('tr');
@@ -327,7 +327,7 @@ async function fetchPrecipRanking(type) {
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: #007bff; font-weight: 800;">
-                        ${item.val.toFixed(1)} mm
+                        ${item.val.toFixed(1)}
                     </td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
                 `;
@@ -356,17 +356,17 @@ if (fetchPrecipTodayButton) fetchPrecipTodayButton.addEventListener('click', () 
 
 async function fetchSnowRanking(type) {
     const typeNames = {
-        'tot': '적설량',
-        'day': '신적설(일)'
+        'tot': '적설량(cm)',
+        'day': '신적설(cm)'
     };
     
-    snowStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+    snowStatus.textContent = `${typeNames[type].replace('(cm)', '')} 데이터를 불러오는 중...`;
     
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
         
-        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=${type}&authKey=${authKey}`;
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=${type === 'day' ? 'day' : 'tot'}&authKey=${authKey}`;
         const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
         
         if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -410,7 +410,7 @@ async function fetchSnowRanking(type) {
                 row.innerHTML = `
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--accent-color); font-weight: 800;">${item.val.toFixed(1)} cm</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--accent-color); font-weight: 800;">${item.val.toFixed(1)}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
                 `;
                 snowTableBody.appendChild(row);
@@ -424,7 +424,7 @@ async function fetchSnowRanking(type) {
             snowResultContainer.style.display = 'block';
             snowStatus.textContent = '조회가 완료되었습니다.';
         } else {
-            snowStatus.textContent = `현재 관측된 ${typeNames[type]} 데이터가 없습니다.`;
+            snowStatus.textContent = `현재 관측된 ${typeNames[type].replace('(cm)', '')} 데이터가 없습니다.`;
             snowResultContainer.style.display = 'none';
         }
     } catch (error) {
