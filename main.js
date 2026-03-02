@@ -21,7 +21,7 @@ themeToggle.addEventListener('click', () => {
     localStorage.setItem('theme', theme);
 });
 
-// Weather elements
+// Weather elements (Highest)
 const fetchWeatherTodayButton = document.getElementById('fetch-weather-today');
 const fetchWeatherCurrentButton = document.getElementById('fetch-weather-current');
 const weatherResultContainer = document.getElementById('weather-result-container');
@@ -29,6 +29,15 @@ const weatherTableBody = document.getElementById('weather-table-body');
 const weatherValueHeader = document.getElementById('weather-value-header');
 const weatherTimeElement = document.getElementById('weather-time');
 const weatherStatus = document.getElementById('weather-status');
+
+// Weather elements (Lowest)
+const fetchLowTodayButton = document.getElementById('fetch-low-today');
+const fetchLowCurrentButton = document.getElementById('fetch-low-current');
+const lowTempResultContainer = document.getElementById('low-temp-result-container');
+const lowTempTableBody = document.getElementById('low-temp-table-body');
+const lowTempValueHeader = document.getElementById('low-temp-value-header');
+const lowTempTimeElement = document.getElementById('low-temp-time');
+const lowTempStatus = document.getElementById('low-temp-status');
 
 // Snowfall elements
 const fetchSnowTotButton = document.getElementById('fetch-snow-tot');
@@ -114,13 +123,20 @@ async function getStationMapping(authKey) {
     }
 }
 
-async function fetchWeatherRanking(type) {
+async function fetchWeatherRanking(type, mode = 'highest') {
+    const isHighest = mode === 'highest';
+    const statusEl = isHighest ? weatherStatus : lowTempStatus;
+    const resultContainerEl = isHighest ? weatherResultContainer : lowTempResultContainer;
+    const tableBodyEl = isHighest ? weatherTableBody : lowTempTableBody;
+    const valueHeaderEl = isHighest ? weatherValueHeader : lowTempValueHeader;
+    const timeEl = isHighest ? weatherTimeElement : lowTempTimeElement;
+
     const typeNames = {
-        'today': '오늘 최고 기온',
-        'current': '현재 최고 기온'
+        'today': '오늘 ' + (isHighest ? '최고' : '최저') + ' 기온',
+        'current': '현재 ' + (isHighest ? '최고' : '최저') + ' 기온'
     };
     
-    weatherStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+    statusEl.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
     
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
@@ -154,8 +170,9 @@ async function fetchWeatherRanking(type) {
                 }
             }
         } else {
-            // Today's Max Temp using sfc_aws_day.php
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max&stn=0&authKey=${authKey}`;
+            // Today's Max/Min Temp using sfc_aws_day.php
+            const obs = isHighest ? 'ta_max' : 'ta_min';
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=${obs}&stn=0&authKey=${authKey}`;
             const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
             if (!response.ok) throw new Error('HTTP ' + response.status);
 
@@ -176,19 +193,24 @@ async function fetchWeatherRanking(type) {
                 if (!isNaN(val) && val > -50 && val < 60) {
                     const name = stationData[stnId]?.name || nameInApi || `지점 ${stnId}`;
                     const address = stationData[stnId]?.adr || "주소 정보 없음";
-                    
                     stations.push({ id: stnId, val, name, address });
                     if (tm) lastTm = tm;
                 }
             }
         }
         
-        stations.sort((a, b) => b.val - a.val);
+        // Sort: Descending for highest, Ascending for lowest
+        if (isHighest) {
+            stations.sort((a, b) => b.val - a.val);
+        } else {
+            stations.sort((a, b) => a.val - b.val);
+        }
+        
         const top10 = stations.slice(0, 10);
         
         if (top10.length > 0) {
-            weatherValueHeader.textContent = '기온';
-            weatherTableBody.innerHTML = '';
+            valueHeaderEl.textContent = '기온';
+            tableBodyEl.innerHTML = '';
             top10.forEach((item, index) => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
@@ -199,27 +221,29 @@ async function fetchWeatherRanking(type) {
                     </td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
                 `;
-                weatherTableBody.appendChild(row);
+                tableBodyEl.appendChild(row);
             });
             
             if (lastTm) {
                 const formattedTime = lastTm.length >= 8 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10) || '00'}:${lastTm.substring(10, 12) || '00'}` : lastTm;
-                weatherTimeElement.textContent = `기준 시간: ${formattedTime}`;
+                timeEl.textContent = `기준 시간: ${formattedTime}`;
             }
             
-            weatherResultContainer.style.display = 'block';
-            weatherStatus.textContent = '조회가 완료되었습니다.';
+            resultContainerEl.style.display = 'block';
+            statusEl.textContent = '조회가 완료되었습니다.';
         } else {
-            weatherStatus.textContent = '유효한 데이터를 찾을 수 없습니다.';
+            statusEl.textContent = '유효한 데이터를 찾을 수 없습니다.';
         }
     } catch (error) {
         console.error(error);
-        weatherStatus.textContent = '오류가 발생했습니다.';
+        statusEl.textContent = '오류가 발생했습니다.';
     }
 }
 
-if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', () => fetchWeatherRanking('today'));
-if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current'));
+if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'highest'));
+if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
+if (fetchLowTodayButton) fetchLowTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'lowest'));
+if (fetchLowCurrentButton) fetchLowCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'lowest'));
 
 async function fetchSnowRanking(type) {
     const typeNames = {
