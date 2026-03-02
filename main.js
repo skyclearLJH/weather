@@ -131,7 +131,6 @@ const snowTimeElement = document.getElementById('snow-time');
 const snowStatus = document.getElementById('snow-status');
 
 let cachedStationMapping = null;
-let cachedSnowStationMapping = null;
 
 // New faster CORS Proxy URL
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
@@ -159,7 +158,9 @@ async function getStationMapping(authKey) {
                 if (line.includes('STN_KO')) {
                     const headerParts = line.trim().split(/\s+/);
                     stnKoIndex = headerParts.indexOf('STN_KO');
-                    adrIndex = headerParts.indexOf('ADR');
+                    // Look for LAW_ADDR first, then ADR
+                    adrIndex = headerParts.indexOf('LAW_ADDR');
+                    if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
                     
                     if (stnKoIndex !== -1) stnKoIndex -= 1;
                     if (adrIndex !== -1) adrIndex -= 1;
@@ -167,8 +168,9 @@ async function getStationMapping(authKey) {
                 }
             }
             
-            if (stnKoIndex === -1) stnKoIndex = 3; 
-            if (adrIndex === -1) adrIndex = 6;
+            // Fallbacks for AWS/SFC
+            if (stnKoIndex === -1) stnKoIndex = 8; 
+            if (adrIndex === -1) adrIndex = 13;
 
             for (const line of lines) {
                 if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
@@ -179,7 +181,10 @@ async function getStationMapping(authKey) {
                     const name = parts[stnKoIndex];
                     let adr = "";
                     if (adrIndex !== -1 && parts.length > adrIndex) {
-                        adr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
+                        const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
+                        // Clean up: Filter address to start from city name or (산지)/(상지)
+                        const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
+                        adr = adrMatch ? adrMatch[0].trim() : rawAdr;
                     }
                     
                     if (name && name !== '----' && !/^\d+$/.test(name)) {
@@ -197,64 +202,6 @@ async function getStationMapping(authKey) {
     } catch (e) {
         console.error('Failed to fetch station mapping:', e);
         return cachedStationMapping || {};
-    }
-}
-
-async function getSnowStationMapping(authKey) {
-    if (cachedSnowStationMapping) return cachedSnowStationMapping;
-    
-    try {
-        const mapping = {};
-        const decoder = new TextDecoder('euc-kr');
-        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_snow.php?authKey=${authKey}`;
-        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-        
-        if (!response.ok) return {};
-        
-        const buffer = await response.arrayBuffer();
-        const text = decoder.decode(buffer);
-        const lines = text.split('\n');
-        
-        let stnKoIndex = -1;
-        let adrIndex = -1;
-        
-        for (const line of lines) {
-            if (line.includes('STN_KO')) {
-                const headerParts = line.trim().split(/\s+/);
-                stnKoIndex = headerParts.indexOf('STN_KO');
-                adrIndex = headerParts.indexOf('ADR');
-                if (stnKoIndex !== -1) stnKoIndex -= 1;
-                if (adrIndex !== -1) adrIndex -= 1;
-                break;
-            }
-        }
-        
-        if (stnKoIndex === -1) stnKoIndex = 2; 
-        if (adrIndex === -1) adrIndex = 5;
-
-        for (const line of lines) {
-            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
-            
-            const parts = line.trim().split(/\s+/);
-            if (parts.length > stnKoIndex) {
-                const id = parts[0];
-                const name = parts[stnKoIndex];
-                let adr = "";
-                if (adrIndex !== -1 && parts.length > adrIndex) {
-                    adr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
-                }
-                
-                if (name && name !== '----') {
-                    mapping[id] = { name, adr };
-                }
-            }
-        }
-        
-        cachedSnowStationMapping = mapping;
-        return mapping;
-    } catch (e) {
-        console.error('Failed to fetch snow station mapping:', e);
-        return {};
     }
 }
 
@@ -327,7 +274,6 @@ if (fetchSnowButton) {
         
         try {
             const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
-            // Get mapping for addresses (using the same mapping as weather)
             const stationData = await getStationMapping(authKey);
             
             const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=day&authKey=${authKey}`;
@@ -355,7 +301,6 @@ if (fetchSnowButton) {
                     const sdDay = parseFloat(parts[6].trim());
                     
                     if (!isNaN(sdDay) && sdDay > 0) {
-                        // Priority: stationData (for address) > name from API data
                         const name = stationData[stnId]?.name || stnKoInData || `지점 ${stnId}`;
                         const address = stationData[stnId]?.adr || "주소 정보 없음";
                         
