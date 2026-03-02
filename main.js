@@ -126,54 +126,78 @@ async function fetchWeatherRanking(type) {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
         
-        let targetUrl = "";
-        if (type === 'current') {
-            targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
-        } else {
-            // For AWS Today Max, we can use kma_sfctm2.php which provides hourly extreme TA
-            targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_sfctm2.php?stn=0&authKey=${authKey}`;
-        }
-        
-        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        
-        const buffer = await response.arrayBuffer();
-        const decoder = new TextDecoder('euc-kr');
-        const text = decoder.decode(buffer);
-        const lines = text.split('\n');
-        
         const stations = [];
         let lastTm = "";
 
-        for (const line of lines) {
-            if (line.startsWith('#') || line.trim() === '') continue;
+        if (type === 'current') {
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            if (!response.ok) throw new Error('HTTP ' + response.status);
             
-            let stnId, val, tm;
+            const buffer = await response.arrayBuffer();
+            const text = new TextDecoder('euc-kr').decode(buffer);
+            const lines = text.split('\n');
             
-            if (type === 'current') {
+            for (const line of lines) {
+                if (line.startsWith('#') || line.trim() === '') continue;
                 const parts = line.split(',');
                 if (parts.length < 9) continue;
-                tm = parts[0];
-                stnId = parts[1].trim();
-                val = parseFloat(parts[8]); // TA
-            } else {
-                const parts = line.trim().split(/\s+/);
-                if (parts.length < 12) continue;
-                tm = parts[0];
-                stnId = parts[1];
-                // For kma_sfctm2.php, TA is at index 11. 
-                // However, there is no TA_MAX for the day in hourly data. 
-                // To show "Today's Max", we would ideally need TA_MAX.
-                // In lieu of TA_MAX API for AWS, we show TA from the hourly summary.
-                val = parseFloat(parts[11]);
-            }
-            
-            if (!isNaN(val) && val > -50 && val < 60) {
-                const name = stationData[stnId]?.name || `지점 ${stnId}`;
-                const address = stationData[stnId]?.adr || "주소 정보 없음";
+                const tm = parts[0];
+                const stnId = parts[1].trim();
+                const val = parseFloat(parts[8]); // TA
                 
-                stations.push({ id: stnId, val, name, address });
-                if (tm) lastTm = tm;
+                if (!isNaN(val) && val > -50 && val < 60) {
+                    const name = stationData[stnId]?.name || `지점 ${stnId}`;
+                    const address = stationData[stnId]?.adr || "주소 정보 없음";
+                    stations.push({ id: stnId, val, name, address });
+                    if (tm) lastTm = tm;
+                }
+            }
+        } else {
+            // Today's Max Temp using sfc_aws_day.php
+            const [respMax, respTime] = await Promise.all([
+                fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max&stn=0&authKey=${authKey}`)),
+                fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max_tm&stn=0&authKey=${authKey}`))
+            ]);
+
+            const decoder = new TextDecoder('euc-kr');
+            const textMax = decoder.decode(await respMax.arrayBuffer());
+            const textTime = decoder.decode(await respTime.arrayBuffer());
+            
+            const timeMap = {};
+            textTime.split('\n').forEach(line => {
+                if (line.startsWith('#') || line.trim() === '') return;
+                const parts = line.split(',');
+                if (parts.length >= 6) {
+                    timeMap[parts[1].trim()] = parts[5].trim();
+                }
+            });
+
+            const linesMax = textMax.split('\n');
+            for (const line of linesMax) {
+                if (line.startsWith('#') || line.trim() === '') continue;
+                const parts = line.split(',');
+                if (parts.length < 6) continue;
+                
+                const tm = parts[0].trim();
+                const stnId = parts[1].trim();
+                const val = parseFloat(parts[5].trim());
+                const nameInApi = parts[6] ? parts[6].replace('=', '').trim() : '';
+                
+                if (!isNaN(val) && val > -50 && val < 60) {
+                    const name = stationData[stnId]?.name || nameInApi || `지점 ${stnId}`;
+                    const address = stationData[stnId]?.adr || "주소 정보 없음";
+                    const timeRaw = timeMap[stnId] || "";
+                    let timeFormatted = "";
+                    if (timeRaw && timeRaw.length === 4) {
+                        timeFormatted = `(${timeRaw.substring(0, 2)}:${timeRaw.substring(2, 4)})`;
+                    } else if (timeRaw) {
+                        timeFormatted = `(${timeRaw})`;
+                    }
+                    
+                    stations.push({ id: stnId, val, name, address, timeStr: timeFormatted });
+                    if (tm) lastTm = tm;
+                }
             }
         }
         
@@ -188,14 +212,16 @@ async function fetchWeatherRanking(type) {
                 row.innerHTML = `
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">${item.val.toFixed(1)} °C</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">
+                        ${item.val.toFixed(1)} °C ${item.timeStr || ''}
+                    </td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
                 `;
                 weatherTableBody.appendChild(row);
             });
             
             if (lastTm) {
-                const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12) || '00'}`;
+                const formattedTime = lastTm.length >= 8 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10) || '00'}:${lastTm.substring(10, 12) || '00'}` : lastTm;
                 weatherTimeElement.textContent = `기준 시간: ${formattedTime}`;
             }
             
