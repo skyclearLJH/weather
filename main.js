@@ -155,6 +155,7 @@ async function fetchWeatherRanking(type) {
             }
         } else {
             // Today's Max Temp using sfc_aws_day.php
+            // We fetch both ta_max and ta_max_tm
             const [respMax, respTime] = await Promise.all([
                 fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max&stn=0&authKey=${authKey}`)),
                 fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=ta_max_tm&stn=0&authKey=${authKey}`))
@@ -169,7 +170,11 @@ async function fetchWeatherRanking(type) {
                 if (line.startsWith('#') || line.trim() === '') return;
                 const parts = line.split(',');
                 if (parts.length >= 6) {
-                    timeMap[parts[1].trim()] = parts[5].trim();
+                    const stnId = parts[1].trim();
+                    const timeVal = parts[5].trim();
+                    if (timeVal && timeVal !== '-9.0') {
+                        timeMap[stnId] = timeVal;
+                    }
                 }
             });
 
@@ -187,15 +192,22 @@ async function fetchWeatherRanking(type) {
                 if (!isNaN(val) && val > -50 && val < 60) {
                     const name = stationData[stnId]?.name || nameInApi || `지점 ${stnId}`;
                     const address = stationData[stnId]?.adr || "주소 정보 없음";
-                    const timeRaw = timeMap[stnId] || "";
-                    let timeFormatted = "";
-                    if (timeRaw && timeRaw.length === 4) {
-                        timeFormatted = `(${timeRaw.substring(0, 2)}:${timeRaw.substring(2, 4)})`;
-                    } else if (timeRaw) {
-                        timeFormatted = `(${timeRaw})`;
+                    
+                    const timeVal = timeMap[stnId] || "";
+                    let timeStr = "";
+                    if (timeVal.length === 4) {
+                        timeStr = `${timeVal.substring(0, 2)}:${timeVal.substring(2, 4)}`;
+                    } else if (timeVal) {
+                        timeStr = timeVal;
                     }
                     
-                    stations.push({ id: stnId, val, name, address, timeStr: timeFormatted });
+                    stations.push({ 
+                        id: stnId, 
+                        val, 
+                        name, 
+                        address, 
+                        timeStr: timeStr ? `(${timeStr})` : "" 
+                    });
                     if (tm) lastTm = tm;
                 }
             }
@@ -213,7 +225,7 @@ async function fetchWeatherRanking(type) {
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">
-                        ${item.val.toFixed(1)} °C ${item.timeStr || ''}
+                        ${item.val.toFixed(1)} °C <span style="font-size: 0.85rem; font-weight: 400; color: var(--text-muted);">${item.timeStr || ''}</span>
                     </td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
                 `;
