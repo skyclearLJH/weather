@@ -62,72 +62,66 @@ let cachedStationMapping = null;
 // New faster CORS Proxy URL
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
 
-async function getStationMapping(authKey) {
+async function getStationMapping() {
     if (cachedStationMapping) return cachedStationMapping;
     
     try {
         const mapping = {};
         const decoder = new TextDecoder('euc-kr');
 
-        const fetchAndParse = async (type) => {
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=${type}&stn=0&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-            if (!response.ok) return;
-            
-            const buffer = await response.arrayBuffer();
-            const text = decoder.decode(buffer);
-            const lines = text.split('\n');
-            
-            let stnKoIndex = -1;
-            let adrIndex = -1;
-            
-            for (const line of lines) {
-                if (line.includes('STN_KO')) {
-                    const headerParts = line.trim().split(/\s+/);
-                    stnKoIndex = headerParts.indexOf('STN_KO');
-                    // Look for LAW_ADDR first, then ADR
-                    adrIndex = headerParts.indexOf('LAW_ADDR');
-                    if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
-                    
-                    if (stnKoIndex !== -1) stnKoIndex -= 1;
-                    if (adrIndex !== -1) adrIndex -= 1;
-                    break;
-                }
-            }
-            
-            // Fallbacks for AWS/SFC
-            if (stnKoIndex === -1) stnKoIndex = 8; 
-            if (adrIndex === -1) adrIndex = 13;
-
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+        // Fetch from local file instead of external API
+        const response = await fetch('stations.txt');
+        if (!response.ok) throw new Error('Failed to load stations.txt');
+        
+        const buffer = await response.arrayBuffer();
+        const text = decoder.decode(buffer);
+        const lines = text.split('\n');
+        
+        let stnKoIndex = -1;
+        let adrIndex = -1;
+        
+        for (const line of lines) {
+            if (line.includes('STN_KO')) {
+                const headerParts = line.trim().split(/\s+/);
+                stnKoIndex = headerParts.indexOf('STN_KO');
+                adrIndex = headerParts.indexOf('LAW_ADDR');
+                if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
                 
-                const parts = line.trim().split(/\s+/);
-                if (parts.length > stnKoIndex) {
-                    const id = parts[0];
-                    const name = parts[stnKoIndex];
-                    let adr = "";
-                    if (adrIndex !== -1 && parts.length > adrIndex) {
-                        const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
-                        // Clean up: Filter address to start from city name or (산지)/(상지)
-                        const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
-                        adr = adrMatch ? adrMatch[0].trim() : rawAdr;
-                    }
-                    
-                    if (name && name !== '----' && !/^\d+$/.test(name)) {
-                        mapping[id] = { name, adr };
-                    }
+                // Adjustment for split behavior on lines starting with space
+                if (stnKoIndex !== -1) stnKoIndex -= 1;
+                if (adrIndex !== -1) adrIndex -= 1;
+                break;
+            }
+        }
+        
+        // Fallbacks
+        if (stnKoIndex === -1) stnKoIndex = 10; 
+        if (adrIndex === -1) adrIndex = 15;
+
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+            
+            const parts = line.trim().split(/\s+/);
+            if (parts.length > stnKoIndex) {
+                const id = parts[0];
+                const name = parts[stnKoIndex];
+                let adr = "";
+                if (adrIndex !== -1 && parts.length > adrIndex) {
+                    const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
+                    const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
+                    adr = adrMatch ? adrMatch[0].trim() : rawAdr;
+                }
+                
+                if (name && name !== '----' && !/^\d+$/.test(name)) {
+                    mapping[id] = { name, adr };
                 }
             }
-        };
-
-        await fetchAndParse('SFC');
-        await fetchAndParse('AWS');
+        }
 
         cachedStationMapping = mapping;
         return mapping;
     } catch (e) {
-        console.error('Failed to fetch station mapping:', e);
+        console.error('Failed to fetch station mapping from local file:', e);
         return cachedStationMapping || {};
     }
 }
