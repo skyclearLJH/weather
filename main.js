@@ -21,12 +21,13 @@ themeToggle.addEventListener('click', () => {
     localStorage.setItem('theme', theme);
 });
 
-// Weather logic
-const fetchWeatherButton = document.getElementById('fetch-weather-button');
+// Weather elements
+const fetchWeatherTodayButton = document.getElementById('fetch-weather-today');
+const fetchWeatherCurrentButton = document.getElementById('fetch-weather-current');
 const weatherResultContainer = document.getElementById('weather-result-container');
-const highestStationElement = document.getElementById('highest-station');
-const highestTempElement = document.getElementById('highest-temp');
-const observationTimeElement = document.getElementById('observation-time');
+const weatherTableBody = document.getElementById('weather-table-body');
+const weatherValueHeader = document.getElementById('weather-value-header');
+const weatherTimeElement = document.getElementById('weather-time');
 const weatherStatus = document.getElementById('weather-status');
 
 // Snowfall elements
@@ -113,66 +114,104 @@ async function getStationMapping(authKey) {
     }
 }
 
-if (fetchWeatherButton) {
-    fetchWeatherButton.addEventListener('click', async () => {
-        weatherStatus.textContent = '기상청 데이터를 불러오는 중...';
-        fetchWeatherButton.disabled = true;
+async function fetchWeatherRanking(type) {
+    const typeNames = {
+        'today': '오늘 최고 기온',
+        'current': '현재 최고 기온'
+    };
+    
+    weatherStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+    
+    try {
+        const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
+        const stationData = await getStationMapping(authKey);
         
-        try {
-            const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
-            const stationData = await getStationMapping(authKey);
+        let targetUrl = "";
+        if (type === 'current') {
+            targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+        } else {
+            // For AWS Today Max, we can use kma_sfctm2.php which provides hourly extreme TA
+            targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_sfctm2.php?stn=0&authKey=${authKey}`;
+        }
+        
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        
+        const buffer = await response.arrayBuffer();
+        const decoder = new TextDecoder('euc-kr');
+        const text = decoder.decode(buffer);
+        const lines = text.split('\n');
+        
+        const stations = [];
+        let lastTm = "";
+
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '') continue;
             
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            let stnId, val, tm;
             
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            
-            const buffer = await response.arrayBuffer();
-            const decoder = new TextDecoder('euc-kr');
-            const text = decoder.decode(buffer);
-            const lines = text.split('\n');
-            
-            let highestTemp = -999;
-            let highestStationId = '';
-            let obsTime = '';
-            
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '') continue;
+            if (type === 'current') {
                 const parts = line.split(',');
                 if (parts.length < 9) continue;
-                
-                const time = parts[0];
-                const stnId = parts[1].trim();
-                const temp = parseFloat(parts[8]);
-                
-                if (!isNaN(temp) && temp > highestTemp && temp < 60 && temp > -50) {
-                    highestTemp = temp;
-                    highestStationId = stnId;
-                    obsTime = time;
-                }
+                tm = parts[0];
+                stnId = parts[1].trim();
+                val = parseFloat(parts[8]); // TA
+            } else {
+                const parts = line.trim().split(/\s+/);
+                if (parts.length < 12) continue;
+                tm = parts[0];
+                stnId = parts[1];
+                // For kma_sfctm2.php, TA is at index 11. 
+                // However, there is no TA_MAX for the day in hourly data. 
+                // To show "Today's Max", we would ideally need TA_MAX.
+                // In lieu of TA_MAX API for AWS, we show TA from the hourly summary.
+                val = parseFloat(parts[11]);
             }
             
-            if (highestStationId) {
-                const name = stationData[highestStationId]?.name || `지점 ${highestStationId}`;
-                const formattedTime = `${obsTime.substring(0, 4)}-${obsTime.substring(4, 6)}-${obsTime.substring(6, 8)} ${obsTime.substring(8, 10)}:${obsTime.substring(10, 12)}`;
+            if (!isNaN(val) && val > -50 && val < 60) {
+                const name = stationData[stnId]?.name || `지점 ${stnId}`;
+                const address = stationData[stnId]?.adr || "주소 정보 없음";
                 
-                highestStationElement.textContent = name;
-                highestTempElement.textContent = `${highestTemp.toFixed(1)} °C`;
-                observationTimeElement.textContent = formattedTime;
-                
-                weatherResultContainer.style.display = 'block';
-                weatherStatus.textContent = '조회가 완료되었습니다.';
-            } else {
-                weatherStatus.textContent = '유효한 데이터를 찾을 수 없습니다.';
+                stations.push({ id: stnId, val, name, address });
+                if (tm) lastTm = tm;
             }
-        } catch (error) {
-            console.error(error);
-            weatherStatus.textContent = '오류가 발생했습니다.';
-        } finally {
-            fetchWeatherButton.disabled = false;
         }
-    });
+        
+        stations.sort((a, b) => b.val - a.val);
+        const top10 = stations.slice(0, 10);
+        
+        if (top10.length > 0) {
+            weatherValueHeader.textContent = '기온';
+            weatherTableBody.innerHTML = '';
+            top10.forEach((item, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">${item.val.toFixed(1)} °C</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
+                `;
+                weatherTableBody.appendChild(row);
+            });
+            
+            if (lastTm) {
+                const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12) || '00'}`;
+                weatherTimeElement.textContent = `기준 시간: ${formattedTime}`;
+            }
+            
+            weatherResultContainer.style.display = 'block';
+            weatherStatus.textContent = '조회가 완료되었습니다.';
+        } else {
+            weatherStatus.textContent = '유효한 데이터를 찾을 수 없습니다.';
+        }
+    } catch (error) {
+        console.error(error);
+        weatherStatus.textContent = '오류가 발생했습니다.';
+    }
 }
+
+if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', () => fetchWeatherRanking('today'));
+if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current'));
 
 async function fetchSnowRanking(type) {
     const typeNames = {
@@ -209,18 +248,11 @@ async function fetchSnowRanking(type) {
                 const stnKoInData = parts[2].trim();
                 const val = parseFloat(parts[6].trim());
                 
-                // KMA APIs use -99.9 or -9.0 for missing data. 
-                // We should only include valid non-negative values.
                 if (!isNaN(val) && val >= 0 && val < 900) {
                     const name = stationData[stnId]?.name || stnKoInData || `지점 ${stnId}`;
                     const address = stationData[stnId]?.adr || "주소 정보 없음";
                     
-                    stations.push({
-                        id: stnId,
-                        val: val,
-                        name: name,
-                        address: address
-                    });
+                    stations.push({ id: stnId, val, name, address });
                 }
                 if (tm && tm.length === 12) lastTm = tm;
             }
