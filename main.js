@@ -62,6 +62,19 @@ let cachedStationMapping = null;
 // New faster CORS Proxy URL
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
 
+// Helper: Get KMA format time string (KST) with minute offset
+function getKMATimeString(offsetMinutes = 4) {
+    const now = new Date();
+    // UTC to KST (UTC+9) and subtract offset
+    const kst = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + (9 * 60 * 60000) - (offsetMinutes * 60000));
+    const Y = kst.getFullYear();
+    const M = String(kst.getMonth() + 1).padStart(2, '0');
+    const D = String(kst.getDate()).padStart(2, '0');
+    const h = String(kst.getHours()).padStart(2, '0');
+    const m = String(kst.getMinutes()).padStart(2, '0');
+    return `${Y}${M}${D}${h}${m}`;
+}
+
 async function getStationMapping(authKey) {
     if (cachedStationMapping) return cachedStationMapping;
     
@@ -123,7 +136,6 @@ async function getStationMapping(authKey) {
                     if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
                     const parts = line.trim().split(/\s+/);
                     const id = parts[0];
-                    // 이미 mapping에 있는 지점(SFC)은 건너뛰고 새로운 지점(AWS)만 추가
                     if (!mapping[id] && parts.length > 8) {
                         const name = parts[8];
                         const rawAdr = parts.slice(13).join(' ').replace(/^---- /, '').trim();
@@ -169,7 +181,9 @@ async function fetchWeatherRanking(type, mode = 'highest') {
         let lastTm = "";
 
         if (type === 'current') {
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+            // Target exactly 4 minutes ago for safety
+            const targetTime = getKMATimeString(4);
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}&tm=${targetTime}`;
             const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
             if (!response.ok) throw new Error('HTTP ' + response.status);
             
@@ -255,7 +269,7 @@ async function fetchWeatherRanking(type, mode = 'highest') {
             });
             
             if (lastTm) {
-                const formattedTime = lastTm.length >= 8 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10) || '00'}:${lastTm.substring(10, 12) || '00'}` : lastTm;
+                const formattedTime = lastTm.length >= 12 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}` : lastTm;
                 timeEl.textContent = `기준 시간: ${formattedTime}`;
             }
             
@@ -290,7 +304,9 @@ async function fetchPrecipRanking(type) {
         const stations = [];
         let lastTm = "";
 
-        const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+        // Target exactly 4 minutes ago for safety
+        const targetTime = getKMATimeString(4);
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}&tm=${targetTime}`;
         const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
         if (!response.ok) throw new Error('HTTP ' + response.status);
         
@@ -335,7 +351,7 @@ async function fetchPrecipRanking(type) {
             });
             
             if (lastTm) {
-                const formattedTime = lastTm.length >= 8 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10) || '00'}:${lastTm.substring(10, 12) || '00'}` : lastTm;
+                const formattedTime = lastTm.length >= 12 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}` : lastTm;
                 precipTimeElement.textContent = `기준 시간: ${formattedTime}`;
             }
             
