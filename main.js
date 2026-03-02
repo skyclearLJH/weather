@@ -63,13 +63,13 @@ let cachedStationMapping = null;
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
 
 async function getStationMapping(authKey) {
-    if (cachedStationMapping && Object.keys(cachedStationMapping).length > 100) return cachedStationMapping;
+    if (cachedStationMapping && Object.keys(cachedStationMapping).length > 300) return cachedStationMapping;
     
     try {
         const mapping = {};
         const decoder = new TextDecoder('euc-kr');
 
-        // 1. 로컬 stations.txt 읽기 (SFC 등 기본 정보)
+        // 1. 로컬 stations.txt 읽기
         try {
             const localResponse = await fetch('stations.txt?_=' + Date.now());
             if (localResponse.ok) {
@@ -86,8 +86,6 @@ async function getStationMapping(authKey) {
                         stnKoIndex = headerParts.indexOf('STN_KO');
                         adrIndex = headerParts.indexOf('LAW_ADDR');
                         if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
-                        
-                        // 숫자로 시작하는 데이터 줄 파싱을 위해 인덱스 조정 (id가 0번)
                         if (stnKoIndex !== -1) stnKoIndex -= 1; 
                         if (adrIndex !== -1) adrIndex -= 1;
                         break;
@@ -95,18 +93,18 @@ async function getStationMapping(authKey) {
                 }
 
                 for (const line of lines) {
-                    if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+                    if (line.startsWith('#') || line.trim() === '') continue;
                     const parts = line.trim().split(/\s+/);
                     if (parts.length > 5) {
                         const id = parts[0];
-                        const name = parts[stnKoIndex] || parts[10]; // Fallback to col 10
+                        const name = parts[stnKoIndex] || parts[10];
                         let adr = "";
                         if (adrIndex !== -1 && parts.length > adrIndex) {
                             const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
                             const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
                             adr = adrMatch ? adrMatch[0].trim() : rawAdr;
                         }
-                        if (id && name && !/^\d+$/.test(name) && name !== '----') {
+                        if (id && name && isNaN(name) && name !== '----') {
                             mapping[id] = { name, adr };
                         }
                     }
@@ -114,36 +112,34 @@ async function getStationMapping(authKey) {
             }
         } catch (e) { console.error('Local stations.txt load failed:', e); }
 
-        // 2. AWS 지점 정보 API에서 가져오기 (지점 보충)
+        // 2. 추가 지점 정보 API 보충 (AWS 및 적설 관측소 포함)
         if (authKey) {
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
-            const awsResponse = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
-            if (awsResponse.ok) {
-                const buffer = await awsResponse.arrayBuffer();
-                const text = decoder.decode(buffer);
-                const lines = text.split('\n');
-                
-                for (const line of lines) {
-                    if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
-                    const parts = line.trim().split(/\s+/);
-                    if (parts.length > 8) {
-                        const id = parts[0];
-                        const name = parts[8];
-                        const rawAdr = parts.slice(13).join(' ').replace(/^---- /, '').trim();
-                        const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
-                        const adr = adrMatch ? adrMatch[0].trim() : rawAdr;
-                        
-                        if (id && name && !mapping[id]) {
-                            mapping[id] = { name, adr };
+            const fetchInf = async (type) => {
+                try {
+                    const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=${type}&stn=0&authKey=${authKey}`;
+                    const res = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
+                    if (res.ok) {
+                        const buffer = await res.arrayBuffer();
+                        const text = decoder.decode(buffer);
+                        const lines = text.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+                            const parts = line.trim().split(/\s+/);
+                            const id = parts[0];
+                            const name = parts[8];
+                            if (id && name && !mapping[id]) {
+                                const rawAdr = parts.slice(13).join(' ').replace(/^---- /, '').trim();
+                                const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
+                                mapping[id] = { name, adr: adrMatch ? adrMatch[0].trim() : rawAdr };
+                            }
                         }
                     }
-                }
-            }
+                } catch (e) {}
+            };
+            await Promise.all([fetchInf('AWS'), fetchInf('SFC')]);
         }
 
-        if (Object.keys(mapping).length > 0) {
-            cachedStationMapping = mapping;
-        }
+        if (Object.keys(mapping).length > 0) cachedStationMapping = mapping;
         return mapping;
     } catch (e) {
         console.error('Final mapping merge failed:', e);
@@ -161,83 +157,52 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
     const valueHeaderEl = isHighest ? weatherValueHeader : lowTempValueHeader;
     const timeEl = isHighest ? weatherTimeElement : lowTempTimeElement;
 
-    const typeNames = {
-        'today': '오늘 ' + (isHighest ? '최고' : '최저') + ' 기온',
-        'current': '현재 ' + (isHighest ? '최고' : '최저') + ' 기온'
-    };
-    
+    const typeNames = { 'today': '오늘 ' + (isHighest ? '최고' : '최저') + ' 기온', 'current': '현재 ' + (isHighest ? '최고' : '최저') + ' 기온' };
     if (retryCount === 0) statusEl.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
     
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
-        
         const stations = [];
         let lastTm = "";
 
-        if (type === 'current') {
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            
-            const buffer = await response.arrayBuffer();
-            const text = new TextDecoder('euc-kr').decode(buffer);
-            
-            if (text.length < 500 && retryCount < 3) {
-                await sleep(1000);
-                return fetchWeatherRanking(type, mode, retryCount + 1);
-            }
+        const targetUrl = type === 'current' ? 
+            `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}` :
+            `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=${isHighest ? 'ta_max' : 'ta_min'}&stn=0&authKey=${authKey}`;
+        
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const buffer = await response.arrayBuffer();
+        const text = new TextDecoder('euc-kr').decode(buffer);
+        
+        if (text.length < 500 && retryCount < 3) {
+            await sleep(1000);
+            return fetchWeatherRanking(type, mode, retryCount + 1);
+        }
 
-            const lines = text.split('\n');
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '') continue;
-                const parts = line.split(',');
-                if (parts.length < 9) continue;
-                const tm = parts[0];
-                const stnId = parts[1].trim();
-                const val = parseFloat(parts[8]); 
-                
+        const lines = text.split('\n');
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '') continue;
+            const parts = line.split(',');
+            if (type === 'current' && parts.length >= 9) {
+                const tm = parts[0], stnId = parts[1].trim(), val = parseFloat(parts[8]);
                 if (!isNaN(val) && val > -50 && val < 60) {
                     const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
                     stations.push({ id: stnId, val, name: info.name, address: info.adr });
                     if (tm) lastTm = tm;
                 }
-            }
-        } else {
-            const obs = isHighest ? 'ta_max' : 'ta_min';
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=${obs}&stn=0&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-
-            const buffer = await response.arrayBuffer();
-            const text = new TextDecoder('euc-kr').decode(buffer);
-            
-            if (text.length < 500 && retryCount < 3) {
-                await sleep(1000);
-                return fetchWeatherRanking(type, mode, retryCount + 1);
-            }
-
-            const lines = text.split('\n');
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '') continue;
-                const parts = line.split(',');
-                if (parts.length < 6) continue;
-                
-                const tm = parts[0].trim();
-                const stnId = parts[1].trim();
-                const val = parseFloat(parts[5].trim());
+            } else if (type === 'today' && parts.length >= 6) {
+                const tm = parts[0].trim(), stnId = parts[1].trim(), val = parseFloat(parts[5]);
                 const nameInApi = parts[6] ? parts[6].replace('=', '').trim() : '';
-                
                 if (!isNaN(val) && val > -50 && val < 60) {
                     const info = stationData[stnId] || { name: nameInApi || `지점 ${stnId}`, adr: "주소 정보 없음" };
                     stations.push({ id: stnId, val, name: info.name, address: info.adr });
                     if (tm) lastTm = tm;
                 }
             }
-            if (lastTm && lastTm.length === 8) {
-                const now = new Date();
-                lastTm += now.getHours().toString().padStart(2, '0') + now.getMinutes().toString().padStart(2, '0');
-            }
+        }
+        if (lastTm && lastTm.length === 8) {
+            const now = new Date(); lastTm += String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
         }
         
         stations.sort((a, b) => isHighest ? b.val - a.val : a.val - b.val);
@@ -248,20 +213,14 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
             tableBodyEl.innerHTML = '';
             top10.forEach((item, index) => {
                 const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">${item.val.toFixed(1)}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
-                `;
+                row.innerHTML = `<td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index+1}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">${item.val.toFixed(1)}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>`;
                 tableBodyEl.appendChild(row);
             });
             if (lastTm) {
                 const formattedTime = lastTm.length >= 12 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}` : lastTm;
                 timeEl.textContent = `기준 시간: ${formattedTime}`;
             }
-            resultContainerEl.style.display = 'block';
-            statusEl.textContent = '조회가 완료되었습니다.';
+            resultContainerEl.style.display = 'block'; statusEl.textContent = '조회가 완료되었습니다.';
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchWeatherRanking(type, mode, retryCount + 1); }
             statusEl.textContent = '유효한 데이터를 찾을 수 없습니다.';
@@ -291,8 +250,7 @@ async function fetchPrecipRanking(type, retryCount = 0) {
         const text = new TextDecoder('euc-kr').decode(buffer);
         
         if (text.length < 500 && retryCount < 3) {
-            await sleep(1000);
-            return fetchPrecipRanking(type, retryCount + 1);
+            await sleep(1000); return fetchPrecipRanking(type, retryCount + 1);
         }
 
         const lines = text.split('\n');
@@ -303,9 +261,7 @@ async function fetchPrecipRanking(type, retryCount = 0) {
             if (line.startsWith('#') || line.trim() === '') continue;
             const parts = line.split(',');
             if (parts.length < 14) continue;
-            const tm = parts[0];
-            const stnId = parts[1].trim();
-            const val = parseFloat(type === '1h' ? parts[11] : parts[13]); 
+            const tm = parts[0], stnId = parts[1].trim(), val = parseFloat(type === '1h' ? parts[11] : parts[13]); 
             if (!isNaN(val) && val > 0 && val < 1000) {
                 const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
                 stations.push({ id: stnId, val, name: info.name, address: info.adr });
@@ -321,20 +277,14 @@ async function fetchPrecipRanking(type, retryCount = 0) {
             precipTableBody.innerHTML = '';
             top10.forEach((item, index) => {
                 const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: #007bff; font-weight: 800;">${item.val.toFixed(1)}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
-                `;
+                row.innerHTML = `<td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index+1}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: #007bff; font-weight: 800;">${item.val.toFixed(1)}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>`;
                 precipTableBody.appendChild(row);
             });
             if (lastTm) {
                 const formattedTime = lastTm.length >= 12 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}` : lastTm;
                 precipTimeElement.textContent = `기준 시간: ${formattedTime}`;
             }
-            precipResultContainer.style.display = 'block';
-            precipStatus.textContent = '조회가 완료되었습니다.';
+            precipResultContainer.style.display = 'block'; precipStatus.textContent = '조회가 완료되었습니다.';
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchPrecipRanking(type, retryCount + 1); }
             precipStatus.textContent = `현재 관측된 ${typeNames[type]} 데이터가 없습니다.`;
@@ -363,8 +313,7 @@ async function fetchSnowRanking(type, retryCount = 0) {
         const text = new TextDecoder('euc-kr').decode(buffer);
         
         if (text.length < 500 && retryCount < 3) {
-            await sleep(1000);
-            return fetchSnowRanking(type, retryCount + 1);
+            await sleep(1000); return fetchSnowRanking(type, retryCount + 1);
         }
 
         const lines = text.split('\n');
@@ -375,10 +324,7 @@ async function fetchSnowRanking(type, retryCount = 0) {
             if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
             const parts = line.split(',');
             if (parts.length >= 7) {
-                const tm = parts[0].trim();
-                const stnId = parts[1].trim();
-                const stnKoInData = parts[2].trim();
-                const val = parseFloat(parts[6].trim());
+                const tm = parts[0].trim(), stnId = parts[1].trim(), stnKoInData = parts[2].trim(), val = parseFloat(parts[6].trim());
                 if (!isNaN(val) && val >= 0 && val < 900) {
                     const info = stationData[stnId] || { name: stnKoInData || `지점 ${stnId}`, adr: "주소 정보 없음" };
                     stations.push({ id: stnId, val, name: info.name, address: info.adr });
@@ -395,20 +341,14 @@ async function fetchSnowRanking(type, retryCount = 0) {
             snowTableBody.innerHTML = '';
             top10.forEach((item, index) => {
                 const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--accent-color); font-weight: 800;">${item.val.toFixed(1)}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
-                `;
-                tableBodyEl.appendChild(row);
+                row.innerHTML = `<td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index+1}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--accent-color); font-weight: 800;">${item.val.toFixed(1)}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>`;
+                snowTableBody.appendChild(row);
             });
             if (lastTm) {
                 const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}`;
                 snowTimeElement.textContent = `기준 시간: ${formattedTime}`;
             }
-            snowResultContainer.style.display = 'block';
-            snowStatus.textContent = '조회가 완료되었습니다.';
+            snowResultContainer.style.display = 'block'; snowStatus.textContent = '조회가 완료되었습니다.';
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchSnowRanking(type, retryCount + 1); }
             snowStatus.textContent = `현재 관측된 ${typeNames[type].replace('(cm)', '')} 데이터가 없습니다.`;
