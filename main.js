@@ -62,58 +62,78 @@ let cachedStationMapping = null;
 // New faster CORS Proxy URL
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
 
-async function getStationMapping() {
+async function getStationMapping(authKey) {
     if (cachedStationMapping) return cachedStationMapping;
     
     try {
         const mapping = {};
         const decoder = new TextDecoder('euc-kr');
 
-        // Fetch from local file instead of external API
-        const response = await fetch('stations.txt');
-        if (!response.ok) throw new Error('Failed to load stations.txt');
-        
-        const buffer = await response.arrayBuffer();
-        const text = decoder.decode(buffer);
-        const lines = text.split('\n');
-        
-        let stnKoIndex = -1;
-        let adrIndex = -1;
-        
-        for (const line of lines) {
-            if (line.includes('STN_KO')) {
-                const headerParts = line.trim().split(/\s+/);
-                stnKoIndex = headerParts.indexOf('STN_KO');
-                adrIndex = headerParts.indexOf('LAW_ADDR');
-                if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
-                
-                // Adjustment for split behavior on lines starting with space
-                if (stnKoIndex !== -1) stnKoIndex -= 1;
-                if (adrIndex !== -1) adrIndex -= 1;
-                break;
+        // 1. 로컬 stations.txt (SFC 지점) 읽기
+        const localResponse = await fetch('stations.txt');
+        if (localResponse.ok) {
+            const buffer = await localResponse.arrayBuffer();
+            const text = decoder.decode(buffer);
+            const lines = text.split('\n');
+            
+            let stnKoIndex = -1;
+            let adrIndex = -1;
+            
+            for (const line of lines) {
+                if (line.includes('STN_KO')) {
+                    const headerParts = line.trim().split(/\s+/);
+                    stnKoIndex = headerParts.indexOf('STN_KO');
+                    adrIndex = headerParts.indexOf('LAW_ADDR');
+                    if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
+                    if (stnKoIndex !== -1) stnKoIndex -= 1;
+                    if (adrIndex !== -1) adrIndex -= 1;
+                    break;
+                }
+            }
+
+            for (const line of lines) {
+                if (line.startsWith('#') || line.trim() === '') continue;
+                const parts = line.trim().split(/\s+/);
+                if (parts.length > stnKoIndex) {
+                    const id = parts[0];
+                    const name = parts[stnKoIndex];
+                    let adr = "";
+                    if (adrIndex !== -1 && parts.length > adrIndex) {
+                        const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
+                        const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
+                        adr = adrMatch ? adrMatch[0].trim() : rawAdr;
+                    }
+                    if (name && name !== '----' && !/^\d+$/.test(name)) {
+                        mapping[id] = { name, adr };
+                    }
+                }
             }
         }
-        
-        // Fallbacks
-        if (stnKoIndex === -1) stnKoIndex = 10; 
-        if (adrIndex === -1) adrIndex = 15;
 
-        for (const line of lines) {
-            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
-            
-            const parts = line.trim().split(/\s+/);
-            if (parts.length > stnKoIndex) {
-                const id = parts[0];
-                const name = parts[stnKoIndex];
-                let adr = "";
-                if (adrIndex !== -1 && parts.length > adrIndex) {
-                    const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
-                    const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
-                    adr = adrMatch ? adrMatch[0].trim() : rawAdr;
-                }
+        // 2. AWS 지점 정보 API에서 가져오기 (stations.txt에 없는 지점 보충)
+        if (authKey) {
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`;
+            const awsResponse = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            if (awsResponse.ok) {
+                const buffer = await awsResponse.arrayBuffer();
+                const text = decoder.decode(buffer);
+                const lines = text.split('\n');
                 
-                if (name && name !== '----' && !/^\d+$/.test(name)) {
-                    mapping[id] = { name, adr };
+                for (const line of lines) {
+                    if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+                    const parts = line.trim().split(/\s+/);
+                    const id = parts[0];
+                    // 이미 mapping에 있는 지점(SFC)은 건너뛰고 새로운 지점(AWS)만 추가
+                    if (!mapping[id] && parts.length > 8) {
+                        const name = parts[8];
+                        const rawAdr = parts.slice(13).join(' ').replace(/^---- /, '').trim();
+                        const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
+                        const adr = adrMatch ? adrMatch[0].trim() : rawAdr;
+                        
+                        if (name && name !== '----' && !/^\d+$/.test(name)) {
+                            mapping[id] = { name, adr };
+                        }
+                    }
                 }
             }
         }
@@ -121,7 +141,7 @@ async function getStationMapping() {
         cachedStationMapping = mapping;
         return mapping;
     } catch (e) {
-        console.error('Failed to fetch station mapping from local file:', e);
+        console.error('Failed to merge station mapping:', e);
         return cachedStationMapping || {};
     }
 }
