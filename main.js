@@ -39,6 +39,16 @@ const lowTempValueHeader = document.getElementById('low-temp-value-header');
 const lowTempTimeElement = document.getElementById('low-temp-time');
 const lowTempStatus = document.getElementById('low-temp-status');
 
+// Precipitation elements
+const fetchPrecip1hButton = document.getElementById('fetch-precip-1h');
+const fetchPrecip3hButton = document.getElementById('fetch-precip-3h');
+const fetchPrecipTodayButton = document.getElementById('fetch-precip-today');
+const precipResultContainer = document.getElementById('precip-result-container');
+const precipTableBody = document.getElementById('precip-table-body');
+const precipValueHeader = document.getElementById('precip-value-header');
+const precipTimeElement = document.getElementById('precip-time');
+const precipStatus = document.getElementById('precip-status');
+
 // Snowfall elements
 const fetchSnowTotButton = document.getElementById('fetch-snow-tot');
 const fetchSnowDayButton = document.getElementById('fetch-snow-day');
@@ -244,6 +254,115 @@ if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', (
 if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
 if (fetchLowTodayButton) fetchLowTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'lowest'));
 if (fetchLowCurrentButton) fetchLowCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'lowest'));
+
+async function fetchPrecipRanking(type) {
+    const typeNames = {
+        '1h': '1시간 강수량',
+        '3h': '3시간 강수량',
+        'today': '오늘 강수량'
+    };
+    
+    precipStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+    
+    try {
+        const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
+        const stationData = await getStationMapping(authKey);
+        
+        const stations = [];
+        let lastTm = "";
+
+        if (type === '1h' || type === 'today') {
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            
+            const buffer = await response.arrayBuffer();
+            const text = new TextDecoder('euc-kr').decode(buffer);
+            const lines = text.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('#') || line.trim() === '') continue;
+                const parts = line.split(',');
+                if (parts.length < 14) continue;
+                
+                const tm = parts[0];
+                const stnId = parts[1].trim();
+                const val = parseFloat(type === '1h' ? parts[11] : parts[13]); // index 11: RN-60m, index 13: RN-DAY
+                
+                if (!isNaN(val) && val > 0 && val < 1000) {
+                    const name = stationData[stnId]?.name || `지점 ${stnId}`;
+                    const address = stationData[stnId]?.adr || "주소 정보 없음";
+                    stations.push({ id: stnId, val, name, address });
+                    if (tm) lastTm = tm;
+                }
+            }
+        } else {
+            // 3-hour precipitation using kma_sfctm2.php (AWS hourly)
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_sfctm2.php?stn=0&authKey=${authKey}`;
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            
+            const buffer = await response.arrayBuffer();
+            const text = new TextDecoder('euc-kr').decode(buffer);
+            const lines = text.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('#') || line.trim() === '') continue;
+                const parts = line.trim().split(/\s+/);
+                if (parts.length < 20) continue;
+                
+                const tm = parts[0];
+                const stnId = parts[1];
+                const val = parseFloat(parts[19]); // index 19: RN_HR3
+                
+                if (!isNaN(val) && val > 0 && val < 1000) {
+                    const name = stationData[stnId]?.name || `지점 ${stnId}`;
+                    const address = stationData[stnId]?.adr || "주소 정보 없음";
+                    stations.push({ id: stnId, val, name, address });
+                    if (tm) lastTm = tm;
+                }
+            }
+        }
+        
+        stations.sort((a, b) => b.val - a.val);
+        const top10 = stations.slice(0, 10);
+        
+        if (top10.length > 0) {
+            precipValueHeader.textContent = '강수량';
+            precipTableBody.innerHTML = '';
+            top10.forEach((item, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: #007bff; font-weight: 800;">
+                        ${item.val.toFixed(1)} mm
+                    </td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
+                `;
+                precipTableBody.appendChild(row);
+            });
+            
+            if (lastTm) {
+                const formattedTime = lastTm.length >= 8 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10) || '00'}:${lastTm.substring(10, 12) || '00'}` : lastTm;
+                precipTimeElement.textContent = `기준 시간: ${formattedTime}`;
+            }
+            
+            precipResultContainer.style.display = 'block';
+            precipStatus.textContent = '조회가 완료되었습니다.';
+        } else {
+            precipStatus.textContent = `현재 관측된 ${typeNames[type]} 데이터가 없습니다.`;
+            precipResultContainer.style.display = 'none';
+        }
+    } catch (error) {
+        console.error(error);
+        precipStatus.textContent = '데이터를 가져오는 중 오류가 발생했습니다.';
+    }
+}
+
+if (fetchPrecip1hButton) fetchPrecip1hButton.addEventListener('click', () => fetchPrecipRanking('1h'));
+if (fetchPrecip3hButton) fetchPrecip3hButton.addEventListener('click', () => fetchPrecipRanking('3h'));
+if (fetchPrecipTodayButton) fetchPrecipTodayButton.addEventListener('click', () => fetchPrecipRanking('today'));
 
 async function fetchSnowRanking(type) {
     const typeNames = {
