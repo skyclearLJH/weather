@@ -61,6 +61,11 @@ nav {
     text-decoration: none;
 }
 
+.nav-links {
+    display: flex;
+    align-items: center;
+}
+
 .nav-links a {
     margin-left: 20px;
     text-decoration: none;
@@ -101,6 +106,7 @@ h1, h2 {
 
 /* Components */
 #theme-toggle {
+    margin-left: 20px;
     padding: 8px 16px;
     border-radius: 20px;
     border: 1px solid var(--button-bg);
@@ -227,13 +233,20 @@ footer {
     .logo {
         font-size: 1.2rem;
     }
+    .nav-links {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 5px;
+    }
     .nav-links a {
-        margin-left: 10px;
+        margin-left: 8px;
         font-size: 0.75rem;
     }
     #theme-toggle {
+        margin-left: 5px;
         padding: 4px 10px;
         font-size: 0.7rem;
+        order: 10; /* Ensure it comes last */
     }
     main {
         margin: 20px auto;
