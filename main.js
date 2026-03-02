@@ -239,7 +239,7 @@ async function fetchWeatherRanking(type, mode = 'highest') {
         const top10 = stations.slice(0, 10);
         
         if (top10.length > 0) {
-            valueHeaderEl.textContent = '기온';
+            valueHeaderEl.textContent = '기온(℃)';
             tableBodyEl.innerHTML = '';
             top10.forEach((item, index) => {
                 const row = document.createElement('tr');
@@ -247,7 +247,7 @@ async function fetchWeatherRanking(type, mode = 'highest') {
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--button-bg); font-weight: 800;">
-                        ${item.val.toFixed(1)} °C
+                        ${item.val.toFixed(1)}
                     </td>
                     <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
                 `;

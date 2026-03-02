@@ -218,17 +218,75 @@ footer {
 
 /* Responsive */
 @media (max-width: 600px) {
+    body {
+        padding-top: 60px;
+    }
+    nav {
+        padding: 5px 0;
+    }
+    .logo {
+        font-size: 1.2rem;
+    }
+    .nav-links a {
+        margin-left: 10px;
+        font-size: 0.75rem;
+    }
+    #theme-toggle {
+        padding: 4px 10px;
+        font-size: 0.7rem;
+    }
+    main {
+        margin: 20px auto;
+        padding: 0 10px;
+    }
     .section {
-        padding: 25px;
+        padding: 20px 15px;
+        border-radius: 12px;
+        margin-bottom: 25px;
+    }
+    h2 {
+        font-size: 1.3rem;
+    }
+    .description {
+        font-size: 0.85rem;
+        margin-bottom: 15px;
+    }
+    .weather-menu, .snow-menu {
+        gap: 8px !important;
+    }
+    .weather-menu button, .snow-menu button {
+        padding: 10px 5px !important;
+        font-size: 0.85rem !important;
+    }
+    table th, table td {
+        padding: 8px 4px !important;
+        font-size: 0.8rem !important;
+    }
+    /* Station name column optimization */
+    table td:nth-child(2) {
+        min-width: 55px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* Value column optimization */
+    table td:nth-child(3) {
+        font-size: 0.9rem !important;
+        text-align: center;
+    }
+    /* Address column - hide or reduce on very small screens if needed, but here we just reduce font */
+    table td:nth-child(4) {
+        font-size: 0.7rem !important;
+        max-width: 100px;
     }
     .lotto-number {
-        width: 40px;
-        height: 40px;
-        font-size: 1rem;
+        width: 35px;
+        height: 35px;
+        font-size: 0.9rem;
     }
-    #snow-section table th, #snow-section table td {
-        padding: 8px;
-        font-size: 0.8rem;
+    footer {
+        padding: 20px 10px;
+        font-size: 0.75rem;
     }
 }
 
