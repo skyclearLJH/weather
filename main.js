@@ -124,9 +124,12 @@ const observationTimeElement = document.getElementById('observation-time');
 const weatherStatus = document.getElementById('weather-status');
 
 // Snowfall elements
-const fetchSnowButton = document.getElementById('fetch-snow-button');
+const fetchSnowTotButton = document.getElementById('fetch-snow-tot');
+const fetchSnowDayButton = document.getElementById('fetch-snow-day');
+const fetchSnowHr3Button = document.getElementById('fetch-snow-hr3');
 const snowResultContainer = document.getElementById('snow-result-container');
 const snowTableBody = document.getElementById('snow-table-body');
+const snowValueHeader = document.getElementById('snow-value-header');
 const snowTimeElement = document.getElementById('snow-time');
 const snowStatus = document.getElementById('snow-status');
 
@@ -205,151 +208,93 @@ async function getStationMapping(authKey) {
     }
 }
 
-if (fetchWeatherButton) {
-    fetchWeatherButton.addEventListener('click', async () => {
-        weatherStatus.textContent = '기상청 데이터를 불러오는 중...';
-        fetchWeatherButton.disabled = true;
+async function fetchSnowRanking(type) {
+    const typeNames = {
+        'tot': '적설량',
+        'day': '신적설(일)',
+        'hr3': '3시간 신적설'
+    };
+    
+    snowStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+    
+    try {
+        const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
+        const stationData = await getStationMapping(authKey);
         
-        try {
-            const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
-            const stationData = await getStationMapping(authKey);
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=${type}&authKey=${authKey}`;
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+        
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        
+        const buffer = await response.arrayBuffer();
+        const decoder = new TextDecoder('euc-kr');
+        const text = decoder.decode(buffer);
+        const lines = text.split('\n');
+        
+        const stations = [];
+        let lastTm = "";
+
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
             
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-            
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            
-            const buffer = await response.arrayBuffer();
-            const decoder = new TextDecoder('euc-kr');
-            const text = decoder.decode(buffer);
-            const lines = text.split('\n');
-            
-            let highestTemp = -999;
-            let highestStationId = '';
-            let obsTime = '';
-            
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '') continue;
-                const parts = line.split(',');
-                if (parts.length < 9) continue;
-                
-                const time = parts[0];
+            const parts = line.split(',');
+            if (parts.length >= 7) {
+                const tm = parts[0].trim();
                 const stnId = parts[1].trim();
-                const temp = parseFloat(parts[8]);
+                const stnKoInData = parts[2].trim();
+                const val = parseFloat(parts[6].trim());
                 
-                if (!isNaN(temp) && temp > highestTemp && temp < 60 && temp > -50) {
-                    highestTemp = temp;
-                    highestStationId = stnId;
-                    obsTime = time;
-                }
-            }
-            
-            if (highestStationId) {
-                const name = stationData[highestStationId]?.name || `지점 ${highestStationId}`;
-                const formattedTime = `${obsTime.substring(0, 4)}-${obsTime.substring(4, 6)}-${obsTime.substring(6, 8)} ${obsTime.substring(8, 10)}:${obsTime.substring(10, 12)}`;
-                
-                highestStationElement.textContent = name;
-                highestTempElement.textContent = `${highestTemp.toFixed(1)} °C`;
-                observationTimeElement.textContent = formattedTime;
-                
-                weatherResultContainer.style.display = 'block';
-                weatherStatus.textContent = '조회가 완료되었습니다.';
-            } else {
-                weatherStatus.textContent = '유효한 데이터를 찾을 수 없습니다.';
-            }
-        } catch (error) {
-            console.error(error);
-            weatherStatus.textContent = '오류가 발생했습니다.';
-        } finally {
-            fetchWeatherButton.disabled = false;
-        }
-    });
-}
-
-// Snowfall Top 10 logic (Updated to use kma_snow1.php with comma parsing)
-if (fetchSnowButton) {
-    fetchSnowButton.addEventListener('click', async () => {
-        snowStatus.textContent = '적설관측 데이터를 불러오는 중...';
-        fetchSnowButton.disabled = true;
-        
-        try {
-            const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
-            const stationData = await getStationMapping(authKey);
-            
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=day&authKey=${authKey}`;
-            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
-            
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            
-            const buffer = await response.arrayBuffer();
-            const decoder = new TextDecoder('euc-kr');
-            const text = decoder.decode(buffer);
-            const lines = text.split('\n');
-            
-            const stations = [];
-            let lastTm = "";
-
-            for (const line of lines) {
-                if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
-                
-                // kma_snow1.php is comma-separated
-                const parts = line.split(',');
-                if (parts.length >= 7) {
-                    const tm = parts[0].trim();
-                    const stnId = parts[1].trim();
-                    const stnKoInData = parts[2].trim();
-                    const sdDay = parseFloat(parts[6].trim());
+                // Filter out missing values (often -99.9 or -9.0 in KMA APIs)
+                if (!isNaN(val) && val > 0 && val < 900) {
+                    const name = stationData[stnId]?.name || stnKoInData || `지점 ${stnId}`;
+                    const address = stationData[stnId]?.adr || "주소 정보 없음";
                     
-                    if (!isNaN(sdDay) && sdDay > 0) {
-                        const name = stationData[stnId]?.name || stnKoInData || `지점 ${stnId}`;
-                        const address = stationData[stnId]?.adr || "주소 정보 없음";
-                        
-                        stations.push({
-                            id: stnId,
-                            sdDay: sdDay,
-                            name: name,
-                            address: address
-                        });
-                    }
-                    if (tm && tm.length === 12) lastTm = tm;
+                    stations.push({
+                        id: stnId,
+                        val: val,
+                        name: name,
+                        address: address
+                    });
                 }
+                if (tm && tm.length === 12) lastTm = tm;
             }
-            
-            stations.sort((a, b) => b.sdDay - a.sdDay);
-            const top10 = stations.slice(0, 10);
-            
-            if (top10.length > 0) {
-                snowTableBody.innerHTML = '';
-                top10.forEach((item, index) => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
-                        <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
-                        <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--accent-color); font-weight: 800;">${item.sdDay.toFixed(1)} cm</td>
-                        <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
-                    `;
-                    snowTableBody.appendChild(row);
-                });
-                
-                if (lastTm) {
-                    const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}`;
-                    snowTimeElement.textContent = `기준 시간: ${formattedTime}`;
-                } else {
-                    snowTimeElement.textContent = `기준 시간: 실시간`;
-                }
-                
-                snowResultContainer.style.display = 'block';
-                snowStatus.textContent = '조회가 완료되었습니다.';
-            } else {
-                snowStatus.textContent = '현재 적설관측 지점에서 신적설(새로 쌓인 눈)이 관측되지 않았습니다.';
-                snowResultContainer.style.display = 'none';
-            }
-            
-        } catch (error) {
-            console.error(error);
-            snowStatus.textContent = '데이터를 가져오는 중 오류가 발생했습니다.';
-        } finally {
-            fetchSnowButton.disabled = false;
         }
-    });
+        
+        stations.sort((a, b) => b.val - a.val);
+        const top10 = stations.slice(0, 10);
+        
+        if (top10.length > 0) {
+            snowValueHeader.textContent = typeNames[type];
+            snowTableBody.innerHTML = '';
+            top10.forEach((item, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index + 1}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: var(--accent-color); font-weight: 800;">${item.val.toFixed(1)} cm</td>
+                    <td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>
+                `;
+                snowTableBody.appendChild(row);
+            });
+            
+            if (lastTm) {
+                const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}`;
+                snowTimeElement.textContent = `기준 시간: ${formattedTime}`;
+            }
+            
+            snowResultContainer.style.display = 'block';
+            snowStatus.textContent = '조회가 완료되었습니다.';
+        } else {
+            snowStatus.textContent = `현재 관측된 ${typeNames[type]} 데이터가 없습니다.`;
+            snowResultContainer.style.display = 'none';
+        }
+    } catch (error) {
+        console.error(error);
+        snowStatus.textContent = '데이터를 가져오는 중 오류가 발생했습니다.';
+    }
 }
+
+if (fetchSnowTotButton) fetchSnowTotButton.addEventListener('click', () => fetchSnowRanking('tot'));
+if (fetchSnowDayButton) fetchSnowDayButton.addEventListener('click', () => fetchSnowRanking('day'));
+if (fetchSnowHr3Button) fetchSnowHr3Button.addEventListener('click', () => fetchSnowRanking('hr3'));
+
