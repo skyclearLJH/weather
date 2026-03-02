@@ -131,6 +131,7 @@ const snowTimeElement = document.getElementById('snow-time');
 const snowStatus = document.getElementById('snow-status');
 
 let cachedStationMapping = null;
+let cachedSnowStationMapping = null;
 
 // New faster CORS Proxy URL
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
@@ -160,14 +161,12 @@ async function getStationMapping(authKey) {
                     stnKoIndex = headerParts.indexOf('STN_KO');
                     adrIndex = headerParts.indexOf('ADR');
                     
-                    // Header starts with '#', but data lines don't.
                     if (stnKoIndex !== -1) stnKoIndex -= 1;
                     if (adrIndex !== -1) adrIndex -= 1;
                     break;
                 }
             }
             
-            // Fallbacks
             if (stnKoIndex === -1) stnKoIndex = 3; 
             if (adrIndex === -1) adrIndex = 6;
 
@@ -180,7 +179,6 @@ async function getStationMapping(authKey) {
                     const name = parts[stnKoIndex];
                     let adr = "";
                     if (adrIndex !== -1 && parts.length > adrIndex) {
-                        // Address might contain spaces, so join remaining parts
                         adr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
                     }
                     
@@ -191,7 +189,6 @@ async function getStationMapping(authKey) {
             }
         };
 
-        // Fetch SFC first (ASOS), then AWS (AWS will only fill in missing ones)
         await fetchAndParse('SFC');
         await fetchAndParse('AWS');
 
@@ -200,6 +197,64 @@ async function getStationMapping(authKey) {
     } catch (e) {
         console.error('Failed to fetch station mapping:', e);
         return cachedStationMapping || {};
+    }
+}
+
+async function getSnowStationMapping(authKey) {
+    if (cachedSnowStationMapping) return cachedSnowStationMapping;
+    
+    try {
+        const mapping = {};
+        const decoder = new TextDecoder('euc-kr');
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/stn_snow.php?authKey=${authKey}`;
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
+        
+        if (!response.ok) return {};
+        
+        const buffer = await response.arrayBuffer();
+        const text = decoder.decode(buffer);
+        const lines = text.split('\n');
+        
+        let stnKoIndex = -1;
+        let adrIndex = -1;
+        
+        for (const line of lines) {
+            if (line.includes('STN_KO')) {
+                const headerParts = line.trim().split(/\s+/);
+                stnKoIndex = headerParts.indexOf('STN_KO');
+                adrIndex = headerParts.indexOf('ADR');
+                if (stnKoIndex !== -1) stnKoIndex -= 1;
+                if (adrIndex !== -1) adrIndex -= 1;
+                break;
+            }
+        }
+        
+        if (stnKoIndex === -1) stnKoIndex = 2; 
+        if (adrIndex === -1) adrIndex = 5;
+
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+            
+            const parts = line.trim().split(/\s+/);
+            if (parts.length > stnKoIndex) {
+                const id = parts[0];
+                const name = parts[stnKoIndex];
+                let adr = "";
+                if (adrIndex !== -1 && parts.length > adrIndex) {
+                    adr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
+                }
+                
+                if (name && name !== '----') {
+                    mapping[id] = { name, adr };
+                }
+            }
+        }
+        
+        cachedSnowStationMapping = mapping;
+        return mapping;
+    } catch (e) {
+        console.error('Failed to fetch snow station mapping:', e);
+        return {};
     }
 }
 
@@ -264,18 +319,18 @@ if (fetchWeatherButton) {
     });
 }
 
-// Snowfall Top 10 logic
+// Snowfall Top 10 logic (Updated to use kma_snow1.php)
 if (fetchSnowButton) {
     fetchSnowButton.addEventListener('click', async () => {
-        snowStatus.textContent = '신적설 데이터를 불러오는 중...';
+        snowStatus.textContent = '적설관측 데이터를 불러오는 중...';
         fetchSnowButton.disabled = true;
         
         try {
             const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
-            const stationData = await getStationMapping(authKey);
+            const stationData = await getSnowStationMapping(authKey);
             
-            // kma_sfctm3.php provides SD_DAY (Daily fresh snowfall)
-            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_sfctm3.php?stn=0&authKey=${authKey}`;
+            // Using kma_snow1.php with sd=day for Daily Fresh Snowfall
+            const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=day&authKey=${authKey}`;
             const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
             
             if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -290,19 +345,18 @@ if (fetchSnowButton) {
             let tmIndex = -1;
             
             for (const line of lines) {
-                if (line.includes('SD_DAY')) {
+                if (line.includes('SD_DAY') || line.includes('SD1')) {
                     const headerParts = line.trim().split(/\s+/);
-                    sdDayIndex = headerParts.indexOf('SD_DAY') - 1;
-                    stnIndex = headerParts.indexOf('STN') - 1;
-                    tmIndex = headerParts.indexOf('TM') - 1;
+                    sdDayIndex = headerParts.findIndex(h => h.includes('SD')) - 1;
+                    stnIndex = headerParts.indexOf('STN') !== -1 ? headerParts.indexOf('STN') - 1 : 0;
+                    tmIndex = headerParts.indexOf('TM') !== -1 ? headerParts.indexOf('TM') - 1 : -1;
                     break;
                 }
             }
             
-            // Fallbacks based on standard format
-            if (sdDayIndex === -1) sdDayIndex = 29; 
-            if (stnIndex === -1) stnIndex = 1;
-            if (tmIndex === -1) tmIndex = 0;
+            // Standard indices for kma_snow1.php
+            if (sdDayIndex === -1) sdDayIndex = 3; 
+            if (stnIndex === -1) stnIndex = 0;
 
             const stations = [];
             let lastTm = "";
@@ -314,7 +368,7 @@ if (fetchSnowButton) {
                 if (parts.length > sdDayIndex) {
                     const stnId = parts[stnIndex];
                     const sdDay = parseFloat(parts[sdDayIndex]);
-                    const tm = parts[tmIndex];
+                    const tm = tmIndex !== -1 ? parts[tmIndex] : "";
                     
                     if (!isNaN(sdDay) && sdDay > 0) {
                         stations.push({
@@ -328,9 +382,7 @@ if (fetchSnowButton) {
                 }
             }
             
-            // Sort by snowfall descending
             stations.sort((a, b) => b.sdDay - a.sdDay);
-            
             const top10 = stations.slice(0, 10);
             
             if (top10.length > 0) {
@@ -346,13 +398,17 @@ if (fetchSnowButton) {
                     snowTableBody.appendChild(row);
                 });
                 
-                const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}`;
-                snowTimeElement.textContent = `기준 시간: ${formattedTime}`;
+                if (lastTm) {
+                    const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}`;
+                    snowTimeElement.textContent = `기준 시간: ${formattedTime}`;
+                } else {
+                    snowTimeElement.textContent = `기준 시간: 실시간`;
+                }
                 
                 snowResultContainer.style.display = 'block';
                 snowStatus.textContent = '조회가 완료되었습니다.';
             } else {
-                snowStatus.textContent = '현재 신적설(새로 쌓인 눈)이 관측된 지점이 없습니다.';
+                snowStatus.textContent = '현재 적설관측 지점에서 신적설(새로 쌓인 눈)이 관측되지 않았습니다.';
                 snowResultContainer.style.display = 'none';
             }
             
