@@ -206,6 +206,13 @@ async function fetchWeatherRanking(type, mode = 'highest') {
                     if (tm) lastTm = tm;
                 }
             }
+            
+            // For today's extreme data (8-digit date only), append current time
+            if (lastTm && lastTm.length === 8) {
+                const now = new Date();
+                lastTm += now.getHours().toString().padStart(2, '0') + 
+                          now.getMinutes().toString().padStart(2, '0');
+            }
         }
         
         // Sort: Descending for highest, Ascending for lowest
