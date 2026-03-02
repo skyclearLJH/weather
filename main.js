@@ -32,7 +32,6 @@ const weatherStatus = document.getElementById('weather-status');
 // Snowfall elements
 const fetchSnowTotButton = document.getElementById('fetch-snow-tot');
 const fetchSnowDayButton = document.getElementById('fetch-snow-day');
-const fetchSnowHr3Button = document.getElementById('fetch-snow-hr3');
 const snowResultContainer = document.getElementById('snow-result-container');
 const snowTableBody = document.getElementById('snow-table-body');
 const snowValueHeader = document.getElementById('snow-value-header');
@@ -178,8 +177,7 @@ if (fetchWeatherButton) {
 async function fetchSnowRanking(type) {
     const typeNames = {
         'tot': '적설량',
-        'day': '신적설(일)',
-        'hr3': '3시간 신적설'
+        'day': '신적설(일)'
     };
     
     snowStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
@@ -264,4 +262,3 @@ async function fetchSnowRanking(type) {
 
 if (fetchSnowTotButton) fetchSnowTotButton.addEventListener('click', () => fetchSnowRanking('tot'));
 if (fetchSnowDayButton) fetchSnowDayButton.addEventListener('click', () => fetchSnowRanking('day'));
-if (fetchSnowHr3Button) fetchSnowHr3Button.addEventListener('click', () => fetchSnowRanking('hr3'));
