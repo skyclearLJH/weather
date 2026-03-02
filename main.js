@@ -319,7 +319,7 @@ if (fetchWeatherButton) {
     });
 }
 
-// Snowfall Top 10 logic (Updated to use kma_snow1.php)
+// Snowfall Top 10 logic (Updated to use kma_snow1.php with comma parsing)
 if (fetchSnowButton) {
     fetchSnowButton.addEventListener('click', async () => {
         snowStatus.textContent = '적설관측 데이터를 불러오는 중...';
@@ -327,9 +327,9 @@ if (fetchSnowButton) {
         
         try {
             const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
-            const stationData = await getSnowStationMapping(authKey);
+            // Get mapping for addresses (using the same mapping as weather)
+            const stationData = await getStationMapping(authKey);
             
-            // Using kma_snow1.php with sd=day for Daily Fresh Snowfall
             const targetUrl = `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=day&authKey=${authKey}`;
             const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl));
             
@@ -340,45 +340,33 @@ if (fetchSnowButton) {
             const text = decoder.decode(buffer);
             const lines = text.split('\n');
             
-            let sdDayIndex = -1;
-            let stnIndex = -1;
-            let tmIndex = -1;
-            
-            for (const line of lines) {
-                if (line.includes('SD_DAY') || line.includes('SD1')) {
-                    const headerParts = line.trim().split(/\s+/);
-                    sdDayIndex = headerParts.findIndex(h => h.includes('SD')) - 1;
-                    stnIndex = headerParts.indexOf('STN') !== -1 ? headerParts.indexOf('STN') - 1 : 0;
-                    tmIndex = headerParts.indexOf('TM') !== -1 ? headerParts.indexOf('TM') - 1 : -1;
-                    break;
-                }
-            }
-            
-            // Standard indices for kma_snow1.php
-            if (sdDayIndex === -1) sdDayIndex = 3; 
-            if (stnIndex === -1) stnIndex = 0;
-
             const stations = [];
             let lastTm = "";
 
             for (const line of lines) {
                 if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
                 
-                const parts = line.trim().split(/\s+/);
-                if (parts.length > sdDayIndex) {
-                    const stnId = parts[stnIndex];
-                    const sdDay = parseFloat(parts[sdDayIndex]);
-                    const tm = tmIndex !== -1 ? parts[tmIndex] : "";
+                // kma_snow1.php is comma-separated
+                const parts = line.split(',');
+                if (parts.length >= 7) {
+                    const tm = parts[0].trim();
+                    const stnId = parts[1].trim();
+                    const stnKoInData = parts[2].trim();
+                    const sdDay = parseFloat(parts[6].trim());
                     
                     if (!isNaN(sdDay) && sdDay > 0) {
+                        // Priority: stationData (for address) > name from API data
+                        const name = stationData[stnId]?.name || stnKoInData || `지점 ${stnId}`;
+                        const address = stationData[stnId]?.adr || "주소 정보 없음";
+                        
                         stations.push({
                             id: stnId,
                             sdDay: sdDay,
-                            name: stationData[stnId]?.name || `지점 ${stnId}`,
-                            address: stationData[stnId]?.adr || "주소 정보 없음"
+                            name: name,
+                            address: address
                         });
                     }
-                    if (tm) lastTm = tm;
+                    if (tm && tm.length === 12) lastTm = tm;
                 }
             }
             
