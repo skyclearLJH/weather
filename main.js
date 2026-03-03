@@ -303,12 +303,12 @@ async function fetchPrecipRanking(type, retryCount = 0) {
 }
 
 async function fetchPrecipYesterdayRanking(retryCount = 0) {
-    // 1. 상태 메시지 즉시 업데이트 (가장 중요)
+    // 버튼 누르자마자 상태 메시지가 보이도록 가장 앞에 배치
     precipStatus.textContent = '어제부터 강수량 데이터를 불러오는 중...';
     precipResultContainer.style.display = 'none';
     
-    // 브라우저 렌더링을 위해 아주 짧은 지연 추가
-    await new Promise(resolve => setTimeout(resolve, 10));
+    // UI 업데이트 시간을 벌기 위해 100ms 지연
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
@@ -322,10 +322,10 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
 
         const precipMap = new Map();
 
-        // 1. 어제 확정 일강수량 호출 (obs=rn_day 옵션)
-        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
+        // 1. 어제 데이터: nph-aws2_min API의 과거 시점 조회 (disp=0, 23:59분 기준)
+        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?tm=${yyyymmdd}2359&stn=0&disp=0&authKey=${authKey}`;
         const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
-        if (!yesterdayResponse.ok) throw new Error('Yesterday Data Failed');
+        if (!yesterdayResponse.ok) throw new Error('Yesterday Failed');
         const yesterdayBuffer = await yesterdayResponse.arrayBuffer();
         const yesterdayText = new TextDecoder('euc-kr').decode(yesterdayBuffer);
 
@@ -333,20 +333,20 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         for (const line of yLines) {
             if (line.startsWith('#') || line.trim() === '') continue;
             const parts = line.split(',');
-            if (parts.length >= 6) {
+            if (parts.length >= 14) {
                 const stnId = parts[1].trim();
-                const val = parseFloat(parts[5]); // RN_DAY
+                const val = parseFloat(parts[13]); // R_DAY
                 if (!isNaN(val) && val > 0) {
-                    const info = stationData[stnId] || { name: parts[6] ? parts[6].replace('=', '').trim() : `지점 ${stnId}`, adr: "주소 정보 없음" };
-                    precipMap.set(stnId, { val: val, name: info.name, adr: info.adr });
+                    const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
+                    precipMap.set(Number(stnId), { val: val, name: info.name, adr: info.adr });
                 }
             }
         }
 
-        // 2. 오늘 실시간 누적 강수량 호출 (disp=1)
+        // 2. 오늘 데이터: 현재 실시간 누적 (disp=1)
         const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
         const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
-        if (!todayResponse.ok) throw new Error('Today Data Failed');
+        if (!todayResponse.ok) throw new Error('Today Failed');
         const todayBuffer = await todayResponse.arrayBuffer();
         const todayText = new TextDecoder('euc-kr').decode(todayBuffer);
 
@@ -362,22 +362,22 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             const todayVal = parseFloat(parts[13]); // 오늘 누적 (R_DAY)
             if (tm) lastTm = tm;
             
+            const stnKey = Number(stnId);
             if (!isNaN(todayVal)) {
-                if (precipMap.has(stnId)) {
-                    const current = precipMap.get(stnId);
+                if (precipMap.has(stnKey)) {
+                    const current = precipMap.get(stnKey);
                     current.val += todayVal;
                 } else if (todayVal > 0) {
                     const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
-                    precipMap.set(stnId, { val: todayVal, name: info.name, adr: info.adr });
+                    precipMap.set(stnKey, { val: todayVal, name: info.name, adr: info.adr });
                 }
             }
         }
 
         const finalStations = Array.from(precipMap.entries()).map(([id, data]) => ({
-            id: id, val: data.val, name: data.name, address: data.adr
+            id: String(id), val: data.val, name: data.name, address: data.adr
         }));
         
-        // 정렬: 강수량 내림차순
         finalStations.sort((a, b) => b.val - a.val);
         const top10 = finalStations.slice(0, 10);
         
