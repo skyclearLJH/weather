@@ -318,38 +318,38 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         precipResultContainer.style.display = 'none';
     }
     
-    // 브라우저가 화면을 갱신할 수 있도록 짧은 지연을 줍니다.
     await new Promise(resolve => setTimeout(resolve, 10));
 
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
         
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yyyymmdd = yesterday.getFullYear() + 
-                         String(yesterday.getMonth() + 1).padStart(2, '0') + 
-                         String(yesterday.getDate()).padStart(2, '0');
-
-        const precipMap = new Map();
-
-        // 1. 어제 데이터 호출 (rn_day: 일강수량)
-        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
+        const now = new Date();
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        
+        const yyyymmddYesterday = yesterday.getFullYear() + 
+                                  String(yesterday.getMonth() + 1).padStart(2, '0') + 
+                                  String(yesterday.getDate()).padStart(2, '0');
+        
+        // 1. 어제 23:59 시점의 데이터 호출 (어제 하루 총 누적 강수량 확보)
+        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?tm=${yyyymmddYesterday}2359&stn=0&disp=1&authKey=${authKey}`;
         const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
         if (!yesterdayResponse.ok) throw new Error('Yesterday Data HTTP ' + yesterdayResponse.status);
         const yesterdayBuffer = await yesterdayResponse.arrayBuffer();
         const yesterdayText = new TextDecoder('euc-kr').decode(yesterdayBuffer);
 
+        const precipMap = new Map(); // stnId -> { val: number, name: string, adr: string }
+
         const yLines = yesterdayText.split('\n');
         for (const line of yLines) {
             if (line.startsWith('#') || line.trim() === '') continue;
             const parts = line.split(',');
-            if (parts.length >= 6) {
+            if (parts.length >= 14) {
                 const stnId = parts[1].trim();
-                const val = parseFloat(parts[5]);
-                const nameInApi = parts[6] ? parts[6].replace('=', '').trim() : '';
+                const val = parseFloat(parts[13]); // R_DAY (어제 하루 총 누적)
                 if (!isNaN(val) && val > 0) {
-                    const info = stationData[stnId] || { name: nameInApi || `지점 ${stnId}`, adr: "주소 정보 없음" };
+                    const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
                     precipMap.set(stnId, { val: val, name: info.name, adr: info.adr });
                 }
             }
@@ -371,7 +371,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             if (parts.length < 14) continue;
             
             const tm = parts[0], stnId = parts[1].trim();
-            const todayVal = parseFloat(parts[13]);
+            const todayVal = parseFloat(parts[13]); // 오늘 누적
             if (tm) lastTm = tm;
             
             if (!isNaN(todayVal)) {
@@ -401,7 +401,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 precipTableBody.appendChild(row);
             });
             
-            const startStr = `${yyyymmdd.substring(0,4)}-${yyyymmdd.substring(4,6)}-${yyyymmdd.substring(6,8)} 00:00`;
+            const startStr = `${yyyymmddYesterday.substring(0,4)}-${yyyymmddYesterday.substring(4,6)}-${yyyymmddYesterday.substring(6,8)} 00:00`;
             const endStr = lastTm.length >= 12 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}` : lastTm;
             precipTimeElement.textContent = `기준 기간: ${startStr} ~ ${endStr}`;
             
