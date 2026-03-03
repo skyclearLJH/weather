@@ -322,7 +322,14 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         const yesterdayBuffer = await yesterdayResponse.arrayBuffer();
         const yesterdayText = new TextDecoder('euc-kr').decode(yesterdayBuffer);
 
-        const precipMap = new Map(); // stnId -> rainValue
+        const precipMap = new Map(); // stnId -> { val: number, name: string, adr: string }
+
+        // 2. 어제 데이터 호출 (rn_day: 일강수량)
+        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
+        const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
+        if (!yesterdayResponse.ok) throw new Error('Yesterday Data HTTP ' + yesterdayResponse.status);
+        const yesterdayBuffer = await yesterdayResponse.arrayBuffer();
+        const yesterdayText = new TextDecoder('euc-kr').decode(yesterdayBuffer);
 
         const yLines = yesterdayText.split('\n');
         for (const line of yLines) {
@@ -331,13 +338,15 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             if (parts.length >= 6) {
                 const stnId = parts[1].trim();
                 const val = parseFloat(parts[5]);
-                if (!isNaN(val) && val >= 0) {
-                    precipMap.set(stnId, val);
+                const nameInApi = parts[6] ? parts[6].replace('=', '').trim() : '';
+                if (!isNaN(val) && val > 0) {
+                    const info = stationData[stnId] || { name: nameInApi || `지점 ${stnId}`, adr: "주소 정보 없음" };
+                    precipMap.set(stnId, { val: val, name: info.name, adr: info.adr });
                 }
             }
         }
 
-        // 3. 오늘 실시간 데이터 호출
+        // 3. 오늘 실시간 데이터 호출 및 합산
         const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
         const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
         if (!todayResponse.ok) throw new Error('Today Data HTTP ' + todayResponse.status);
@@ -345,7 +354,6 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         const todayText = new TextDecoder('euc-kr').decode(todayBuffer);
 
         const tLines = todayText.split('\n');
-        const finalStations = [];
         let lastTm = "";
 
         for (const line of tLines) {
@@ -355,18 +363,25 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             
             const tm = parts[0], stnId = parts[1].trim();
             const todayVal = parseFloat(parts[13]); // R_DAY (오늘 누적)
+            if (tm) lastTm = tm;
             
             if (!isNaN(todayVal)) {
-                const yesterdayVal = precipMap.get(stnId) || 0;
-                const totalVal = yesterdayVal + todayVal;
-                
-                if (totalVal > 0) {
+                if (precipMap.has(stnId)) {
+                    const current = precipMap.get(stnId);
+                    current.val += todayVal;
+                } else if (todayVal > 0) {
                     const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
-                    finalStations.push({ id: stnId, val: totalVal, name: info.name, address: info.adr });
-                    if (tm) lastTm = tm;
+                    precipMap.set(stnId, { val: todayVal, name: info.name, adr: info.adr });
                 }
             }
         }
+
+        const finalStations = Array.from(precipMap.entries()).map(([id, data]) => ({
+            id: id,
+            val: data.val,
+            name: data.name,
+            address: data.adr
+        }));
         
         finalStations.sort((a, b) => b.val - a.val);
         const top10 = finalStations.slice(0, 10);
