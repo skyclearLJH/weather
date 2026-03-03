@@ -312,35 +312,28 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
         
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yyyymmdd = yesterday.getFullYear() + 
-                         String(yesterday.getMonth() + 1).padStart(2, '0') + 
-                         String(yesterday.getDate()).padStart(2, '0');
-
-        // 1. 어제 확정 일강수량 호출 (sfc_aws_day.php)
-        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
-        const response = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
-        if (!response.ok) throw new Error('Yesterday API Fail');
-        const buffer = await response.arrayBuffer();
-        const text = new TextDecoder('euc-kr').decode(buffer);
+        // 1. 로컬의 yesterday_raw.txt 호출 (API 대신 신뢰할 수 있는 로컬 데이터 사용)
+        const response = await fetch(`yesterday_raw.txt?_=${Date.now()}`);
+        if (!response.ok) throw new Error('Yesterday File Fail');
+        const text = await response.text();
 
         const stations = [];
         const lines = text.split('\n');
-        for (const line of lines) {
-            if (line.startsWith('#') || line.trim() === '') continue;
-            const parts = line.split(',');
-            // 날짜와 지점번호가 정확한지 확인
-            if (parts.length >= 6) {
-                const dataDate = parts[0].trim();
-                if (dataDate !== yyyymmdd) continue; // 요청한 날짜가 아니면 패스
+        let lastTm = "";
 
+        for (const line of lines) {
+            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+            const parts = line.split(',');
+            // yesterday_raw.txt 형식: index 0(시간), 1(지점번호), 13(일강수량)
+            if (parts.length >= 14) {
+                const tm = parts[0].trim();
                 const stnId = parts[1].trim();
-                const val = parseFloat(parts[5]); // RN_DAY (일강수량)
+                const val = parseFloat(parts[13]); // RN-DAY (일강수량)
                 
-                if (!isNaN(val) && val > 0) {
-                    const info = stationData[stnId] || { name: parts[6] ? parts[6].replace('=', '').trim() : `지점 ${stnId}`, adr: "주소 정보 없음" };
+                if (!isNaN(val) && val > 0 && val < 1000) {
+                    const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
                     stations.push({ id: stnId, val: val, name: info.name, address: info.adr });
+                    if (tm) lastTm = tm;
                 }
             }
         }
@@ -357,7 +350,10 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 precipTableBody.appendChild(row);
             });
             
-            precipTimeElement.textContent = `기준 날짜: ${yyyymmdd.substring(0,4)}-${yyyymmdd.substring(4,6)}-${yyyymmdd.substring(6,8)} (00:00 ~ 24:00)`;
+            if (lastTm) {
+                const formattedTime = lastTm.length >= 8 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)}` : lastTm;
+                precipTimeElement.textContent = `기준 날짜: ${formattedTime}`;
+            }
             precipResultContainer.style.display = 'block'; 
             precipStatus.textContent = '조회가 완료되었습니다.';
         } else {
