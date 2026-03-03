@@ -303,12 +303,12 @@ async function fetchPrecipRanking(type, retryCount = 0) {
 }
 
 async function fetchPrecipYesterdayRanking(retryCount = 0) {
-    if (retryCount === 0) {
-        precipStatus.textContent = '어제부터 강수량 데이터를 불러오는 중...';
-        precipResultContainer.style.display = 'none';
-    }
+    // 1. 상태 메시지 즉시 업데이트 (가장 중요)
+    precipStatus.textContent = '어제부터 강수량 데이터를 불러오는 중...';
+    precipResultContainer.style.display = 'none';
     
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // 브라우저 렌더링을 위해 아주 짧은 지연 추가
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
@@ -322,10 +322,10 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
 
         const precipMap = new Map();
 
-        // 1. 어제 일강수량 호출 (obs=rn_day)
+        // 1. 어제 확정 일강수량 호출 (obs=rn_day 옵션)
         const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
         const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
-        if (!yesterdayResponse.ok) throw new Error('Yesterday Data HTTP ' + yesterdayResponse.status);
+        if (!yesterdayResponse.ok) throw new Error('Yesterday Data Failed');
         const yesterdayBuffer = await yesterdayResponse.arrayBuffer();
         const yesterdayText = new TextDecoder('euc-kr').decode(yesterdayBuffer);
 
@@ -335,19 +335,18 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             const parts = line.split(',');
             if (parts.length >= 6) {
                 const stnId = parts[1].trim();
-                const val = parseFloat(parts[5]);
-                const nameInApi = parts[6] ? parts[6].replace('=', '').trim() : '';
+                const val = parseFloat(parts[5]); // RN_DAY
                 if (!isNaN(val) && val > 0) {
-                    const info = stationData[stnId] || { name: nameInApi || `지점 ${stnId}`, adr: "주소 정보 없음" };
+                    const info = stationData[stnId] || { name: parts[6] ? parts[6].replace('=', '').trim() : `지점 ${stnId}`, adr: "주소 정보 없음" };
                     precipMap.set(stnId, { val: val, name: info.name, adr: info.adr });
                 }
             }
         }
 
-        // 2. 오늘 실시간 누적 강수량 호출
+        // 2. 오늘 실시간 누적 강수량 호출 (disp=1)
         const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
         const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
-        if (!todayResponse.ok) throw new Error('Today Data HTTP ' + todayResponse.status);
+        if (!todayResponse.ok) throw new Error('Today Data Failed');
         const todayBuffer = await todayResponse.arrayBuffer();
         const todayText = new TextDecoder('euc-kr').decode(todayBuffer);
 
@@ -360,7 +359,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             if (parts.length < 14) continue;
             
             const tm = parts[0], stnId = parts[1].trim();
-            const todayVal = parseFloat(parts[13]);
+            const todayVal = parseFloat(parts[13]); // 오늘 누적 (R_DAY)
             if (tm) lastTm = tm;
             
             if (!isNaN(todayVal)) {
@@ -378,6 +377,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             id: id, val: data.val, name: data.name, address: data.adr
         }));
         
+        // 정렬: 강수량 내림차순
         finalStations.sort((a, b) => b.val - a.val);
         const top10 = finalStations.slice(0, 10);
         
@@ -397,12 +397,11 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             precipResultContainer.style.display = 'block'; 
             precipStatus.textContent = '조회가 완료되었습니다.';
         } else {
-            precipStatus.textContent = `해당 기간 내 관측된 강수 데이터가 없습니다.`;
+            precipStatus.textContent = '해당 기간 내 관측된 강수 데이터가 없습니다.';
             precipResultContainer.style.display = 'none';
         }
     } catch (error) {
-        console.error(error);
-        if (retryCount < 3) { await sleep(1000); return fetchPrecipYesterdayRanking(retryCount + 1); }
+        if (retryCount < 3) return fetchPrecipYesterdayRanking(retryCount + 1);
         precipStatus.textContent = '데이터를 가져오는 중 오류가 발생했습니다.';
         precipResultContainer.style.display = 'none';
     }
