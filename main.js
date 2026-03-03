@@ -314,10 +314,13 @@ const fetchPrecipYesterdayButton = document.getElementById('fetch-precip-yesterd
 
 async function fetchPrecipYesterdayRanking(retryCount = 0) {
     if (retryCount === 0) {
-        precipStatus.textContent = `어제부터 강수량 데이터를 불러오는 중...`;
+        precipStatus.textContent = '어제부터 강수량 데이터를 불러오는 중...';
         precipResultContainer.style.display = 'none';
     }
     
+    // 브라우저가 화면을 갱신할 수 있도록 짧은 지연을 줍니다.
+    await new Promise(resolve => setTimeout(resolve, 10));
+
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
@@ -330,6 +333,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
 
         const precipMap = new Map();
 
+        // 1. 어제 데이터 호출 (rn_day: 일강수량)
         const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
         const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
         if (!yesterdayResponse.ok) throw new Error('Yesterday Data HTTP ' + yesterdayResponse.status);
@@ -351,6 +355,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             }
         }
 
+        // 2. 오늘 실시간 데이터 호출 및 합산
         const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
         const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
         if (!todayResponse.ok) throw new Error('Today Data HTTP ' + todayResponse.status);
