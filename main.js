@@ -303,7 +303,7 @@ async function fetchPrecipRanking(type, retryCount = 0) {
 }
 
 async function fetchPrecipYesterdayRanking(retryCount = 0) {
-    precipStatus.textContent = '어제부터 강수량 데이터를 불러오는 중...';
+    precipStatus.textContent = '어제 강수량 데이터를 불러오는 중...';
     precipResultContainer.style.display = 'none';
     
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -318,65 +318,30 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                          String(yesterday.getMonth() + 1).padStart(2, '0') + 
                          String(yesterday.getDate()).padStart(2, '0');
 
-        const precipMap = new Map();
+        // 어제 밤 23:59분 시점의 전국 AWS 데이터 호출 (어제 하루 총 누적 강수량)
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?tm=${yyyymmdd}2359&stn=0&disp=0&authKey=${authKey}`;
+        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
+        if (!response.ok) throw new Error('Yesterday Data Failed');
+        const buffer = await response.arrayBuffer();
+        const text = new TextDecoder('euc-kr').decode(buffer);
 
-        // 1. 어제 확정 일강수량 호출 (전수 조사 API)
-        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
-        const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
-        const yesterdayBuffer = await yesterdayResponse.arrayBuffer();
-        const yesterdayText = new TextDecoder('euc-kr').decode(yesterdayBuffer);
-
-        const yLines = yesterdayText.split('\n');
-        for (const line of yLines) {
+        const stations = [];
+        const lines = text.split('\n');
+        for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '') continue;
             const parts = line.split(',');
-            // 반환된 데이터의 날짜가 정확히 어제인 것만 처리 (성판악 105.5mm 등)
-            if (parts.length >= 6 && parts[0].trim() === yyyymmdd) {
+            if (parts.length >= 14) {
                 const stnId = parts[1].trim();
-                const val = parseFloat(parts[5]);
+                const val = parseFloat(parts[13]); // R_DAY (어제 하루 총 누적)
                 if (!isNaN(val) && val > 0) {
-                    const info = stationData[stnId] || { name: parts[6] ? parts[6].replace('=', '').trim() : `지점 ${stnId}`, adr: "주소 정보 없음" };
-                    precipMap.set(Number(stnId), { val: val, name: info.name, adr: info.adr });
-                }
-            }
-        }
-
-        // 2. 오늘 실시간 누적 강수량 호출
-        const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
-        const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
-        const todayBuffer = await todayResponse.arrayBuffer();
-        const todayText = new TextDecoder('euc-kr').decode(todayBuffer);
-
-        const tLines = todayText.split('\n');
-        let lastTm = "";
-
-        for (const line of tLines) {
-            if (line.startsWith('#') || line.trim() === '') continue;
-            const parts = line.split(',');
-            if (parts.length < 14) continue;
-            
-            const tm = parts[0], stnId = parts[1].trim();
-            const todayVal = parseFloat(parts[13]); // 오늘 누적 (R_DAY)
-            if (tm) lastTm = tm;
-            
-            const stnKey = Number(stnId);
-            if (!isNaN(todayVal)) {
-                if (precipMap.has(stnKey)) {
-                    const current = precipMap.get(stnKey);
-                    current.val += todayVal;
-                } else if (todayVal > 0) {
                     const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
-                    precipMap.set(stnKey, { val: todayVal, name: info.name, adr: info.adr });
+                    stations.push({ id: stnId, val: val, name: info.name, address: info.adr });
                 }
             }
         }
 
-        const finalStations = Array.from(precipMap.entries()).map(([id, data]) => ({
-            id: String(id), val: data.val, name: data.name, address: data.adr
-        }));
-        
-        finalStations.sort((a, b) => b.val - a.val);
-        const top10 = finalStations.slice(0, 10);
+        stations.sort((a, b) => b.val - a.val);
+        const top10 = stations.slice(0, 10);
         
         if (top10.length > 0) {
             precipValueHeader.textContent = '강수량(mm)';
@@ -387,14 +352,11 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 precipTableBody.appendChild(row);
             });
             
-            const startStr = `${yyyymmdd.substring(0,4)}-${yyyymmdd.substring(4,6)}-${yyyymmdd.substring(6,8)} 00:00`;
-            const endStr = lastTm.length >= 12 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}` : lastTm;
-            precipTimeElement.textContent = `기준 기간: ${startStr} ~ ${endStr}`;
-            
+            precipTimeElement.textContent = `기준 기간: ${yyyymmdd.substring(0,4)}-${yyyymmdd.substring(4,6)}-${yyyymmdd.substring(6,8)} (00:00 ~ 24:00)`;
             precipResultContainer.style.display = 'block'; 
             precipStatus.textContent = '조회가 완료되었습니다.';
         } else {
-            precipStatus.textContent = '해당 기간 내 관측된 강수 데이터가 없습니다.';
+            precipStatus.textContent = '어제 관측된 강수 데이터가 없습니다.';
             precipResultContainer.style.display = 'none';
         }
     } catch (error) {
