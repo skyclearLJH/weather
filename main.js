@@ -158,7 +158,10 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
     const timeEl = isHighest ? weatherTimeElement : lowTempTimeElement;
 
     const typeNames = { 'today': '오늘 ' + (isHighest ? '최고' : '최저') + ' 기온', 'current': '현재 ' + (isHighest ? '최고' : '최저') + ' 기온' };
-    if (retryCount === 0) statusEl.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+    if (retryCount === 0) {
+        statusEl.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+        resultContainerEl.style.display = 'none';
+    }
     
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
@@ -224,10 +227,12 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchWeatherRanking(type, mode, retryCount + 1); }
             statusEl.textContent = '유효한 데이터를 찾을 수 없습니다.';
+            resultContainerEl.style.display = 'none';
         }
     } catch (error) {
         if (retryCount < 3) { await sleep(1000); return fetchWeatherRanking(type, mode, retryCount + 1); }
         statusEl.textContent = '오류가 발생했습니다.';
+        resultContainerEl.style.display = 'none';
     }
 }
 
@@ -238,7 +243,10 @@ if (fetchLowCurrentButton) fetchLowCurrentButton.addEventListener('click', () =>
 
 async function fetchPrecipRanking(type, retryCount = 0) {
     const typeNames = { '1h': '1시간 강수량', 'today': '오늘 강수량' };
-    if (retryCount === 0) precipStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+    if (retryCount === 0) {
+        precipStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
+        precipResultContainer.style.display = 'none';
+    }
     
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
@@ -284,15 +292,18 @@ async function fetchPrecipRanking(type, retryCount = 0) {
                 const formattedTime = lastTm.length >= 12 ? `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}` : lastTm;
                 precipTimeElement.textContent = `기준 시간: ${formattedTime}`;
             }
-            precipResultContainer.style.display = 'block'; precipStatus.textContent = '조회가 완료되었습니다.';
+            precipResultContainer.style.display = 'block'; 
+            precipStatus.textContent = '조회가 완료되었습니다.';
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchPrecipRanking(type, retryCount + 1); }
             precipStatus.textContent = `현재 관측된 ${typeNames[type]} 데이터가 없습니다.`;
             precipResultContainer.style.display = 'none';
         }
     } catch (error) {
+        console.error(error);
         if (retryCount < 3) { await sleep(1000); return fetchPrecipRanking(type, retryCount + 1); }
         precipStatus.textContent = '데이터를 가져오는 중 오류가 발생했습니다.';
+        precipResultContainer.style.display = 'none';
     }
 }
 
@@ -302,29 +313,23 @@ if (fetchPrecipTodayButton) fetchPrecipTodayButton.addEventListener('click', () 
 const fetchPrecipYesterdayButton = document.getElementById('fetch-precip-yesterday');
 
 async function fetchPrecipYesterdayRanking(retryCount = 0) {
-    if (retryCount === 0) precipStatus.textContent = `어제부터 강수량 데이터를 불러오는 중...`;
+    if (retryCount === 0) {
+        precipStatus.textContent = `어제부터 강수량 데이터를 불러오는 중...`;
+        precipResultContainer.style.display = 'none';
+    }
     
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
         
-        // 1. 어제 날짜 계산 (YYYYMMDD)
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         const yyyymmdd = yesterday.getFullYear() + 
                          String(yesterday.getMonth() + 1).padStart(2, '0') + 
                          String(yesterday.getDate()).padStart(2, '0');
 
-        // 2. 어제 데이터 호출 (rn_day: 일강수량)
-        const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
-        const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
-        if (!yesterdayResponse.ok) throw new Error('Yesterday Data HTTP ' + yesterdayResponse.status);
-        const yesterdayBuffer = await yesterdayResponse.arrayBuffer();
-        const yesterdayText = new TextDecoder('euc-kr').decode(yesterdayBuffer);
+        const precipMap = new Map();
 
-        const precipMap = new Map(); // stnId -> { val: number, name: string, adr: string }
-
-        // 2. 어제 데이터 호출 (rn_day: 일강수량)
         const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=rn_day&tm=${yyyymmdd}&stn=0&authKey=${authKey}`;
         const yesterdayResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
         if (!yesterdayResponse.ok) throw new Error('Yesterday Data HTTP ' + yesterdayResponse.status);
@@ -346,7 +351,6 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             }
         }
 
-        // 3. 오늘 실시간 데이터 호출 및 합산
         const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
         const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
         if (!todayResponse.ok) throw new Error('Today Data HTTP ' + todayResponse.status);
@@ -362,7 +366,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             if (parts.length < 14) continue;
             
             const tm = parts[0], stnId = parts[1].trim();
-            const todayVal = parseFloat(parts[13]); // R_DAY (오늘 누적)
+            const todayVal = parseFloat(parts[13]);
             if (tm) lastTm = tm;
             
             if (!isNaN(todayVal)) {
@@ -377,10 +381,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         }
 
         const finalStations = Array.from(precipMap.entries()).map(([id, data]) => ({
-            id: id,
-            val: data.val,
-            name: data.name,
-            address: data.adr
+            id: id, val: data.val, name: data.name, address: data.adr
         }));
         
         finalStations.sort((a, b) => b.val - a.val);
@@ -409,6 +410,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         console.error(error);
         if (retryCount < 3) { await sleep(1000); return fetchPrecipYesterdayRanking(retryCount + 1); }
         precipStatus.textContent = '데이터를 가져오는 중 오류가 발생했습니다.';
+        precipResultContainer.style.display = 'none';
     }
 }
 
@@ -416,7 +418,10 @@ if (fetchPrecipYesterdayButton) fetchPrecipYesterdayButton.addEventListener('cli
 
 async function fetchSnowRanking(type, retryCount = 0) {
     const typeNames = { 'tot': '적설량(cm)', 'day': '신적설(cm)' };
-    if (retryCount === 0) snowStatus.textContent = `${typeNames[type].replace('(cm)', '')} 데이터를 불러오는 중...`;
+    if (retryCount === 0) {
+        snowStatus.textContent = `${typeNames[type].replace('(cm)', '')} 데이터를 불러오는 중...`;
+        snowResultContainer.style.display = 'none';
+    }
     
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
@@ -463,7 +468,8 @@ async function fetchSnowRanking(type, retryCount = 0) {
                 const formattedTime = `${lastTm.substring(0, 4)}-${lastTm.substring(4, 6)}-${lastTm.substring(6, 8)} ${lastTm.substring(8, 10)}:${lastTm.substring(10, 12)}`;
                 snowTimeElement.textContent = `기준 시간: ${formattedTime}`;
             }
-            snowResultContainer.style.display = 'block'; snowStatus.textContent = '조회가 완료되었습니다.';
+            snowResultContainer.style.display = 'block'; 
+            snowStatus.textContent = '조회가 완료되었습니다.';
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchSnowRanking(type, retryCount + 1); }
             snowStatus.textContent = `현재 관측된 ${typeNames[type].replace('(cm)', '')} 데이터가 없습니다.`;
@@ -472,6 +478,7 @@ async function fetchSnowRanking(type, retryCount = 0) {
     } catch (error) {
         if (retryCount < 3) { await sleep(1000); return fetchSnowRanking(type, retryCount + 1); }
         snowStatus.textContent = '데이터를 가져오는 중 오류가 발생했습니다.';
+        snowResultContainer.style.display = 'none';
     }
 }
 
