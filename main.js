@@ -1,6 +1,31 @@
 // Global variables for UI
 const themeToggle = document.getElementById('theme-toggle');
+const bureauSelect = document.getElementById('bureau-select');
 const body = document.body;
+
+const BUREAU_MAPPING = {
+    '전국': [],
+    '본사': ['서울', '경기', '인천'],
+    '대전총국': ['대전', '세종', '충남'],
+    '청주총국': ['충북'],
+    '전주총국': ['전북'],
+    '광주총국': ['광주', '전남'],
+    '제주총국': ['제주'],
+    '춘천총국': ['강원'],
+    '대구총국': ['대구', '경북'],
+    '부산총국': ['부산', '울산'],
+    '창원총국': ['경남']
+};
+
+function getFilteredStations(stations) {
+    const selectedBureau = bureauSelect ? bureauSelect.value : '전국';
+    if (selectedBureau === '전국') return stations;
+    
+    const targetRegions = BUREAU_MAPPING[selectedBureau] || [];
+    return stations.filter(stn => {
+        return targetRegions.some(region => stn.address && stn.address.includes(region));
+    });
+}
 
 // Theme toggle logic
 const currentTheme = localStorage.getItem('theme');
@@ -167,7 +192,7 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
-        const stations = [];
+        let stations = [];
         let lastTm = "";
 
         const targetUrl = type === 'current' ? 
@@ -205,6 +230,10 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
                 }
             }
         }
+
+        // Apply bureau filtering
+        stations = getFilteredStations(stations);
+
         if (lastTm && lastTm.length === 8) {
             const now = new Date(); lastTm += String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
         }
@@ -258,7 +287,7 @@ async function fetchPrecipRanking(type, retryCount = 0) {
         }
 
         const lines = text.split('\n');
-        const stations = [];
+        let stations = [];
         let lastTm = "";
 
         for (const line of lines) {
@@ -272,6 +301,9 @@ async function fetchPrecipRanking(type, retryCount = 0) {
                 if (tm) lastTm = tm;
             }
         }
+
+        // Apply bureau filtering
+        stations = getFilteredStations(stations);
         
         stations.sort((a, b) => b.val - a.val);
         const top10 = stations.slice(0, 10);
@@ -292,7 +324,7 @@ async function fetchPrecipRanking(type, retryCount = 0) {
             precipStatus.textContent = '조회가 완료되었습니다.';
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchPrecipRanking(type, retryCount + 1); }
-            precipStatus.textContent = `현재 관측된 ${typeNames[type]} 데이터가 없습니다.`;
+            precipStatus.textContent = `현재 지역에서 관측된 ${typeNames[type]} 데이터가 없습니다.`;
             precipResultContainer.style.display = 'none';
         }
     } catch (error) {
@@ -370,7 +402,11 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             }
         }
 
-        const stations = Object.values(combinedData).filter(item => item.val > 0);
+        let stations = Object.values(combinedData).filter(item => item.val > 0);
+        
+        // Apply bureau filtering
+        stations = getFilteredStations(stations);
+
         stations.sort((a, b) => b.val - a.val);
         const top10 = stations.slice(0, 10);
         
@@ -388,7 +424,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             precipResultContainer.style.display = 'block'; 
             precipStatus.textContent = '합산 조회가 완료되었습니다.';
         } else {
-            precipStatus.textContent = '어제부터 현재까지 관측된 강수 데이터가 없습니다.';
+            precipStatus.textContent = '현재 지역에서 어제부터 현재까지 관측된 강수 데이터가 없습니다.';
             precipResultContainer.style.display = 'none';
         }
     } catch (error) {
@@ -419,7 +455,7 @@ async function fetchSnowRanking(type, retryCount = 0) {
         }
 
         const lines = text.split('\n');
-        const stations = [];
+        let stations = [];
         let lastTm = "";
 
         for (const line of lines) {
@@ -434,6 +470,9 @@ async function fetchSnowRanking(type, retryCount = 0) {
                 if (tm && tm.length === 12) lastTm = tm;
             }
         }
+
+        // Apply bureau filtering
+        stations = getFilteredStations(stations);
         
         stations.sort((a, b) => b.val - a.val);
         const top10 = stations.slice(0, 10);
@@ -454,7 +493,7 @@ async function fetchSnowRanking(type, retryCount = 0) {
             snowStatus.textContent = '조회가 완료되었습니다.';
         } else {
             if (retryCount < 3) { await sleep(1000); return fetchSnowRanking(type, retryCount + 1); }
-            snowStatus.textContent = `현재 관측된 ${typeNames[type].replace('(cm)', '')} 데이터가 없습니다.`;
+            snowStatus.textContent = `현재 지역에서 관측된 ${typeNames[type].replace('(cm)', '')} 데이터가 없습니다.`;
             snowResultContainer.style.display = 'none';
         }
     } catch (error) {
