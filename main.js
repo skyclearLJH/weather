@@ -466,7 +466,8 @@ async function fetchSnowRanking(type, retryCount = 0) {
             const parts = line.split(',');
             if (parts.length >= 7) {
                 const tm = parts[0].trim(), stnId = parts[1].trim(), stnKoInData = parts[2].trim(), val = parseFloat(parts[6].trim());
-                if (!isNaN(val) && val >= 0 && val < 900) {
+                // 적설량이 0보다 큰 경우에만 리스트에 추가
+                if (!isNaN(val) && val > 0 && val < 900) {
                     const info = stationData[stnId] || { name: stnKoInData || `지점 ${stnId}`, adr: "주소 정보 없음" };
                     stations.push({ id: stnId, val, name: info.name, address: info.adr });
                 }
