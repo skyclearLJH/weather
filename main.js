@@ -23,7 +23,10 @@ function getFilteredStations(stations) {
     
     const targetRegions = BUREAU_MAPPING[selectedBureau] || [];
     return stations.filter(stn => {
-        return targetRegions.some(region => stn.address && stn.address.includes(region));
+        if (!stn.address) return false;
+        // 주소의 첫 번째 단어가 지역명으로 시작하는지 확인 (예: '대구광역시'는 '대구'로 시작함)
+        const firstWord = stn.address.trim().split(/\s+/)[0];
+        return targetRegions.some(region => firstWord.startsWith(region));
     });
 }
 
