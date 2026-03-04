@@ -309,7 +309,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
     await new Promise(resolve => setTimeout(resolve, 50));
 
     try {
-        const authKey = 'oTPhNxYGQRuz4TcWBnEbjQ'; 
+        const authKey = 'KkmPfomzTJyJj36Js9ycNQ'; 
         const stationData = await getStationMapping(authKey);
         
         // 1. 어제 날짜 계산 (YYYYMMDD)
