@@ -199,7 +199,7 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
         let lastTm = "";
 
         const targetUrl = type === 'current' ? 
-            `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}` :
+            `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&authKey=${authKey}` :
             `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=${isHighest ? 'ta_max' : 'ta_min'}&stn=0&authKey=${authKey}`;
         
         const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
@@ -215,7 +215,7 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
         const lines = text.split('\n');
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '') continue;
-            const parts = line.split(',');
+            const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
             if (type === 'current' && parts.length >= 9) {
                 const tm = parts[0], stnId = parts[1].trim(), val = parseFloat(parts[8]);
                 if (!isNaN(val) && val > -50 && val < 60) {
@@ -279,7 +279,7 @@ async function fetchPrecipRanking(type, retryCount = 0) {
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
-        const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+        const targetUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&authKey=${authKey}`;
         const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const buffer = await response.arrayBuffer();
@@ -295,7 +295,7 @@ async function fetchPrecipRanking(type, retryCount = 0) {
 
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '') continue;
-            const parts = line.split(',');
+            const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
             if (parts.length < 14) continue;
             const tm = parts[0], stnId = parts[1].trim(), val = parseFloat(parts[13]); // R_DAY
             if (!isNaN(val) && val > 0 && val < 1000) {
@@ -378,7 +378,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
         }
 
         // 3. 오늘 실시간 누적 강수량 API 호출
-        const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&disp=1&authKey=${authKey}`;
+        const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&authKey=${authKey}`;
         const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
         let lastTm = "";
         if (todayResponse.ok) {
@@ -387,7 +387,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
             const lines = text.split('\n');
             for (const line of lines) {
                 if (line.startsWith('#') || line.trim() === '') continue;
-                const parts = line.split(',');
+                const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
                 if (parts.length >= 14) {
                     const tm = parts[0].trim();
                     const stnId = parts[1].trim();
@@ -463,7 +463,7 @@ async function fetchSnowRanking(type, retryCount = 0) {
 
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
-            const parts = line.split(',');
+            const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
             if (parts.length >= 7) {
                 const tm = parts[0].trim(), stnId = parts[1].trim(), stnKoInData = parts[2].trim(), val = parseFloat(parts[6].trim());
                 // 적설량이 0보다 큰 경우에만 리스트에 추가
