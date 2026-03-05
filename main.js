@@ -9,9 +9,9 @@ const BUREAU_MAPPING = {
     '대전총국': ['대전', '세종', '충남'],
     '청주총국': ['충북'],
     '전주총국': ['전북'],
-    '광주총국': ['광주', '전남'],
+    '광주총국': ['전남', '광주'],
     '제주총국': ['제주'],
-    '춘천총국': ['강원'],
+    '강원총국': ['강원', '춘천', '원주', '강릉'],
     '대구총국': ['대구', '경북'],
     '부산총국': ['부산', '울산'],
     '창원총국': ['경남']
@@ -24,8 +24,10 @@ function getFilteredStations(stations) {
     const targetRegions = BUREAU_MAPPING[selectedBureau] || [];
     return stations.filter(stn => {
         if (!stn.address) return false;
+        // Strip prefixes like (산지), (상지), (상)
+        const cleanAddress = stn.address.replace(/^\((산지|상지|상)\)\s*/, '').trim();
         // 주소의 첫 번째 단어가 지역명으로 시작하는지 확인 (예: '대구광역시'는 '대구'로 시작함)
-        const firstWord = stn.address.trim().split(/\s+/)[0];
+        const firstWord = cleanAddress.split(/\s+/)[0];
         return targetRegions.some(region => firstWord.startsWith(region));
     });
 }
@@ -130,7 +132,7 @@ async function getStationMapping(authKey) {
                         let adr = "";
                         if (adrIndex !== -1 && parts.length > adrIndex) {
                             const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
-                            const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
+                            const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주|춘천|원주|강릉).*/);
                             adr = adrMatch ? adrMatch[0].trim() : rawAdr;
                         }
                         if (id && name && isNaN(name) && name !== '----') {
@@ -158,7 +160,7 @@ async function getStationMapping(authKey) {
                             const name = parts[8];
                             if (id && name && !mapping[id]) {
                                 const rawAdr = parts.slice(13).join(' ').replace(/^---- /, '').trim();
-                                const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주).*/);
+                                const adrMatch = rawAdr.match(/(\(산지\)|\(상지\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충북|충남|전북|전남|경북|경남|제주|춘천|원주|강릉).*/);
                                 mapping[id] = { name, adr: adrMatch ? adrMatch[0].trim() : rawAdr };
                             }
                         }
