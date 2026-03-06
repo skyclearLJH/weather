@@ -6,15 +6,15 @@ const body = document.body;
 const BUREAU_MAPPING = {
     '전국': [],
     '본사': ['서울', '경기', '인천'],
-    '대전총국': ['대전', '세종', '충남'],
-    '청주총국': ['충북'],
-    '전주총국': ['전북'],
-    '광주총국': ['전남', '광주'],
+    '대전총국': ['대전', '세종', '충남', '충청남'],
+    '청주총국': ['충북', '충청북'],
+    '전주총국': ['전북', '전라북'],
+    '광주총국': ['전남', '전라남', '광주'],
     '제주총국': ['제주'],
     '춘천총국': ['강원', '춘천', '원주', '강릉'],
-    '대구총국': ['대구', '경북'],
+    '대구총국': ['대구', '경북', '경상북'],
     '부산총국': ['부산', '울산'],
-    '창원총국': ['경남']
+    '창원총국': ['경남', '경상남']
 };
 
 function getFilteredStations(stations) {
@@ -25,10 +25,13 @@ function getFilteredStations(stations) {
     return stations.filter(stn => {
         if (!stn.address) return false;
         // Strip prefixes like (산지), (상지), (상)
-        const cleanAddress = stn.address.replace(/^\((산지|상지|상)\)\s*/, '').trim();
-        // 주소의 첫 번째 단어가 지역명으로 시작하는지 확인 (예: '대구광역시'는 '대구'로 시작함)
+        const cleanAddress = stn.address.replace(/^\((산지|상지|상|[\u4e00-\u9fa5]+)\)\s*/, '').trim();
+        // 주소의 첫 번째 단어 추출
         const firstWord = cleanAddress.split(/\s+/)[0];
-        return targetRegions.some(region => firstWord.startsWith(region));
+        
+        return targetRegions.some(region => 
+            firstWord.startsWith(region) || region.startsWith(firstWord.substring(0, 2))
+        );
     });
 }
 
