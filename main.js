@@ -5,16 +5,16 @@ const body = document.body;
 
 const BUREAU_MAPPING = {
     '전국': [],
-    '본사': ['서울', '경기', '인천'],
-    '대전총국': ['대전', '세종', '충남', '충청남'],
-    '청주총국': ['충북', '충청북'],
-    '전주총국': ['전북', '전라북'],
-    '광주총국': ['전남', '전라남', '광주'],
-    '제주총국': ['제주'],
-    '춘천총국': ['강원', '춘천', '원주', '강릉'],
-    '대구총국': ['대구', '경북', '경상북'],
-    '부산총국': ['부산', '울산'],
-    '창원총국': ['경남', '경상남']
+    '본사': ['서울', '경기', '인천', '서울특별시', '경기도', '인천광역시'],
+    '대전총국': ['대전', '세종', '충남', '충청남도', '대전광역시', '세종특별'],
+    '청주총국': ['충북', '충청북도'],
+    '전주총국': ['전북', '전라북도', '전북특별'],
+    '광주총국': ['전남', '전라남도', '광주광역시', '광주'],
+    '제주총국': ['제주', '제주특별'],
+    '춘천총국': ['강원', '춘천', '원주', '강릉', '강원특별'],
+    '대구총국': ['대구', '경북', '경상북도', '대구광역시'],
+    '부산총국': ['부산', '울산', '부산광역시', '울산광역시'],
+    '창원총국': ['경남', '경상남도']
 };
 
 function getFilteredStations(stations) {
@@ -26,12 +26,11 @@ function getFilteredStations(stations) {
         if (!stn.address) return false;
         // Strip prefixes like (산지), (상지), (상), (좌)
         const cleanAddress = stn.address.replace(/^\([\u4e00-\u9fa5]+\)\s*/, '').trim();
-        // 주소의 첫 번째 단어 추출
+        // 주소의 첫 번째 단어 추출 (예: '충청남도', '대전광역시')
         const firstWord = cleanAddress.split(/\s+/)[0];
         
-        return targetRegions.some(region => 
-            firstWord.startsWith(region) || region.startsWith(firstWord.substring(0, 2))
-        );
+        // 타겟 지역명 중 하나로 시작하는지 엄격히 확인
+        return targetRegions.some(region => firstWord.startsWith(region));
     });
 }
 
@@ -135,7 +134,7 @@ async function getStationMapping(authKey) {
                         let adr = "";
                         if (adrIndex !== -1 && parts.length > adrIndex) {
                             const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
-                            const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충청|전라|경상|제주|춘천|원주|강릉).*/);
+                            const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충청남|충청북|충남|충북|전라남|전라북|전남|전북|경상남|경상북|경남|경북|제주|춘천|원주|강릉).*/);
                             adr = adrMatch ? adrMatch[0].trim() : rawAdr;
                         }
                         if (id && name && isNaN(name) && name !== '----') {
@@ -163,7 +162,7 @@ async function getStationMapping(authKey) {
                             const name = parts[8];
                             if (id && name && !mapping[id]) {
                                 const rawAdr = parts.slice(13).join(' ').replace(/^---- /, '').trim();
-                                const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충청|전라|경상|제주|춘천|원주|강릉).*/);
+                                const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충청남|충청북|충남|충북|전라남|전라북|전남|전북|경상남|경상북|경남|경북|제주|춘천|원주|강릉).*/);
                                 mapping[id] = { name, adr: adrMatch ? adrMatch[0].trim() : rawAdr };
                             }
                         }
@@ -233,7 +232,6 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
                 const tm = parts[0].trim(), stnId = parts[1].trim(), val = parseFloat(parts[5]);
                 const nameInApi = parts[6] ? parts[6].replace('=', '').trim() : '';
                 if (!isNaN(val) && val > -50 && val < 60) {
-                    // stationData 정보를 우선적으로 활용하여 주소 유실 방지
                     const info = stationData[stnId] || { name: nameInApi || `지점 ${stnId}`, adr: "주소 정보 없음" };
                     stations.push({ id: stnId, val, name: info.name, address: info.adr });
                     if (tm) lastTm = tm;
