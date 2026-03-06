@@ -299,7 +299,9 @@ async function fetchPrecipRanking(type, retryCount = 0) {
             if (line.startsWith('#') || line.trim() === '') continue;
             const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
             if (parts.length < 14) continue;
-            const tm = parts[0], stnId = parts[1].trim(), val = parseFloat(parts[13]); // R_DAY
+            const tm = parts[0], stnId = parts[1].trim();
+            // type에 따라 1시간 강수량(index 11) 또는 오늘 강수량(index 13) 선택
+            const val = parseFloat(parts[type === '1h' ? 11 : 13]);
             if (!isNaN(val) && val > 0 && val < 1000) {
                 const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
                 stations.push({ id: stnId, val, name: info.name, address: info.adr });
