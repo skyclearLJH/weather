@@ -163,7 +163,7 @@ async function fetchPrecipRanking(type) {
         stations = getFilteredStations(stations).sort((a,b) => b.val-a.val).slice(0,10);
         precipTableBody.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:#007bff;font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address}</td></tr>`).join('');
         precipTimeElement.textContent = `기준 시간: ${lastTm}`;
-        precipResultContainer.style.display = 'block'; precipStatus.textContent = '조회 완료';
+        precipResultContainer.style.display = 'block'; precipStatus.textContent = '조회가 완료되었습니다.';
     } catch(e) { precipStatus.textContent = '오류 발생'; }
 }
 
@@ -191,11 +191,20 @@ async function fetchSnowRanking(type) {
         stations = getFilteredStations(stations).sort((a,b) => b.val-a.val).slice(0,10);
         snowTableBody.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:var(--accent-color);font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address}</td></tr>`).join('');
         snowTimeElement.textContent = `기준 시간: ${lastTm}`;
-        snowResultContainer.style.display = 'block'; snowStatus.textContent = '조회 완료';
+        snowResultContainer.style.display = 'block'; snowStatus.textContent = '조회가 완료되었습니다.';
     } catch(e) { snowStatus.textContent = '오류 발생'; }
 }
 
-// --- Weather Warnings Logic (CSV Parsing) ---
+// --- Weather Warnings Logic (Improved Grouping & Sorting) ---
+const WIDE_MAP = {
+    '강원도': '강원', '경기도': '경기', '경상남도': '경남', '경상북도': '경북', 
+    '전라남도': '전남', '전라북도': '전북', '충청남도': '충남', '충청북도': '충북',
+    '제주도': '제주도', '제주도전해상': '제주도', '제주전해상': '제주도',
+    '서울특별시': '서울', '인천광역시': '인천', '대전광역시': '대전', 
+    '광주광역시': '광주', '대구광역시': '대구', '울산광역시': '울산', '부산광역시': '부산',
+    '세종특별자치시': '세종'
+};
+
 async function fetchWeatherWarnings() {
     if (!warningList) return;
     warningStatus.textContent = '기상특보 데이터를 분석 중...';
@@ -203,18 +212,19 @@ async function fetchWeatherWarnings() {
     const selectedBureau = bureauSelect ? bureauSelect.value : '전국';
     const targetRegions = BUREAU_MAPPING[selectedBureau] || [];
 
-    const timeMap = { '59': '새벽', '58': '새벽', '57': '새벽', '00': '새벽', '29': '새벽', '59': '새벽', '11': '오전', '58': '오전', '14': '오후', '17': '오후', '20': '저녁', '23': '밤' };
     const getTimeName = (tm) => {
         if (!tm || tm.length < 12) return "";
-        const hh = tm.substring(8, 10);
+        const hh = parseInt(tm.substring(8, 10));
         const mm = tm.substring(10, 12);
-        let name = timeMap[mm] || timeMap[hh] || "";
-        // 대략적인 시간 구분
-        if (!name) {
-            const h = parseInt(hh);
-            if (h < 6) name = "새벽"; else if (h < 12) name = "오전"; else if (h < 18) name = "오후"; else name = "밤";
+        let name = "";
+        if (mm === '58' || mm === '59') {
+            if (hh < 6) name = "새벽"; else if (hh < 12) name = "오전"; else if (hh < 18) name = "오후"; else name = "밤";
+        } else {
+            if (hh < 6) name = "새벽"; else if (hh < 12) name = "오전"; else if (hh < 18) name = "오후"; else name = "밤";
         }
-        const day = (tm.substring(6,8) !== new Date().getDate().toString().padStart(2,'0')) ? "내일" : "오늘";
+        const today = new Date();
+        const tmDay = parseInt(tm.substring(6, 8));
+        const day = (tmDay !== today.getDate()) ? "내일" : "오늘";
         return `(${day} ${name})`;
     };
 
@@ -229,7 +239,7 @@ async function fetchWeatherWarnings() {
         const [fData, pData] = await Promise.all([fetchData('f'), fetchData('p')]);
         const allLines = [...fData.split('\n'), ...pData.split('\n')];
         
-        let warnings = {}; // { "대설 주의보" : [지역1, 지역2...] }
+        let warnings = {}; // { title: { wideRegion: Set(subRegions) } }
         let lastTm = "";
 
         allLines.forEach(line => {
@@ -239,41 +249,60 @@ async function fetchWeatherWarnings() {
             const p = line.split(',').map(s => s.trim());
             if (p.length < 9) return;
 
-            const upRegion = p[1]; // 상위 구역 (대구광역시, 강원도 등)
-            const region = p[3];    // 상세 구역 (창원시, 강원북부산지 등)
-            const type = p[6];      // 특보 종류 (건조, 대설 등)
-            const level = p[7];     // 수준 (주의, 경보, 예비)
-            const tmEf = p[5];      // 발효 시각
+            let upRegionRaw = p[1]; 
+            let regionRaw = p[3];    
+            const type = p[6];      
+            const level = p[7];     
+            const tmEf = p[5];      
 
-            // 풍랑 특보 필터링 (전국일 때만)
             if (type.includes('풍랑') && selectedBureau !== '전국') return;
-
-            // 총국 필터링
             if (selectedBureau !== '전국') {
-                const isMatch = targetRegions.some(r => upRegion.includes(region) || upRegion.includes(r) || region.includes(r));
+                const isMatch = targetRegions.some(r => upRegionRaw.includes(r) || regionRaw.includes(r));
                 if (!isMatch) return;
             }
 
             let title = `${type} ${level}${level === '예비' ? '특보' : '보'}`;
             if (level === '예비') title += getTimeName(tmEf);
 
-            if (!warnings[title]) warnings[title] = [];
-            
-            // 지역명 가공 (상위구역과 상세구역이 같으면 상위구역만)
-            let regName = (upRegion === region || region.includes(upRegion)) ? upRegion : `${upRegion}(${region})`;
-            // 시/도 단위 중복 제거를 위한 간소화
-            regName = regName.replace('광역시', '').replace('특별자치시', '').replace('특별자치도', '').replace('도', '');
-            
-            warnings[title].push(regName);
+            const wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|도|특별자치시|특별자치도/g, '');
+            let subName = regionRaw.replace(upRegionRaw, '').replace(/시$|군$|구$/g, '').trim();
+            if (!subName || subName === upRegionRaw) subName = ""; 
+
+            if (!warnings[title]) warnings[title] = {};
+            if (!warnings[title][wideName]) warnings[title][wideName] = new Set();
+            if (subName) warnings[title][wideName].add(subName);
+            else warnings[title][wideName].add("__WHOLE__");
         });
 
-        const results = Object.keys(warnings).map(title => {
-            const regions = [...new Set(warnings[title])].join(', ');
-            return `○ ${title} : ${regions}`;
+        // Sorting Priority
+        const getPriority = (t) => {
+            if (t.includes('경보')) return 1;
+            if (t.includes('주의보')) return 2;
+            return 3; // 예비특보
+        };
+
+        const sortedTitles = Object.keys(warnings).sort((a, b) => {
+            const pa = getPriority(a), pb = getPriority(b);
+            if (pa !== pb) return pa - pb;
+            return a.localeCompare(b);
+        });
+
+        const results = sortedTitles.map(title => {
+            const wideRegions = warnings[title];
+            const regionTexts = Object.keys(wideRegions).map(wide => {
+                const subs = Array.from(wideRegions[wide]);
+                if (subs.includes("__WHOLE__") && subs.length === 1) return wide;
+                
+                // Remove whole area marker and join others
+                const cleanSubs = subs.filter(s => s !== "__WHOLE__").join('·');
+                return cleanSubs ? `${wide}(${cleanSubs})` : wide;
+            }).join(', ');
+            
+            return `○ ${title} : ${regionTexts}`;
         });
 
         if (results.length > 0) {
-            warningList.innerHTML = results.map(r => `<div style="margin-bottom:10px;">${r}</div>`).join('');
+            warningList.innerHTML = results.map(r => `<div style="margin-bottom:10px; font-weight: 500;">${r}</div>`).join('');
             warningStatus.textContent = '조회 완료';
         } else {
             warningList.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">현재 발효 중인 특보가 없습니다.</div>';
@@ -281,7 +310,10 @@ async function fetchWeatherWarnings() {
         }
         if (lastTm) warningTime.textContent = `기준 시간: ${formatTime(lastTm)}`;
 
-    } catch(e) { warningStatus.textContent = '오류 발생'; }
+    } catch(e) { 
+        console.error(e);
+        warningStatus.textContent = '오류 발생'; 
+    }
 }
 
 // Init
