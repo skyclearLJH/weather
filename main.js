@@ -24,12 +24,8 @@ function getFilteredStations(stations) {
     const targetRegions = BUREAU_MAPPING[selectedBureau] || [];
     return stations.filter(stn => {
         if (!stn.address) return false;
-        // Strip prefixes like (산지), (상지), (상), (좌)
         const cleanAddress = stn.address.replace(/^\([\u4e00-\u9fa5]+\)\s*/, '').trim();
-        // 주소의 첫 번째 단어 추출 (예: '충청남도', '대전광역시')
         const firstWord = cleanAddress.split(/\s+/)[0];
-        
-        // 타겟 지역명 중 하나로 시작하는지 엄격히 확인
         return targetRegions.some(region => firstWord.startsWith(region));
     });
 }
@@ -53,7 +49,7 @@ themeToggle.addEventListener('click', () => {
     localStorage.setItem('theme', theme);
 });
 
-// Weather elements (Highest)
+// Weather elements
 const fetchWeatherTodayButton = document.getElementById('fetch-weather-today');
 const fetchWeatherCurrentButton = document.getElementById('fetch-weather-current');
 const weatherResultContainer = document.getElementById('weather-result-container');
@@ -62,7 +58,6 @@ const weatherValueHeader = document.getElementById('weather-value-header');
 const weatherTimeElement = document.getElementById('weather-time');
 const weatherStatus = document.getElementById('weather-status');
 
-// Weather elements (Lowest)
 const fetchLowTodayButton = document.getElementById('fetch-low-today');
 const fetchLowCurrentButton = document.getElementById('fetch-low-current');
 const lowTempResultContainer = document.getElementById('low-temp-result-container');
@@ -71,7 +66,6 @@ const lowTempValueHeader = document.getElementById('low-temp-value-header');
 const lowTempTimeElement = document.getElementById('low-temp-time');
 const lowTempStatus = document.getElementById('low-temp-status');
 
-// Precipitation elements
 const fetchPrecip1hButton = document.getElementById('fetch-precip-1h');
 const fetchPrecipTodayButton = document.getElementById('fetch-precip-today');
 const fetchPrecipYesterdayButton = document.getElementById('fetch-precip-yesterday');
@@ -81,7 +75,6 @@ const precipValueHeader = document.getElementById('precip-value-header');
 const precipTimeElement = document.getElementById('precip-time');
 const precipStatus = document.getElementById('precip-status');
 
-// Snowfall elements
 const fetchSnowTotButton = document.getElementById('fetch-snow-tot');
 const fetchSnowDayButton = document.getElementById('fetch-snow-day');
 const snowResultContainer = document.getElementById('snow-result-container');
@@ -91,30 +84,22 @@ const snowTimeElement = document.getElementById('snow-time');
 const snowStatus = document.getElementById('snow-status');
 
 let cachedStationMapping = null;
-
-// New faster CORS Proxy URL
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
 
 async function getStationMapping(authKey) {
     if (cachedStationMapping && Object.keys(cachedStationMapping).length > 500) return cachedStationMapping;
-    
     try {
         const mapping = {};
         const decoder = new TextDecoder('euc-kr');
-
         const parseLines = (text, targetMapping) => {
             const lines = text.split('\n');
-            let stnKoIndex = -1;
-            let adrIndex = -1;
-            
-            // 1. 헤더에서 인덱스 찾기
+            let stnKoIndex = -1, adrIndex = -1;
             for (const line of lines) {
                 if (line.includes('STN_KO')) {
                     const headerParts = line.trim().split(/\s+/);
                     stnKoIndex = headerParts.indexOf('STN_KO');
                     adrIndex = headerParts.indexOf('LAW_ADDR');
                     if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
-                    // 데이터 라인에는 '#'이 없으므로 인덱스 조정 (헤더가 '#'으로 시작하는 경우)
                     if (headerParts[0] === '#' || line.startsWith('#')) {
                         if (stnKoIndex !== -1) stnKoIndex -= 1;
                         if (adrIndex !== -1) adrIndex -= 1;
@@ -122,12 +107,8 @@ async function getStationMapping(authKey) {
                     break;
                 }
             }
-
-            // 인덱스 기본값 설정 (헤더를 못 찾은 경우 대비)
             if (stnKoIndex === -1) stnKoIndex = 10;
             if (adrIndex === -1) adrIndex = 15;
-
-            // 2. 데이터 파싱
             for (const line of lines) {
                 if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
                 const parts = line.trim().split(/\s+/);
@@ -135,32 +116,24 @@ async function getStationMapping(authKey) {
                     const id = parts[0];
                     let name = (parts[stnKoIndex] || parts[10] || "").replace(/=/g, '').trim();
                     let adr = "";
-                    
                     if (adrIndex !== -1 && parts.length > adrIndex) {
                         const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
                         const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충남|충북|전남|전북|경남|경북|제주|춘천|원주|강릉).*/);
                         adr = adrMatch ? adrMatch[0].trim() : rawAdr;
                     }
-
-                    // 이름이 유효한지 확인 (숫자만 있거나 '----'인 경우 제외)
                     if (id && name && isNaN(name) && name !== '----' && !targetMapping[id]) {
                         targetMapping[id] = { name, adr: adr || "주소 정보 없음" };
                     }
                 }
             }
         };
-
-        // 1. 로컬 stations.txt 읽기
         try {
             const localResponse = await fetch('stations.txt?_=' + Date.now());
             if (localResponse.ok) {
                 const buffer = await localResponse.arrayBuffer();
-                const text = decoder.decode(buffer);
-                parseLines(text, mapping);
+                parseLines(decoder.decode(buffer), mapping);
             }
-        } catch (e) { console.error('Local stations.txt load failed:', e); }
-
-        // 2. 추가 지점 정보 API 보충
+        } catch (e) {}
         if (authKey) {
             const fetchInf = async (type) => {
                 try {
@@ -168,21 +141,15 @@ async function getStationMapping(authKey) {
                     const res = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
                     if (res.ok) {
                         const buffer = await res.arrayBuffer();
-                        const text = decoder.decode(buffer);
-                        parseLines(text, mapping);
+                        parseLines(decoder.decode(buffer), mapping);
                     }
-                } catch (e) { console.error(`API fetchInf ${type} failed:`, e); }
+                } catch (e) {}
             };
-            // 병렬로 데이터 수집
             await Promise.all([fetchInf('SFC'), fetchInf('AWS')]);
         }
-
         if (Object.keys(mapping).length > 0) cachedStationMapping = mapping;
         return mapping;
-    } catch (e) {
-        console.error('Final mapping merge failed:', e);
-        return cachedStationMapping || {};
-    }
+    } catch (e) { return cachedStationMapping || {}; }
 }
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -194,38 +161,28 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
     const tableBodyEl = isHighest ? weatherTableBody : lowTempTableBody;
     const valueHeaderEl = isHighest ? weatherValueHeader : lowTempValueHeader;
     const timeEl = isHighest ? weatherTimeElement : lowTempTimeElement;
-
     const typeNames = { 'today': '오늘 ' + (isHighest ? '최고' : '최저') + ' 기온', 'current': '현재 ' + (isHighest ? '최고' : '최저') + ' 기온' };
     if (retryCount === 0) {
         statusEl.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
         resultContainerEl.style.display = 'none';
     }
-    
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
         let stations = [];
         let lastTm = "";
-
         const targetUrl = type === 'current' ? 
             `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&authKey=${authKey}` :
             `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?obs=${isHighest ? 'ta_max' : 'ta_min'}&stn=0&authKey=${authKey}`;
-        
         const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl) + `&_=${Date.now()}`);
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const buffer = await response.arrayBuffer();
         const text = new TextDecoder('euc-kr').decode(buffer);
-        
-        if (text.length < 500 && retryCount < 3) {
-            await sleep(1000);
-            return fetchWeatherRanking(type, mode, retryCount + 1);
-        }
-
+        if (text.length < 500 && retryCount < 3) { await sleep(1000); return fetchWeatherRanking(type, mode, retryCount + 1); }
         const lines = text.split('\n');
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '') continue;
             const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
-            
             if (type === 'current' && parts.length >= 9) {
                 const tm = parts[0], stnId = parts[1].trim(), val = parseFloat(parts[8]);
                 if (!isNaN(val) && val > -50 && val < 60) {
@@ -243,17 +200,12 @@ async function fetchWeatherRanking(type, mode = 'highest', retryCount = 0) {
                 }
             }
         }
-
-        // Apply bureau filtering
         stations = getFilteredStations(stations);
-
         if (lastTm && lastTm.length === 8) {
             const now = new Date(); lastTm += String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
         }
-        
         stations.sort((a, b) => isHighest ? b.val - a.val : a.val - b.val);
         const top10 = stations.slice(0, 10);
-        
         if (top10.length > 0) {
             valueHeaderEl.textContent = '기온(℃)';
             tableBodyEl.innerHTML = '';
@@ -285,7 +237,6 @@ async function fetchPrecipRanking(type, retryCount = 0) {
         precipStatus.textContent = `${typeNames[type]} 데이터를 불러오는 중...`;
         precipResultContainer.style.display = 'none';
     }
-    
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
@@ -294,21 +245,15 @@ async function fetchPrecipRanking(type, retryCount = 0) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const buffer = await response.arrayBuffer();
         const text = new TextDecoder('euc-kr').decode(buffer);
-        
-        if (text.length < 500 && retryCount < 3) {
-            await sleep(1000); return fetchPrecipRanking(type, retryCount + 1);
-        }
-
+        if (text.length < 500 && retryCount < 3) { await sleep(1000); return fetchPrecipRanking(type, retryCount + 1); }
         const lines = text.split('\n');
         let stations = [];
         let lastTm = "";
-
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '') continue;
             const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
             if (parts.length < 14) continue;
             const tm = parts[0], stnId = parts[1].trim();
-            // type에 따라 1시간 강수량(index 11) 또는 오늘 강수량(index 13) 선택
             const val = parseFloat(parts[type === '1h' ? 11 : 13]);
             if (!isNaN(val) && val > 0 && val < 1000) {
                 const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
@@ -316,13 +261,9 @@ async function fetchPrecipRanking(type, retryCount = 0) {
                 if (tm) lastTm = tm;
             }
         }
-
-        // Apply bureau filtering
         stations = getFilteredStations(stations);
-        
         stations.sort((a, b) => b.val - a.val);
         const top10 = stations.slice(0, 10);
-        
         if (top10.length > 0) {
             precipValueHeader.textContent = '강수량(mm)';
             precipTableBody.innerHTML = '';
@@ -352,23 +293,13 @@ async function fetchPrecipRanking(type, retryCount = 0) {
 async function fetchPrecipYesterdayRanking(retryCount = 0) {
     precipStatus.textContent = '어제부터 현재까지의 누적 강수량을 계산 중...';
     precipResultContainer.style.display = 'none';
-    
-    await new Promise(resolve => setTimeout(resolve, 50));
-
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ'; 
         const stationData = await getStationMapping(authKey);
-        
-        // 1. 어제 날짜 계산 (YYYYMMDD)
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
-        const yyyymmdd = yesterday.getFullYear() + 
-                         String(yesterday.getMonth() + 1).padStart(2, '0') + 
-                         String(yesterday.getDate()).padStart(2, '0');
-
-        const combinedData = {}; // { stnId: { val: totalVal, name: name, address: adr } }
-
-        // 2. 어제 확정 일강수량 API 호출
+        const yyyymmdd = yesterday.getFullYear() + String(yesterday.getMonth() + 1).padStart(2, '0') + String(yesterday.getDate()).padStart(2, '0');
+        const combinedData = {};
         const yesterdayUrl = `https://apihub.kma.go.kr/api/typ01/url/sfc_aws_day.php?tm2=${yyyymmdd}&obs=rn_day&stn=0&authKey=${authKey}`;
         const yesResponse = await fetch(PROXY_URL + encodeURIComponent(yesterdayUrl) + `&_=${Date.now()}`);
         if (yesResponse.ok) {
@@ -380,7 +311,7 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
                 if (parts.length >= 6) {
                     const stnId = parts[1].trim();
-                    const val = parseFloat(parts[5]); // RN_DAY (어제 하루치)
+                    const val = parseFloat(parts[5]);
                     if (!isNaN(val) && val >= 0) {
                         const nameInApi = parts[6] ? parts[6].replace('=', '').trim() : '';
                         const info = stationData[stnId] || { name: nameInApi || `지점 ${stnId}`, adr: "주소 정보 없음" };
@@ -389,8 +320,6 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 }
             }
         }
-
-        // 3. 오늘 실시간 누적 강수량 API 호출
         const todayUrl = `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min?stn=0&authKey=${authKey}`;
         const todayResponse = await fetch(PROXY_URL + encodeURIComponent(todayUrl) + `&_=${Date.now()}`);
         let lastTm = "";
@@ -402,13 +331,10 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 if (line.startsWith('#') || line.trim() === '') continue;
                 const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
                 if (parts.length >= 14) {
-                    const tm = parts[0].trim();
-                    const stnId = parts[1].trim();
-                    const val = parseFloat(parts[13]); // R_DAY (오늘 누적치)
+                    const tm = parts[0].trim(), stnId = parts[1].trim(), val = parseFloat(parts[13]);
                     if (!isNaN(val) && val >= 0) {
-                        if (combinedData[stnId]) {
-                            combinedData[stnId].val += val;
-                        } else {
+                        if (combinedData[stnId]) { combinedData[stnId].val += val; }
+                        else {
                             const info = stationData[stnId] || { name: `지점 ${stnId}`, adr: "주소 정보 없음" };
                             combinedData[stnId] = { val: val, name: info.name, address: info.adr };
                         }
@@ -417,15 +343,10 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 }
             }
         }
-
         let stations = Object.values(combinedData).filter(item => item.val > 0);
-        
-        // Apply bureau filtering
         stations = getFilteredStations(stations);
-
         stations.sort((a, b) => b.val - a.val);
         const top10 = stations.slice(0, 10);
-        
         if (top10.length > 0) {
             precipValueHeader.textContent = '누적 강수량(mm)';
             precipTableBody.innerHTML = '';
@@ -434,7 +355,6 @@ async function fetchPrecipYesterdayRanking(retryCount = 0) {
                 row.innerHTML = `<td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 700;">${index+1}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-weight: 600;">${item.name}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); color: #28a745; font-weight: 800;">${item.val.toFixed(1)}</td><td style="padding: 12px; border-bottom: 1px solid var(--shadow-color); font-size: 0.85rem; color: var(--text-muted);">${item.address}</td>`;
                 precipTableBody.appendChild(row);
             });
-            
             const todayStr = lastTm ? `${lastTm.substring(0,4)}-${lastTm.substring(4,6)}-${lastTm.substring(6,8)} ${lastTm.substring(8,10)}:${lastTm.substring(10,12)}` : '현재';
             precipTimeElement.textContent = `기준 기간: 어제(${yyyymmdd.substring(0,4)}-${yyyymmdd.substring(4,6)}-${yyyymmdd.substring(6,8)}) ~ 오늘 ${todayStr}`;
             precipResultContainer.style.display = 'block'; 
@@ -456,7 +376,6 @@ async function fetchSnowRanking(type, retryCount = 0) {
         snowStatus.textContent = `${typeNames[type].replace('(cm)', '')} 데이터를 불러오는 중...`;
         snowResultContainer.style.display = 'none';
     }
-    
     try {
         const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
         const stationData = await getStationMapping(authKey);
@@ -465,21 +384,15 @@ async function fetchSnowRanking(type, retryCount = 0) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const buffer = await response.arrayBuffer();
         const text = new TextDecoder('euc-kr').decode(buffer);
-        
-        if (text.length < 500 && retryCount < 3) {
-            await sleep(1000); return fetchSnowRanking(type, retryCount + 1);
-        }
-
+        if (text.length < 500 && retryCount < 3) { await sleep(1000); return fetchSnowRanking(type, retryCount + 1); }
         const lines = text.split('\n');
         let stations = [];
         let lastTm = "";
-
         for (const line of lines) {
             if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
             const parts = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
             if (parts.length >= 7) {
                 const tm = parts[0].trim(), stnId = parts[1].trim(), stnKoInData = parts[2].trim(), val = parseFloat(parts[6].trim());
-                // 적설량이 0보다 큰 경우에만 리스트에 추가
                 if (!isNaN(val) && val > 0 && val < 900) {
                     const info = stationData[stnId] || { name: stnKoInData || `지점 ${stnId}`, adr: "주소 정보 없음" };
                     stations.push({ id: stnId, val, name: info.name, address: info.adr });
@@ -487,13 +400,9 @@ async function fetchSnowRanking(type, retryCount = 0) {
                 if (tm && tm.length === 12) lastTm = tm;
             }
         }
-
-        // Apply bureau filtering
         stations = getFilteredStations(stations);
-        
         stations.sort((a, b) => b.val - a.val);
         const top10 = stations.slice(0, 10);
-        
         if (top10.length > 0) {
             snowValueHeader.textContent = typeNames[type];
             snowTableBody.innerHTML = '';
@@ -527,121 +436,73 @@ const warningStatus = document.getElementById('warning-status');
 
 async function fetchWeatherWarnings() {
     if (!warningList) return;
-    
     warningStatus.textContent = '기상특보 데이터를 불러오는 중...';
     const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
     const selectedBureau = bureauSelect ? bureauSelect.value : '전국';
     const targetRegions = BUREAU_MAPPING[selectedBureau] || [];
-    
     try {
         const fetchWarningData = async (feType) => {
-            // 사용자가 제공한 인자들(fe, tm, disp, help)을 모두 포함
             const url = `https://apihub.kma.go.kr/api/typ01/url/wrn_now_data_new.php?fe=${feType}&tm=&disp=0&help=1&authKey=${authKey}`;
             const res = await fetch(PROXY_URL + encodeURIComponent(url) + `&_=${Date.now()}`);
-            
-            if (!res.ok) {
-                console.error(`API response error: ${res.status}`);
-                return "";
-            }
-            
+            if (!res.ok) return "";
             const buffer = await res.arrayBuffer();
             let text = new TextDecoder('euc-kr').decode(buffer);
-            
-            // 만약 응답에 JSON 에러 메시지가 포함되어 있다면 (보통 UTF-8)
             if (text.includes('{"result"') || text.includes('message')) {
                 const errorText = new TextDecoder('utf-8').decode(buffer);
-                console.warn("API Error Message:", errorText);
                 try {
                     const errJson = JSON.parse(errorText);
-                    if (errJson.result && errJson.result.message) {
-                        // 인증 오류 등의 메시지를 상태창에 표시
-                        if (errJson.result.status === 401) {
-                            warningStatus.textContent = `API 인증 오류: ${errJson.result.message} (기상청 허브에서 특보 서비스 활용 신청 확인 필요)`;
-                        }
+                    if (errJson.result && errJson.result.status === 401) {
+                        warningStatus.textContent = `API 인증 오류: ${errJson.result.message}`;
                     }
                 } catch(e) {}
                 return "";
             }
-
-            // 정상적인 텍스트 데이터인 경우 (EUC-KR)
-            if (!text.includes('○') && !text.includes('특보')) {
+            if (!text.includes('주의보') && !text.includes('경보') && !text.includes('예비특보')) {
                 text = new TextDecoder('utf-8').decode(buffer);
             }
             return text;
         };
-
-        // Fetch 양쪽 데이터를 병렬로 가져옴
-        const [finalData, prelimData] = await Promise.all([
-            fetchWarningData('f'),
-            fetchWarningData('p')
-        ]);
-
+        const [finalData, prelimData] = await Promise.all([fetchWarningData('f'), fetchWarningData('p')]);
         const allLines = [...finalData.split('\n'), ...prelimData.split('\n')];
         let filteredWarnings = [];
         let lastUpdateTime = "";
-
-        // 특보 라인 추출을 위한 정교한 정규표현식
-        const warningRegex = /^[○\s]+(.*(주의보|경보|예비특보).*[:].*)$/;
-
         allLines.forEach(line => {
             const trimmed = line.trim();
             if (!trimmed || trimmed.startsWith('#') && !trimmed.includes('발표시각')) return;
-
-            if (trimmed.startsWith('○') || warningRegex.test(trimmed)) {
-                const isSeaWarning = trimmed.includes('풍랑');
-                
-                if (selectedBureau === '전국') {
-                    filteredWarnings.push(trimmed);
-                } else {
+            if ((trimmed.includes('주의보') || trimmed.includes('경보') || trimmed.includes('예비특보')) && trimmed.includes(':')) {
+                let cleanLine = trimmed.replace(/^[○o\-\s\*]+/, '').trim();
+                const isSeaWarning = cleanLine.includes('풍랑');
+                if (selectedBureau === '전국') { filteredWarnings.push(cleanLine); }
+                else {
                     if (isSeaWarning) return; 
-                    
-                    const matchesRegion = targetRegions.some(region => trimmed.includes(region));
-                    if (matchesRegion) {
-                        filteredWarnings.push(trimmed);
-                    }
+                    if (targetRegions.some(region => cleanLine.includes(region))) { filteredWarnings.push(cleanLine); }
                 }
             } else if (trimmed.includes('발표시각') && !lastUpdateTime) {
                 lastUpdateTime = trimmed.replace(/[#]/g, '').trim();
             }
         });
-
         filteredWarnings = [...new Set(filteredWarnings)].filter(w => w.length > 5);
-
         if (filteredWarnings.length > 0) {
-            warningList.innerHTML = filteredWarnings.map(w => `<div style="margin-bottom: 12px; font-weight: 500;">${w}</div>`).join('');
+            warningList.innerHTML = filteredWarnings.map(w => `<div style="margin-bottom: 12px; font-weight: 500;">○ ${w}</div>`).join('');
             warningStatus.textContent = '조회가 완료되었습니다.';
         } else {
-            // API가 정상 응답을 줬는데 특보가 없는 경우에만 이 메시지 표시
             if (!warningStatus.textContent.includes('오류')) {
                 warningList.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px;">현재 해당 지역에 발효 중인 특보가 없습니다.</div>';
                 warningStatus.textContent = '발효 중인 특보가 없습니다.';
             }
         }
-
-        if (lastUpdateTime) {
-            warningTime.textContent = `기준 시간: ${lastUpdateTime}`;
-        }
-
+        if (lastUpdateTime) { warningTime.textContent = `기준 시간: ${lastUpdateTime}`; }
     } catch (error) {
-        console.error('Fetch warnings failed:', error);
         warningStatus.textContent = '특보 데이터를 불러오는 중 오류가 발생했습니다.';
     }
 }
 
-// Event Listeners
 if (bureauSelect) {
-    bureauSelect.addEventListener('change', () => {
-        fetchWeatherWarnings();
-        // Refresh other data if needed or let user click buttons
-    });
+    bureauSelect.addEventListener('change', () => { fetchWeatherWarnings(); });
 }
+window.addEventListener('DOMContentLoaded', () => { fetchWeatherWarnings(); });
 
-// Initial load
-window.addEventListener('DOMContentLoaded', () => {
-    fetchWeatherWarnings();
-});
-
-// Existing Event Listeners...
+if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'highest'));
 if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
 if (fetchLowTodayButton) fetchLowTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'lowest'));
 if (fetchLowCurrentButton) fetchLowCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'lowest'));
