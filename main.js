@@ -39,7 +39,7 @@ themeToggle.addEventListener('click', () => {
     localStorage.setItem('theme', theme);
 });
 
-// Select Elements
+// Elements
 const weatherStatus = document.getElementById('weather-status');
 const weatherResultContainer = document.getElementById('weather-result-container');
 const weatherTableBody = document.getElementById('weather-table-body');
@@ -195,7 +195,7 @@ async function fetchSnowRanking(type) {
     } catch(e) { snowStatus.textContent = '오류 발생'; }
 }
 
-// --- Weather Warnings Logic (Improved Grouping & Sorting) ---
+// --- Weather Warnings Logic ---
 const WIDE_MAP = {
     '강원도': '강원', '경기도': '경기', '경상남도': '경남', '경상북도': '경북', 
     '전라남도': '전남', '전라북도': '전북', '충청남도': '충남', '충청북도': '충북',
@@ -217,11 +217,7 @@ async function fetchWeatherWarnings() {
         const hh = parseInt(tm.substring(8, 10));
         const mm = tm.substring(10, 12);
         let name = "";
-        if (mm === '58' || mm === '59') {
-            if (hh < 6) name = "새벽"; else if (hh < 12) name = "오전"; else if (hh < 18) name = "오후"; else name = "밤";
-        } else {
-            if (hh < 6) name = "새벽"; else if (hh < 12) name = "오전"; else if (hh < 18) name = "오후"; else name = "밤";
-        }
+        if (hh < 6) name = "새벽"; else if (hh < 12) name = "오전"; else if (hh < 18) name = "오후"; else name = "밤";
         const today = new Date();
         const tmDay = parseInt(tm.substring(6, 8));
         const day = (tmDay !== today.getDate()) ? "내일" : "오늘";
@@ -232,14 +228,13 @@ async function fetchWeatherWarnings() {
         const fetchData = async (fe) => {
             const url = `https://apihub.kma.go.kr/api/typ01/url/wrn_now_data_new.php?fe=${fe}&tm=&disp=0&help=1&authKey=${authKey}`;
             const res = await fetch(PROXY_URL + encodeURIComponent(url));
-            if (!res.ok) return "";
             return new TextDecoder('euc-kr').decode(await res.arrayBuffer());
         };
 
         const [fData, pData] = await Promise.all([fetchData('f'), fetchData('p')]);
         const allLines = [...fData.split('\n'), ...pData.split('\n')];
         
-        let warnings = {}; // { title: { wideRegion: Set(subRegions) } }
+        let warnings = {}; 
         let lastTm = "";
 
         allLines.forEach(line => {
@@ -249,42 +244,39 @@ async function fetchWeatherWarnings() {
             const p = line.split(',').map(s => s.trim());
             if (p.length < 9) return;
 
-            let upRegionRaw = p[1]; 
-            let regionRaw = p[3];    
+            const upRegionRaw = p[1]; 
+            const regionRaw = p[3];    
             const type = p[6];      
             const level = p[7];     
             const tmEf = p[5];      
 
             if (type.includes('풍랑') && selectedBureau !== '전국') return;
             if (selectedBureau !== '전국') {
-                const isMatch = targetRegions.some(r => upRegionRaw.includes(r) || regionRaw.includes(r));
-                if (!isMatch) return;
+                if (!targetRegions.some(r => upRegionRaw.includes(r) || regionRaw.includes(r))) return;
             }
 
             let title = `${type} ${level}${level === '예비' ? '특보' : '보'}`;
             if (level === '예비') title += getTimeName(tmEf);
 
             const wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|도|특별자치시|특별자치도/g, '');
-            let subName = regionRaw.replace(upRegionRaw, '').replace(/시$|군$|구$/g, '').trim();
-            if (!subName || subName === upRegionRaw) subName = ""; 
+            
+            // 상세 지역명에서 광역명 및 시/군/구 제거 로직
+            let subName = regionRaw;
+            // 1. 광역명 제거 (강원도, 강원 모두 제거)
+            subName = subName.replace(upRegionRaw, '').replace(wideName, '');
+            // 2. '시', '군' 제거 (단, 단독 지명인 경우 보존을 위해 정교하게 처리)
+            if (subName.length > 2) subName = subName.replace(/시$|군$|구$/g, '');
+            subName = subName.trim();
 
             if (!warnings[title]) warnings[title] = {};
             if (!warnings[title][wideName]) warnings[title][wideName] = new Set();
-            if (subName) warnings[title][wideName].add(subName);
-            else warnings[title][wideName].add("__WHOLE__");
+            if (!subName || subName === wideName) warnings[title][wideName].add("__WHOLE__");
+            else warnings[title][wideName].add(subName);
         });
 
-        // Sorting Priority
-        const getPriority = (t) => {
-            if (t.includes('경보')) return 1;
-            if (t.includes('주의보')) return 2;
-            return 3; // 예비특보
-        };
-
         const sortedTitles = Object.keys(warnings).sort((a, b) => {
-            const pa = getPriority(a), pb = getPriority(b);
-            if (pa !== pb) return pa - pb;
-            return a.localeCompare(b);
+            const getRank = (t) => t.includes('경보') ? 1 : (t.includes('주의보') ? 2 : 3);
+            return getRank(a) - getRank(b) || a.localeCompare(b);
         });
 
         const results = sortedTitles.map(title => {
@@ -292,12 +284,9 @@ async function fetchWeatherWarnings() {
             const regionTexts = Object.keys(wideRegions).map(wide => {
                 const subs = Array.from(wideRegions[wide]);
                 if (subs.includes("__WHOLE__") && subs.length === 1) return wide;
-                
-                // Remove whole area marker and join others
                 const cleanSubs = subs.filter(s => s !== "__WHOLE__").join('·');
                 return cleanSubs ? `${wide}(${cleanSubs})` : wide;
             }).join(', ');
-            
             return `○ ${title} : ${regionTexts}`;
         });
 
@@ -309,16 +298,11 @@ async function fetchWeatherWarnings() {
             warningStatus.textContent = '특보 없음';
         }
         if (lastTm) warningTime.textContent = `기준 시간: ${formatTime(lastTm)}`;
-
-    } catch(e) { 
-        console.error(e);
-        warningStatus.textContent = '오류 발생'; 
-    }
+    } catch(e) { warningStatus.textContent = '오류 발생'; }
 }
 
-// Init
-bureauSelect.addEventListener('change', () => { fetchWeatherWarnings(); });
-window.addEventListener('DOMContentLoaded', () => { fetchWeatherWarnings(); });
+bureauSelect.addEventListener('change', () => fetchWeatherWarnings());
+window.addEventListener('DOMContentLoaded', () => fetchWeatherWarnings());
 
 if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'highest'));
 if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
