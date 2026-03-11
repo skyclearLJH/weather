@@ -96,11 +96,59 @@ let cachedStationMapping = null;
 const PROXY_URL = "https://api.codetabs.com/v1/proxy/?quest=";
 
 async function getStationMapping(authKey) {
-    if (cachedStationMapping && Object.keys(cachedStationMapping).length > 300) return cachedStationMapping;
+    if (cachedStationMapping && Object.keys(cachedStationMapping).length > 500) return cachedStationMapping;
     
     try {
         const mapping = {};
         const decoder = new TextDecoder('euc-kr');
+
+        const parseLines = (text, targetMapping) => {
+            const lines = text.split('\n');
+            let stnKoIndex = -1;
+            let adrIndex = -1;
+            
+            // 1. 헤더에서 인덱스 찾기
+            for (const line of lines) {
+                if (line.includes('STN_KO')) {
+                    const headerParts = line.trim().split(/\s+/);
+                    stnKoIndex = headerParts.indexOf('STN_KO');
+                    adrIndex = headerParts.indexOf('LAW_ADDR');
+                    if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
+                    // 데이터 라인에는 '#'이 없으므로 인덱스 조정 (헤더가 '#'으로 시작하는 경우)
+                    if (headerParts[0] === '#' || line.startsWith('#')) {
+                        if (stnKoIndex !== -1) stnKoIndex -= 1;
+                        if (adrIndex !== -1) adrIndex -= 1;
+                    }
+                    break;
+                }
+            }
+
+            // 인덱스 기본값 설정 (헤더를 못 찾은 경우 대비)
+            if (stnKoIndex === -1) stnKoIndex = 10;
+            if (adrIndex === -1) adrIndex = 15;
+
+            // 2. 데이터 파싱
+            for (const line of lines) {
+                if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
+                const parts = line.trim().split(/\s+/);
+                if (parts.length > 5) {
+                    const id = parts[0];
+                    let name = (parts[stnKoIndex] || parts[10] || "").replace(/=/g, '').trim();
+                    let adr = "";
+                    
+                    if (adrIndex !== -1 && parts.length > adrIndex) {
+                        const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
+                        const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충남|충북|전남|전북|경남|경북|제주|춘천|원주|강릉).*/);
+                        adr = adrMatch ? adrMatch[0].trim() : rawAdr;
+                    }
+
+                    // 이름이 유효한지 확인 (숫자만 있거나 '----'인 경우 제외)
+                    if (id && name && isNaN(name) && name !== '----' && !targetMapping[id]) {
+                        targetMapping[id] = { name, adr: adr || "주소 정보 없음" };
+                    }
+                }
+            }
+        };
 
         // 1. 로컬 stations.txt 읽기
         try {
@@ -108,44 +156,11 @@ async function getStationMapping(authKey) {
             if (localResponse.ok) {
                 const buffer = await localResponse.arrayBuffer();
                 const text = decoder.decode(buffer);
-                const lines = text.split('\n');
-                
-                let stnKoIndex = -1;
-                let adrIndex = -1;
-                
-                for (const line of lines) {
-                    if (line.includes('STN_KO')) {
-                        const headerParts = line.trim().split(/\s+/);
-                        stnKoIndex = headerParts.indexOf('STN_KO');
-                        adrIndex = headerParts.indexOf('LAW_ADDR');
-                        if (adrIndex === -1) adrIndex = headerParts.indexOf('ADR');
-                        if (stnKoIndex !== -1) stnKoIndex -= 1; 
-                        if (adrIndex !== -1) adrIndex -= 1;
-                        break;
-                    }
-                }
-
-                for (const line of lines) {
-                    if (line.startsWith('#') || line.trim() === '') continue;
-                    const parts = line.trim().split(/\s+/);
-                    if (parts.length > 5) {
-                        const id = parts[0];
-                        const name = parts[stnKoIndex] || parts[10];
-                        let adr = "";
-                        if (adrIndex !== -1 && parts.length > adrIndex) {
-                            const rawAdr = parts.slice(adrIndex).join(' ').replace(/^---- /, '').trim();
-                            const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충청남|충청북|충남|충북|전라남|전라북|전남|전북|경상남|경상북|경남|경북|제주|춘천|원주|강릉).*/);
-                            adr = adrMatch ? adrMatch[0].trim() : rawAdr;
-                        }
-                        if (id && name && isNaN(name) && name !== '----') {
-                            mapping[id] = { name, adr };
-                        }
-                    }
-                }
+                parseLines(text, mapping);
             }
         } catch (e) { console.error('Local stations.txt load failed:', e); }
 
-        // 2. 추가 지점 정보 API 보충 (AWS 및 적설 관측소 포함)
+        // 2. 추가 지점 정보 API 보충
         if (authKey) {
             const fetchInf = async (type) => {
                 try {
@@ -154,22 +169,12 @@ async function getStationMapping(authKey) {
                     if (res.ok) {
                         const buffer = await res.arrayBuffer();
                         const text = decoder.decode(buffer);
-                        const lines = text.split('\n');
-                        for (const line of lines) {
-                            if (line.startsWith('#') || line.trim() === '' || line.startsWith(' {')) continue;
-                            const parts = line.trim().split(/\s+/);
-                            const id = parts[0];
-                            const name = parts[8];
-                            if (id && name && !mapping[id]) {
-                                const rawAdr = parts.slice(13).join(' ').replace(/^---- /, '').trim();
-                                const adrMatch = rawAdr.match(/(\([\u4e00-\u9fa5]+\)|강원|경기|서울|인천|대전|대구|부산|울산|광주|세종|충청남|충청북|충남|충북|전라남|전라북|전남|전북|경상남|경상북|경남|경북|제주|춘천|원주|강릉).*/);
-                                mapping[id] = { name, adr: adrMatch ? adrMatch[0].trim() : rawAdr };
-                            }
-                        }
+                        parseLines(text, mapping);
                     }
-                } catch (e) {}
+                } catch (e) { console.error(`API fetchInf ${type} failed:`, e); }
             };
-            await Promise.all([fetchInf('AWS'), fetchInf('SFC')]);
+            // 병렬로 데이터 수집
+            await Promise.all([fetchInf('SFC'), fetchInf('AWS')]);
         }
 
         if (Object.keys(mapping).length > 0) cachedStationMapping = mapping;
