@@ -520,8 +520,99 @@ async function fetchSnowRanking(type, retryCount = 0) {
     }
 }
 
+// Warning elements
+const warningList = document.getElementById('warning-list');
+const warningTime = document.getElementById('warning-time');
+const warningStatus = document.getElementById('warning-status');
+
+async function fetchWeatherWarnings() {
+    if (!warningList) return;
+    
+    warningStatus.textContent = '기상특보 데이터를 불러오는 중...';
+    const authKey = 'KkmPfomzTJyJj36Js9ycNQ';
+    const selectedBureau = bureauSelect ? bureauSelect.value : '전국';
+    const targetRegions = BUREAU_MAPPING[selectedBureau] || [];
+    
+    try {
+        const fetchWarningData = async (feType) => {
+            const url = `https://apihub.kma.go.kr/api/typ01/url/wrn_now_data.php?fe=${feType}&disp=0&authKey=${authKey}`;
+            const res = await fetch(PROXY_URL + encodeURIComponent(url) + `&_=${Date.now()}`);
+            if (!res.ok) return "";
+            const buffer = await res.arrayBuffer();
+            return new TextDecoder('euc-kr').decode(buffer);
+        };
+
+        // Fetch both final and preliminary warnings
+        const [finalData, prelimData] = await Promise.all([
+            fetchWarningData('f'),
+            fetchWarningData('p')
+        ]);
+
+        const allLines = [...finalData.split('\n'), ...prelimData.split('\n')];
+        let filteredWarnings = [];
+        let lastUpdateTime = "";
+
+        allLines.forEach(line => {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('○')) {
+                // Check if it's a sea warning (풍랑)
+                const isSeaWarning = trimmed.includes('풍랑');
+                
+                // Filtering Logic:
+                // 1. If "All regions" (전국), show all.
+                // 2. If specific bureau, show if region matches AND not a sea warning (unless it's '전국').
+                
+                if (selectedBureau === '전국') {
+                    filteredWarnings.push(trimmed);
+                } else {
+                    // Specific Bureau
+                    if (isSeaWarning) return; // Skip sea warnings for specific bureaus
+                    
+                    const matchesRegion = targetRegions.some(region => trimmed.includes(region));
+                    if (matchesRegion) {
+                        filteredWarnings.push(trimmed);
+                    }
+                }
+            } else if (trimmed.includes('발표시각') && !lastUpdateTime) {
+                lastUpdateTime = trimmed.replace('#', '').trim();
+            }
+        });
+
+        // Remove duplicates
+        filteredWarnings = [...new Set(filteredWarnings)];
+
+        if (filteredWarnings.length > 0) {
+            warningList.innerHTML = filteredWarnings.map(w => `<div style="margin-bottom: 8px;">${w}</div>`).join('');
+            warningStatus.textContent = '조회가 완료되었습니다.';
+        } else {
+            warningList.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px;">현재 발효 중인 특보가 없습니다.</div>';
+            warningStatus.textContent = '발효 중인 특보가 없습니다.';
+        }
+
+        if (lastUpdateTime) {
+            warningTime.textContent = `기준 시간: ${lastUpdateTime}`;
+        }
+
+    } catch (error) {
+        console.error('Fetch warnings failed:', error);
+        warningStatus.textContent = '특보 데이터를 불러오는 중 오류가 발생했습니다.';
+    }
+}
+
 // Event Listeners
-if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'highest'));
+if (bureauSelect) {
+    bureauSelect.addEventListener('change', () => {
+        fetchWeatherWarnings();
+        // Refresh other data if needed or let user click buttons
+    });
+}
+
+// Initial load
+window.addEventListener('DOMContentLoaded', () => {
+    fetchWeatherWarnings();
+});
+
+// Existing Event Listeners...
 if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
 if (fetchLowTodayButton) fetchLowTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'lowest'));
 if (fetchLowCurrentButton) fetchLowCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'lowest'));
