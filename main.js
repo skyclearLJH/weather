@@ -3,6 +3,7 @@ const themeToggle = document.getElementById('theme-toggle');
 const bureauSelect = document.getElementById('bureau-select');
 const body = document.body;
 
+// 총국별 관할 광역지자체 매핑 (WIDE_MAP 결과물과 일치시킴)
 const BUREAU_MAPPING = {
     '전국': [],
     '본사': ['서울', '경기', '인천'],
@@ -10,7 +11,7 @@ const BUREAU_MAPPING = {
     '청주총국': ['충북'],
     '전주총국': ['전북'],
     '광주총국': ['전남', '광주'],
-    '제주총국': ['제주'],
+    '제주총국': ['제주도'],
     '춘천총국': ['강원'],
     '대구총국': ['대구', '경북'],
     '부산총국': ['부산', '울산'],
@@ -234,7 +235,7 @@ async function fetchWeatherWarnings() {
         const [fData, pData] = await Promise.all([fetchData('f'), fetchData('p')]);
         const allLines = [...fData.split('\n'), ...pData.split('\n')];
         
-        let warnings = {}; 
+        let warnings = {}; // { title: { wideRegion: Set(subRegions) } }
         let lastTm = "";
 
         allLines.forEach(line => {
@@ -250,55 +251,65 @@ async function fetchWeatherWarnings() {
             const level = p[7];     
             const tmEf = p[5];      
 
+            const wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|도|특별자치시|특별자치도/g, '');
+            
+            // 1. 풍랑 특보 예외: 전국일 때만 수집
             if (type.includes('풍랑') && selectedBureau !== '전국') return;
-            if (selectedBureau !== '전국') {
-                if (!targetRegions.some(r => upRegionRaw.includes(r) || regionRaw.includes(r))) return;
-            }
 
+            // 2. 총국 필터링 (사후 처리를 위해 일단 모두 수집하되, 나중에 wideName으로 필터링함)
             let title = `${type} ${level}${level === '예비' ? '특보' : '보'}`;
             if (level === '예비') title += getTimeName(tmEf);
 
-            const wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|도|특별자치시|특별자치도/g, '');
-            
-            // 상세 지역명에서 광역명 및 시/군/구 제거 로직
             let subName = regionRaw;
-            // 1. 광역명 제거 (강원도, 강원 모두 제거)
             subName = subName.replace(upRegionRaw, '').replace(wideName, '');
-            // 2. '시', '군' 제거 (단, 단독 지명인 경우 보존을 위해 정교하게 처리)
             if (subName.length > 2) subName = subName.replace(/시$|군$|구$/g, '');
             subName = subName.trim();
 
             if (!warnings[title]) warnings[title] = {};
             if (!warnings[title][wideName]) warnings[title][wideName] = new Set();
+            
             if (!subName || subName === wideName) warnings[title][wideName].add("__WHOLE__");
             else warnings[title][wideName].add(subName);
         });
 
+        // 정렬 및 총국 필터링 결과 생성
         const sortedTitles = Object.keys(warnings).sort((a, b) => {
             const getRank = (t) => t.includes('경보') ? 1 : (t.includes('주의보') ? 2 : 3);
             return getRank(a) - getRank(b) || a.localeCompare(b);
         });
 
-        const results = sortedTitles.map(title => {
+        const results = [];
+        sortedTitles.forEach(title => {
             const wideRegions = warnings[title];
-            const regionTexts = Object.keys(wideRegions).map(wide => {
+            const filteredWideTexts = [];
+
+            Object.keys(wideRegions).forEach(wide => {
+                // 선택된 총국의 관할 지역인지 확인
+                if (selectedBureau !== '전국' && !targetRegions.includes(wide)) return;
+
                 const subs = Array.from(wideRegions[wide]);
-                if (subs.includes("__WHOLE__") && subs.length === 1) return wide;
-                const cleanSubs = subs.filter(s => s !== "__WHOLE__").join('·');
-                return cleanSubs ? `${wide}(${cleanSubs})` : wide;
-            }).join(', ');
-            return `○ ${title} : ${regionTexts}`;
+                if (subs.includes("__WHOLE__") && subs.length === 1) {
+                    filteredWideTexts.push(wide);
+                } else {
+                    const cleanSubs = subs.filter(s => s !== "__WHOLE__").join('·');
+                    filteredWideTexts.push(cleanSubs ? `${wide}(${cleanSubs})` : wide);
+                }
+            });
+
+            if (filteredWideTexts.length > 0) {
+                results.push(`○ ${title} : ${filteredWideTexts.join(', ')}`);
+            }
         });
 
         if (results.length > 0) {
             warningList.innerHTML = results.map(r => `<div style="margin-bottom:10px; font-weight: 500;">${r}</div>`).join('');
             warningStatus.textContent = '조회 완료';
         } else {
-            warningList.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">현재 발효 중인 특보가 없습니다.</div>';
+            warningList.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">현재 해당 관할 지역에 발효 중인 특보가 없습니다.</div>';
             warningStatus.textContent = '특보 없음';
         }
         if (lastTm) warningTime.textContent = `기준 시간: ${formatTime(lastTm)}`;
-    } catch(e) { warningStatus.textContent = '오류 발생'; }
+    } catch(e) { console.error(e); warningStatus.textContent = '오류 발생'; }
 }
 
 bureauSelect.addEventListener('change', () => fetchWeatherWarnings());
