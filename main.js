@@ -535,14 +535,42 @@ async function fetchWeatherWarnings() {
     
     try {
         const fetchWarningData = async (feType) => {
-            const url = `https://apihub.kma.go.kr/api/typ01/url/wrn_now_data.php?fe=${feType}&disp=0&authKey=${authKey}`;
+            // 사용자가 제공한 인자들(fe, tm, disp, help)을 모두 포함
+            const url = `https://apihub.kma.go.kr/api/typ01/url/wrn_now_data_new.php?fe=${feType}&tm=&disp=0&help=1&authKey=${authKey}`;
             const res = await fetch(PROXY_URL + encodeURIComponent(url) + `&_=${Date.now()}`);
-            if (!res.ok) return "";
+            
+            if (!res.ok) {
+                console.error(`API response error: ${res.status}`);
+                return "";
+            }
+            
             const buffer = await res.arrayBuffer();
-            return new TextDecoder('euc-kr').decode(buffer);
+            let text = new TextDecoder('euc-kr').decode(buffer);
+            
+            // 만약 응답에 JSON 에러 메시지가 포함되어 있다면 (보통 UTF-8)
+            if (text.includes('{"result"') || text.includes('message')) {
+                const errorText = new TextDecoder('utf-8').decode(buffer);
+                console.warn("API Error Message:", errorText);
+                try {
+                    const errJson = JSON.parse(errorText);
+                    if (errJson.result && errJson.result.message) {
+                        // 인증 오류 등의 메시지를 상태창에 표시
+                        if (errJson.result.status === 401) {
+                            warningStatus.textContent = `API 인증 오류: ${errJson.result.message} (기상청 허브에서 특보 서비스 활용 신청 확인 필요)`;
+                        }
+                    }
+                } catch(e) {}
+                return "";
+            }
+
+            // 정상적인 텍스트 데이터인 경우 (EUC-KR)
+            if (!text.includes('○') && !text.includes('특보')) {
+                text = new TextDecoder('utf-8').decode(buffer);
+            }
+            return text;
         };
 
-        // Fetch both final and preliminary warnings
+        // Fetch 양쪽 데이터를 병렬로 가져옴
         const [finalData, prelimData] = await Promise.all([
             fetchWarningData('f'),
             fetchWarningData('p')
@@ -552,21 +580,20 @@ async function fetchWeatherWarnings() {
         let filteredWarnings = [];
         let lastUpdateTime = "";
 
+        // 특보 라인 추출을 위한 정교한 정규표현식
+        const warningRegex = /^[○\s]+(.*(주의보|경보|예비특보).*[:].*)$/;
+
         allLines.forEach(line => {
             const trimmed = line.trim();
-            if (trimmed.startsWith('○')) {
-                // Check if it's a sea warning (풍랑)
+            if (!trimmed || trimmed.startsWith('#') && !trimmed.includes('발표시각')) return;
+
+            if (trimmed.startsWith('○') || warningRegex.test(trimmed)) {
                 const isSeaWarning = trimmed.includes('풍랑');
-                
-                // Filtering Logic:
-                // 1. If "All regions" (전국), show all.
-                // 2. If specific bureau, show if region matches AND not a sea warning (unless it's '전국').
                 
                 if (selectedBureau === '전국') {
                     filteredWarnings.push(trimmed);
                 } else {
-                    // Specific Bureau
-                    if (isSeaWarning) return; // Skip sea warnings for specific bureaus
+                    if (isSeaWarning) return; 
                     
                     const matchesRegion = targetRegions.some(region => trimmed.includes(region));
                     if (matchesRegion) {
@@ -574,19 +601,21 @@ async function fetchWeatherWarnings() {
                     }
                 }
             } else if (trimmed.includes('발표시각') && !lastUpdateTime) {
-                lastUpdateTime = trimmed.replace('#', '').trim();
+                lastUpdateTime = trimmed.replace(/[#]/g, '').trim();
             }
         });
 
-        // Remove duplicates
-        filteredWarnings = [...new Set(filteredWarnings)];
+        filteredWarnings = [...new Set(filteredWarnings)].filter(w => w.length > 5);
 
         if (filteredWarnings.length > 0) {
-            warningList.innerHTML = filteredWarnings.map(w => `<div style="margin-bottom: 8px;">${w}</div>`).join('');
+            warningList.innerHTML = filteredWarnings.map(w => `<div style="margin-bottom: 12px; font-weight: 500;">${w}</div>`).join('');
             warningStatus.textContent = '조회가 완료되었습니다.';
         } else {
-            warningList.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px;">현재 발효 중인 특보가 없습니다.</div>';
-            warningStatus.textContent = '발효 중인 특보가 없습니다.';
+            // API가 정상 응답을 줬는데 특보가 없는 경우에만 이 메시지 표시
+            if (!warningStatus.textContent.includes('오류')) {
+                warningList.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px;">현재 해당 지역에 발효 중인 특보가 없습니다.</div>';
+                warningStatus.textContent = '발효 중인 특보가 없습니다.';
+            }
         }
 
         if (lastUpdateTime) {
