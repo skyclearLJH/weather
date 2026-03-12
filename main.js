@@ -235,11 +235,15 @@ async function fetchWeatherWarnings() {
         const [fData, pData] = await Promise.all([fetchData('f'), fetchData('p')]);
         const allLines = [...fData.split('\n'), ...pData.split('\n')];
         
-        let warnings = {}; // { title: { wideRegion: Set(subRegions) } }
-        let lastTm = "";
+        let warnings = {
+            '경보': {},
+            '주의보': {},
+            '예비특보': {}
+        }; 
+        const now = new Date();
+        const lastTm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
 
         allLines.forEach(line => {
-            if (line.startsWith('#기준시각:')) lastTm = line.split(':')[1].trim();
             if (line.startsWith('#') || !line.trim() || line.includes('START')) return;
 
             const p = line.split(',').map(s => s.trim());
@@ -253,10 +257,12 @@ async function fetchWeatherWarnings() {
 
             const wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|도|특별자치시|특별자치도/g, '');
             
-            // 1. 풍랑 특보 예외: 전국일 때만 수집
             if (type.includes('풍랑') && selectedBureau !== '전국') return;
 
-            // 2. 총국 필터링 (사후 처리를 위해 일단 모두 수집하되, 나중에 wideName으로 필터링함)
+            let levelKey = '예비특보';
+            if (level.includes('경보')) levelKey = '경보';
+            else if (level.includes('주의보')) levelKey = '주의보';
+
             let title = `${type} ${level}${level === '예비' ? '특보' : '보'}`;
             if (level === '예비') title += getTimeName(tmEf);
 
@@ -265,47 +271,63 @@ async function fetchWeatherWarnings() {
             if (subName.length > 2) subName = subName.replace(/시$|군$|구$/g, '');
             subName = subName.trim();
 
-            if (!warnings[title]) warnings[title] = {};
-            if (!warnings[title][wideName]) warnings[title][wideName] = new Set();
+            if (!warnings[levelKey][title]) warnings[levelKey][title] = {};
+            if (!warnings[levelKey][title][wideName]) warnings[levelKey][title][wideName] = new Set();
             
-            if (!subName || subName === wideName) warnings[title][wideName].add("__WHOLE__");
-            else warnings[title][wideName].add(subName);
+            if (!subName || subName === wideName) warnings[levelKey][title][wideName].add("__WHOLE__");
+            else warnings[levelKey][title][wideName].add(subName);
         });
 
-        // 정렬 및 총국 필터링 결과 생성
-        const sortedTitles = Object.keys(warnings).sort((a, b) => {
-            const getRank = (t) => t.includes('경보') ? 1 : (t.includes('주의보') ? 2 : 3);
-            return getRank(a) - getRank(b) || a.localeCompare(b);
-        });
+        let htmlContent = '';
+        let hasData = false;
 
-        const results = [];
-        sortedTitles.forEach(title => {
-            const wideRegions = warnings[title];
-            const filteredWideTexts = [];
+        ['경보', '주의보', '예비특보'].forEach(levelKey => {
+            const levelWarnings = warnings[levelKey];
+            const titles = Object.keys(levelWarnings).sort();
+            
+            let levelHtml = '';
+            titles.forEach(title => {
+                const wideRegions = levelWarnings[title];
+                const filteredWideTexts = [];
 
-            Object.keys(wideRegions).forEach(wide => {
-                // 선택된 총국의 관할 지역인지 확인
-                if (selectedBureau !== '전국' && !targetRegions.includes(wide)) return;
+                Object.keys(wideRegions).forEach(wide => {
+                    if (selectedBureau !== '전국' && !targetRegions.includes(wide)) return;
 
-                const subs = Array.from(wideRegions[wide]);
-                if (subs.includes("__WHOLE__") && subs.length === 1) {
-                    filteredWideTexts.push(wide);
-                } else {
-                    const cleanSubs = subs.filter(s => s !== "__WHOLE__").join('·');
-                    filteredWideTexts.push(cleanSubs ? `${wide}(${cleanSubs})` : wide);
+                    const subs = Array.from(wideRegions[wide]);
+                    if (subs.includes("__WHOLE__") && subs.length === 1) {
+                        filteredWideTexts.push(wide);
+                    } else {
+                        const cleanSubs = subs.filter(s => s !== "__WHOLE__").sort().join('·');
+                        filteredWideTexts.push(cleanSubs ? `${wide}(${cleanSubs})` : wide);
+                    }
+                });
+
+                if (filteredWideTexts.length > 0) {
+                    levelHtml += `<div class="warning-item"><span class="warning-title">○ ${title}</span> : ${filteredWideTexts.join(', ')}</div>`;
                 }
             });
 
-            if (filteredWideTexts.length > 0) {
-                results.push(`○ ${title} : ${filteredWideTexts.join(', ')}`);
+            if (levelHtml) {
+                hasData = true;
+                const badgeClass = levelKey === '경보' ? 'badge-danger' : (levelKey === '주의보' ? 'badge-warning' : 'badge-info');
+                htmlContent += `
+                    <div class="warning-group ${levelKey}">
+                        <div class="warning-group-header">
+                            <span class="warning-badge ${badgeClass}">${levelKey}</span>
+                        </div>
+                        <div class="warning-group-body">
+                            ${levelHtml}
+                        </div>
+                    </div>
+                `;
             }
         });
 
-        if (results.length > 0) {
-            warningList.innerHTML = results.map(r => `<div style="margin-bottom:10px; font-weight: 500;">${r}</div>`).join('');
+        if (hasData) {
+            warningList.innerHTML = htmlContent;
             warningStatus.textContent = '조회 완료';
         } else {
-            warningList.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">현재 해당 관할 지역에 발효 중인 특보가 없습니다.</div>';
+            warningList.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">현재 해당 관할 지역에 발효 중인 특보가 없습니다.</div>';
             warningStatus.textContent = '특보 없음';
         }
         if (lastTm) warningTime.textContent = `기준 시간: ${formatTime(lastTm)}`;
@@ -315,11 +337,14 @@ async function fetchWeatherWarnings() {
 bureauSelect.addEventListener('change', () => fetchWeatherWarnings());
 window.addEventListener('DOMContentLoaded', () => fetchWeatherWarnings());
 
-if (fetchWeatherTodayButton) fetchWeatherTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'highest'));
-if (fetchWeatherCurrentButton) fetchWeatherCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
-if (fetchLowTodayButton) fetchLowTodayButton.addEventListener('click', () => fetchWeatherRanking('today', 'lowest'));
-if (fetchLowCurrentButton) fetchLowCurrentButton.addEventListener('click', () => fetchWeatherRanking('current', 'lowest'));
-if (fetchPrecip1hButton) fetchPrecip1hButton.addEventListener('click', () => fetchPrecipRanking('1h'));
-if (fetchPrecipTodayButton) fetchPrecipTodayButton.addEventListener('click', () => fetchPrecipRanking('today'));
-if (fetchSnowTotButton) fetchSnowTotButton.addEventListener('click', () => fetchSnowRanking('tot'));
-if (fetchSnowDayButton) fetchSnowDayButton.addEventListener('click', () => fetchSnowRanking('day'));
+// Event Listeners for buttons
+document.getElementById('fetch-weather-today')?.addEventListener('click', () => fetchWeatherRanking('today', 'highest'));
+document.getElementById('fetch-weather-current')?.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
+document.getElementById('fetch-low-today')?.addEventListener('click', () => fetchWeatherRanking('today', 'lowest'));
+document.getElementById('fetch-low-current')?.addEventListener('click', () => fetchWeatherRanking('current', 'lowest'));
+document.getElementById('fetch-precip-1h')?.addEventListener('click', () => fetchPrecipRanking('1h'));
+document.getElementById('fetch-precip-today')?.addEventListener('click', () => fetchPrecipRanking('today'));
+document.getElementById('fetch-precip-yesterday')?.addEventListener('click', () => fetchPrecipRanking('today')); // Yesterday data logic can be added later if needed
+document.getElementById('fetch-snow-tot')?.addEventListener('click', () => fetchSnowRanking('tot'));
+document.getElementById('fetch-snow-day')?.addEventListener('click', () => fetchSnowRanking('day'));
+
