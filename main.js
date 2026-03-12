@@ -200,7 +200,7 @@ async function fetchSnowRanking(type) {
 const WIDE_MAP = {
     '강원도': '강원', '경기도': '경기', '경상남도': '경남', '경상북도': '경북', 
     '전라남도': '전남', '전라북도': '전북', '충청남도': '충남', '충청북도': '충북',
-    '제주도': '제주도', '제주도전해상': '제주도', '제주전해상': '제주도',
+    '제주도': '제제주', '제주도전해상': '제주', '제주전해상': '제주',
     '서울특별시': '서울', '인천광역시': '인천', '대전광역시': '대전', 
     '광주광역시': '광주', '대구광역시': '대구', '울산광역시': '울산', '부산광역시': '부산',
     '세종특별자치시': '세종'
@@ -252,29 +252,46 @@ async function fetchWeatherWarnings() {
             const upRegionRaw = p[1]; 
             const regionRaw = p[3];    
             const type = p[6];      
-            const level = p[7];     
+            const level = p[7];     // '1', '2', '주의보', '경보', '예비'
             const tmEf = p[5];      
 
-            const wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|도|특별자치시|특별자치도/g, '');
-            
+            // 광역 지자체명 정제 (강원도 -> 강원, 제주도 -> 제주)
+            let wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|특별자치시|특별자치도/g, '');
+            if (wideName.endsWith('도') && wideName.length > 2) wideName = wideName.slice(0, -1);
+            if (wideName === '제제주') wideName = '제주';
+
             if (type.includes('풍랑') && selectedBureau !== '전국') return;
 
             let levelKey = '예비특보';
-            if (level.includes('경보')) levelKey = '경보';
-            else if (level.includes('주의보')) levelKey = '주의보';
+            let titleType = '예비특보';
+            
+            if (level === '2' || level.includes('경보')) {
+                levelKey = '경보';
+                titleType = '경보';
+            } else if (level === '1' || level.includes('주의보')) {
+                levelKey = '주의보';
+                titleType = '주의보';
+            }
 
-            let title = `${type} ${level}${level === '예비' ? '특보' : '보'}`;
+            let title = `${type} ${titleType}`;
             if (level === '예비') title += getTimeName(tmEf);
 
+            // 구역명 정제
             let subName = regionRaw;
-            subName = subName.replace(upRegionRaw, '').replace(wideName, '');
-            if (subName.length > 2) subName = subName.replace(/시$|군$|구$/g, '');
-            subName = subName.trim();
+            // 광역지자체명이 포함되어 있으면 제거 (예: "경상북도(울릉도.독도)" -> "(울릉도.독도)")
+            subName = subName.replace(upRegionRaw, '').replace(wideName + '도', '').replace(wideName, '');
+            subName = subName.replace(/[()]/g, '').trim();
+            
+            // 시, 군, 구 제거 (단, 울릉도와 같이 '도'로 끝나는 섬 이름은 보존하기 위해 '도'는 제거 대상에서 제외)
+            if (subName.length > 2) {
+                subName = subName.replace(/시$|군$|구$/g, '');
+            }
+            if (!subName) subName = wideName;
 
             if (!warnings[levelKey][title]) warnings[levelKey][title] = {};
             if (!warnings[levelKey][title][wideName]) warnings[levelKey][title][wideName] = new Set();
             
-            if (!subName || subName === wideName) warnings[levelKey][title][wideName].add("__WHOLE__");
+            if (subName === wideName) warnings[levelKey][title][wideName].add("__WHOLE__");
             else warnings[levelKey][title][wideName].add(subName);
         });
 
