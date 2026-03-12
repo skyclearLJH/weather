@@ -3,7 +3,7 @@ const themeToggle = document.getElementById('theme-toggle');
 const bureauSelect = document.getElementById('bureau-select');
 const body = document.body;
 
-// 총국별 관할 광역지자체 매핑 (WIDE_MAP 결과물과 일치시킴)
+// 총국별 관할 광역지자체 매핑
 const BUREAU_MAPPING = {
     '전국': [],
     '본사': ['서울', '경기', '인천'],
@@ -11,7 +11,7 @@ const BUREAU_MAPPING = {
     '청주총국': ['충북'],
     '전주총국': ['전북'],
     '광주총국': ['전남', '광주'],
-    '제주총국': ['제주도'],
+    '제주총국': ['제주'],
     '춘천총국': ['강원'],
     '대구총국': ['대구', '경북'],
     '부산총국': ['부산', '울산'],
@@ -26,7 +26,9 @@ function getFilteredStations(stations) {
         if (!stn.address) return false;
         const cleanAddress = stn.address.replace(/^\([\u4e00-\u9fa5]+\)\s*/, '').trim();
         const firstWord = cleanAddress.split(/\s+/)[0];
-        return targetRegions.some(region => firstWord.startsWith(region));
+        // 제주도의 경우 '제주'로 시작하는지 체크
+        const targetRegionMatch = targetRegions.some(region => firstWord.startsWith(region));
+        return targetRegionMatch;
     });
 }
 
@@ -76,29 +78,55 @@ async function getStationMapping(authKey) {
     if (cachedStationMapping) return cachedStationMapping;
     const mapping = {};
     const decoder = new TextDecoder('euc-kr');
-    const parseLines = (text) => {
+    
+    const parseLines = (text, isAWS = false) => {
         text.split('\n').forEach(line => {
             if (line.startsWith('#') || !line.trim()) return;
             const parts = line.trim().split(/\s+/);
             if (parts.length > 5) {
                 const id = parts[0];
-                let name = parts[10] || "";
-                let adr = parts.slice(15).join(' ');
-                if (id && name && isNaN(name)) mapping[id] = { name, adr };
+                // SFC와 AWS의 컬럼 위치가 다를 수 있음을 고려
+                let name = isAWS ? parts[1] : (parts[10] || parts[1]);
+                let adr = "";
+                if (isAWS) {
+                    adr = parts.slice(10).join(' ');
+                } else {
+                    adr = parts.slice(15).join(' ');
+                }
+                if (id && name) {
+                    mapping[id] = { 
+                        name: name.replace(/,$/, '').trim(), 
+                        adr: adr.trim() 
+                    };
+                }
             }
         });
     };
+
     try {
+        // 1. 로컬 stations.txt (SFC/AWS 통합 정보)
         const local = await fetch('stations.txt');
         if (local.ok) parseLines(decoder.decode(await local.arrayBuffer()));
-        const res = await fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=SFC&stn=0&authKey=${authKey}`));
-        if (res.ok) parseLines(decoder.decode(await res.arrayBuffer()));
-    } catch (e) {}
+
+        // 2. 기상청 SFC 지점 정보
+        const resSfc = await fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=SFC&stn=0&authKey=${authKey}`));
+        if (resSfc.ok) parseLines(decoder.decode(await resSfc.arrayBuffer()));
+
+        // 3. 기상청 AWS 지점 정보
+        const resAws = await fetch(PROXY_URL + encodeURIComponent(`https://apihub.kma.go.kr/api/typ01/url/stn_inf.php?inf=AWS&stn=0&authKey=${authKey}`));
+        if (resAws.ok) parseLines(decoder.decode(await resAws.arrayBuffer()), true);
+
+    } catch (e) {
+        console.error("Mapping Error:", e);
+    }
     cachedStationMapping = mapping;
     return mapping;
 }
 
-const formatTime = (tm) => `${tm.substring(0,4)}-${tm.substring(4,6)}-${tm.substring(6,8)} ${tm.substring(8,10)}:${tm.substring(10,12)}`;
+const formatTime = (tm) => {
+    if (!tm || tm.length < 12) return tm;
+    return `${tm.substring(0,4)}-${tm.substring(4,6)}-${tm.substring(6,8)} ${tm.substring(8,10)}:${tm.substring(10,12)}`;
+};
 
 async function fetchWeatherRanking(type, mode = 'highest') {
     const isHighest = mode === 'highest';
@@ -119,23 +147,25 @@ async function fetchWeatherRanking(type, mode = 'highest') {
             const p = line.includes(',') ? line.split(',') : line.trim().split(/\s+/);
             if (type === 'current' && p.length >= 9) {
                 const val = parseFloat(p[8]);
-                if (!isNaN(val)) {
-                    const info = stationData[p[1].trim()] || { name: p[1], adr: "" };
+                if (!isNaN(val) && val > -90) { // 결측치 제외
+                    const stnId = p[1].trim();
+                    const info = stationData[stnId] || { name: stnId, adr: "" };
                     stations.push({ name: info.name, val, address: info.adr });
                     lastTm = p[0];
                 }
             } else if (type === 'today' && p.length >= 6) {
                 const val = parseFloat(p[5]);
-                if (!isNaN(val)) {
-                    const info = stationData[p[1].trim()] || { name: p[6]||p[1], adr: "" };
+                if (!isNaN(val) && val > -90) { // 결측치 제외
+                    const stnId = p[1].trim();
+                    const info = stationData[stnId] || { name: p[6] || stnId, adr: "" };
                     stations.push({ name: info.name, val, address: info.adr });
                     lastTm = p[0];
                 }
             }
         });
         stations = getFilteredStations(stations).sort((a,b) => isHighest ? b.val-a.val : a.val-b.val).slice(0,10);
-        bodyEl.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:var(--button-bg);font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address}</td></tr>`).join('');
-        (isHighest?weatherTimeElement:lowTempTimeElement).textContent = `기준 시간: ${lastTm}`;
+        bodyEl.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:var(--button-bg);font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address || '정보 없음'}</td></tr>`).join('');
+        (isHighest?weatherTimeElement:lowTempTimeElement).textContent = `기준 시간: ${formatTime(lastTm)}`;
         containerEl.style.display = 'block'; statusEl.textContent = '조회 완료';
     } catch(e) { statusEl.textContent = '오류 발생'; }
 }
@@ -155,15 +185,16 @@ async function fetchPrecipRanking(type) {
             if (p.length >= 14) {
                 const val = parseFloat(p[type==='1h'?11:13]);
                 if (val > 0) {
-                    const info = stationData[p[1].trim()] || { name: p[1], adr: "" };
+                    const stnId = p[1].trim();
+                    const info = stationData[stnId] || { name: stnId, adr: "" };
                     stations.push({ name: info.name, val, address: info.adr });
                     lastTm = p[0];
                 }
             }
         });
         stations = getFilteredStations(stations).sort((a,b) => b.val-a.val).slice(0,10);
-        precipTableBody.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:#007bff;font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address}</td></tr>`).join('');
-        precipTimeElement.textContent = `기준 시간: ${lastTm}`;
+        precipTableBody.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:#007bff;font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address || '정보 없음'}</td></tr>`).join('');
+        precipTimeElement.textContent = `기준 시간: ${formatTime(lastTm)}`;
         precipResultContainer.style.display = 'block'; precipStatus.textContent = '조회가 완료되었습니다.';
     } catch(e) { precipStatus.textContent = '오류 발생'; }
 }
@@ -183,15 +214,16 @@ async function fetchSnowRanking(type) {
             if (p.length >= 7) {
                 const val = parseFloat(p[6]);
                 if (val > 0) {
-                    const info = stationData[p[1].trim()] || { name: p[2], adr: "" };
+                    const stnId = p[1].trim();
+                    const info = stationData[stnId] || { name: p[2].replace(/,$/, '').trim(), adr: "" };
                     stations.push({ name: info.name, val, address: info.adr });
                     lastTm = p[0];
                 }
             }
         });
         stations = getFilteredStations(stations).sort((a,b) => b.val-a.val).slice(0,10);
-        snowTableBody.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:var(--accent-color);font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address}</td></tr>`).join('');
-        snowTimeElement.textContent = `기준 시간: ${lastTm}`;
+        snowTableBody.innerHTML = stations.map((s,i) => `<tr><td style="padding:12px;font-weight:700;">${i+1}</td><td style="padding:12px;">${s.name}</td><td style="padding:12px;color:var(--accent-color);font-weight:800;">${s.val.toFixed(1)}</td><td style="padding:12px;font-size:0.85rem;color:var(--text-muted);">${s.address || '정보 없음'}</td></tr>`).join('');
+        snowTimeElement.textContent = `기준 시간: ${formatTime(lastTm)}`;
         snowResultContainer.style.display = 'block'; snowStatus.textContent = '조회가 완료되었습니다.';
     } catch(e) { snowStatus.textContent = '오류 발생'; }
 }
@@ -200,7 +232,7 @@ async function fetchSnowRanking(type) {
 const WIDE_MAP = {
     '강원도': '강원', '경기도': '경기', '경상남도': '경남', '경상북도': '경북', 
     '전라남도': '전남', '전라북도': '전북', '충청남도': '충남', '충청북도': '충북',
-    '제주도': '제제주', '제주도전해상': '제주', '제주전해상': '제주',
+    '제주도': '제주', '제주도전해상': '제주', '제주전해상': '제주',
     '서울특별시': '서울', '인천광역시': '인천', '대전광역시': '대전', 
     '광주광역시': '광주', '대구광역시': '대구', '울산광역시': '울산', '부산광역시': '부산',
     '세종특별자치시': '세종'
@@ -216,7 +248,6 @@ async function fetchWeatherWarnings() {
     const getTimeName = (tm) => {
         if (!tm || tm.length < 12) return "";
         const hh = parseInt(tm.substring(8, 10));
-        const mm = tm.substring(10, 12);
         let name = "";
         if (hh < 6) name = "새벽"; else if (hh < 12) name = "오전"; else if (hh < 18) name = "오후"; else name = "밤";
         const today = new Date();
@@ -235,11 +266,7 @@ async function fetchWeatherWarnings() {
         const [fData, pData] = await Promise.all([fetchData('f'), fetchData('p')]);
         const allLines = [...fData.split('\n'), ...pData.split('\n')];
         
-        let warnings = {
-            '경보': {},
-            '주의보': {},
-            '예비특보': {}
-        }; 
+        let warnings = { '경보': {}, '주의보': {}, '예비특보': {} }; 
         const now = new Date();
         const lastTm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -255,11 +282,7 @@ async function fetchWeatherWarnings() {
             const level = p[7];     // '1', '2', '주의보', '경보', '예비'
             const tmEf = p[5];      
 
-            // 광역 지자체명 정제 (강원도 -> 강원, 제주도 -> 제주)
-            let wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|특별자치시|특별자치도/g, '');
-            if (wideName.endsWith('도') && wideName.length > 2) wideName = wideName.slice(0, -1);
-            if (wideName === '제제주') wideName = '제주';
-
+            let wideName = WIDE_MAP[upRegionRaw] || upRegionRaw.replace(/특별시|광역시|특별자치시|특별자치도|도$/g, '');
             if (type.includes('풍랑') && selectedBureau !== '전국') return;
 
             let levelKey = '예비특보';
@@ -274,19 +297,23 @@ async function fetchWeatherWarnings() {
             }
 
             let title = `${type} ${titleType}`;
-            if (level === '예비') title += getTimeName(tmEf);
+            if (level === '예비' || levelKey === '예비특보') {
+                title = `${type} 예비특보${getTimeName(tmEf)}`;
+            }
 
-            // 구역명 정제
             let subName = regionRaw;
-            // 광역지자체명이 포함되어 있으면 제거 (예: "경상북도(울릉도.독도)" -> "(울릉도.독도)")
-            subName = subName.replace(upRegionRaw, '').replace(wideName + '도', '').replace(wideName, '');
-            subName = subName.replace(/[()]/g, '').trim();
+            // 지명 정제: 광역 지명 제거하되 섬 이름(울릉도, 독도 등)은 보존
+            subName = subName.replace(upRegionRaw, '').replace(/[()]/g, '').trim();
+            // "경상북도 울릉도.독도" -> "울릉도.독도"
+            const wideWithDo = wideName + '도';
+            if (subName.startsWith(wideWithDo)) subName = subName.replace(wideWithDo, '').trim();
+            else if (subName.startsWith(wideName)) subName = subName.replace(wideName, '').trim();
             
-            // 시, 군, 구 제거 (단, 울릉도와 같이 '도'로 끝나는 섬 이름은 보존하기 위해 '도'는 제거 대상에서 제외)
-            if (subName.length > 2) {
+            // "시, 군, 구" 제거하되 "도"로 끝나는 섬 이름은 보존
+            if (subName.length > 2 && !['울릉도', '독도', '제주도'].some(island => subName.includes(island))) {
                 subName = subName.replace(/시$|군$|구$/g, '');
             }
-            if (!subName) subName = wideName;
+            if (!subName || subName === wideName) subName = wideName;
 
             if (!warnings[levelKey][title]) warnings[levelKey][title] = {};
             if (!warnings[levelKey][title][wideName]) warnings[levelKey][title][wideName] = new Set();
@@ -301,15 +328,14 @@ async function fetchWeatherWarnings() {
         ['경보', '주의보', '예비특보'].forEach(levelKey => {
             const levelWarnings = warnings[levelKey];
             const titles = Object.keys(levelWarnings).sort();
-            
             let levelHtml = '';
+            
             titles.forEach(title => {
                 const wideRegions = levelWarnings[title];
                 const filteredWideTexts = [];
 
                 Object.keys(wideRegions).forEach(wide => {
                     if (selectedBureau !== '전국' && !targetRegions.includes(wide)) return;
-
                     const subs = Array.from(wideRegions[wide]);
                     if (subs.includes("__WHOLE__") && subs.length === 1) {
                         filteredWideTexts.push(wide);
@@ -332,21 +358,13 @@ async function fetchWeatherWarnings() {
                         <div class="warning-group-header">
                             <span class="warning-badge ${badgeClass}">${levelKey}</span>
                         </div>
-                        <div class="warning-group-body">
-                            ${levelHtml}
-                        </div>
-                    </div>
-                `;
+                        <div class="warning-group-body">${levelHtml}</div>
+                    </div>`;
             }
         });
 
-        if (hasData) {
-            warningList.innerHTML = htmlContent;
-            warningStatus.textContent = '조회 완료';
-        } else {
-            warningList.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">현재 해당 관할 지역에 발효 중인 특보가 없습니다.</div>';
-            warningStatus.textContent = '특보 없음';
-        }
+        warningList.innerHTML = hasData ? htmlContent : '<div style="text-align:center;padding:40px;color:var(--text-muted);">현재 발효 중인 특보가 없습니다.</div>';
+        warningStatus.textContent = hasData ? '조회 완료' : '특보 없음';
         if (lastTm) warningTime.textContent = `기준 시간: ${formatTime(lastTm)}`;
     } catch(e) { console.error(e); warningStatus.textContent = '오류 발생'; }
 }
@@ -354,14 +372,13 @@ async function fetchWeatherWarnings() {
 bureauSelect.addEventListener('change', () => fetchWeatherWarnings());
 window.addEventListener('DOMContentLoaded', () => fetchWeatherWarnings());
 
-// Event Listeners for buttons
+// Event Listeners
 document.getElementById('fetch-weather-today')?.addEventListener('click', () => fetchWeatherRanking('today', 'highest'));
 document.getElementById('fetch-weather-current')?.addEventListener('click', () => fetchWeatherRanking('current', 'highest'));
 document.getElementById('fetch-low-today')?.addEventListener('click', () => fetchWeatherRanking('today', 'lowest'));
 document.getElementById('fetch-low-current')?.addEventListener('click', () => fetchWeatherRanking('current', 'lowest'));
 document.getElementById('fetch-precip-1h')?.addEventListener('click', () => fetchPrecipRanking('1h'));
 document.getElementById('fetch-precip-today')?.addEventListener('click', () => fetchPrecipRanking('today'));
-document.getElementById('fetch-precip-yesterday')?.addEventListener('click', () => fetchPrecipRanking('today')); // Yesterday data logic can be added later if needed
 document.getElementById('fetch-snow-tot')?.addEventListener('click', () => fetchSnowRanking('tot'));
 document.getElementById('fetch-snow-day')?.addEventListener('click', () => fetchSnowRanking('day'));
 
