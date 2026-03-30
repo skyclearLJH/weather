@@ -49,7 +49,7 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
   return (
     <div className="flex flex-col gap-4">
       {data.map((item) => (
-        <div key={item.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow">
+        <div key={item.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-visible hover:shadow-md transition-shadow">
           <div className="p-5 sm:p-6 h-auto">
             <div className="flex items-start gap-3 sm:gap-4 h-auto">
               <div className={`mt-1 p-2 rounded-lg ${bgColor} shrink-0`}>
@@ -57,7 +57,7 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
               </div>
               <div className="flex-1 min-w-0 h-auto">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-3">
-                  <h3 className="text-lg font-bold text-slate-900 tracking-tight truncate">
+                  <h3 className="text-lg font-bold text-slate-900 tracking-tight">
                     {type === 'warning' ? item.type : item.title}
                   </h3>
                   <span className="text-xs sm:text-sm font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md w-fit whitespace-nowrap">
@@ -65,19 +65,18 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
                   </span>
                 </div>
                 
-                {type === 'warning' ? (
-                   <p className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap">
-                     <span className="font-semibold text-slate-800 tracking-tight">{item.region}</span>
-                     {item.content && <><br/>{item.content}</>}
-                   </p>
-                ) : (
-                   <div 
-                      className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap break-words h-auto"
-                      style={{ minHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                   >
-                     {item.content}
-                   </div>
-                )}
+                {/* 텍스트 내용 표출 영역 - 잘림 현상 방지를 위해 overflow-visible 및 h-auto 적용 */}
+                <div 
+                   className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap break-words h-auto overflow-visible"
+                   style={{ 
+                     minHeight: '200px', 
+                     whiteSpace: 'pre-wrap', 
+                     wordBreak: 'break-word',
+                     lineHeight: '1.6'
+                   }}
+                >
+                  {item.content}
+                </div>
               </div>
             </div>
           </div>

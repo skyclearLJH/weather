@@ -17,74 +17,92 @@ const formatToKMATime = (date) => {
 };
 
 /**
- * 각 총국(regionId)에 맞는 기상청 STN(발표관서) 코드 맵핑 (부산, 창원은 둘다 159)
+ * 전국의 각 총국(KBS regional stations)에 대응하는 기상청 발표 관서(STN) 코드 맵핑
  */
 const getStnByRegion = (regionId) => {
   const stnMap = {
-    all: 108,
-    hq: 109,
-    chuncheon: 105,
-    daejeon: 133,
-    cheongju: 131,
-    jeonju: 146,
-    gwangju: 156,
-    jeju: 184,
-    daegu: 143,
-    busan: 159,
-    changwon: 159
+    all: 108,      // 전국(서울)
+    hq: 109,       // 본사(수도권 - 서울/인천/경기)
+    daejeon: 133,  // 대전총국(대전/세종/충남)
+    cheongju: 131, // 청주총국(충북)
+    jeonju: 146,   // 전주총국(전북)
+    gwangju: 156,  // 광주총국(광주/전남)
+    jeju: 184,     // 제주총국(제주)
+    chuncheon: 105, // 춘천총국(강원 - 강릉/춘천)
+    daegu: 143,    // 대구총국(대구/경북)
+    busan: 159,    // 부산총국(부산/울산/경남동부)
+    changwon: 159  // 창원총국(경남서부/남해안) - 부산청 통합 관리
   };
   return stnMap[regionId] ?? 108;
 };
 
 /**
- * 기상청 raw 데이터를 파싱하여 본문 내용만 추출하는 함수
+ * 기상청 raw 데이터를 파싱하여 전체 보고서 내용을 추출하는 함수.
+ * 기상청 typ01 wthr_cmt_rpt 포맷은 한 리포트가 여러 레코드($0, $1, $2...)로 분절되어 들어옴.
+ * $0는 메타데이터와 제목을 포함하고, $1 이후는 본문 파편들을 포함함.
+ * 
  * @param {string} rawData - EUC-KR로 디코딩된 기상청 데이터
  * @param {number} targetStn - 필터링할 발표 관서 코드
- * @returns {string} 파싱된 날씨 해설 내용
+ * @returns {string} 파싱된 전체 날씨 해설 내용 (제목 + 본문 조각 전체)
  */
 const parseKmaReport = (rawData, targetStn) => {
   if (!rawData) return '';
   
-  // 기상청 wthr_cmt_rpt 포맷은 필드 수 제한으로 인해 하나의 긴 보고서가 
-  // 여러 개의 레코드($0#, $1#, $2#...)로 쪼개져 있는 경우가 많음.
-  // 동일한 STN(지점)을 가진 모든 레코드의 텍스트를 하나로 합쳐야 함.
-  
+  // 1. 레코드 단위($ 기호)로 분할
   const blocks = rawData.split('$').filter(b => b.trim().length > 0);
-  let resultParts = [];
-  let latestTmfc = "";
+  
+  // 동일한 시각(TM_FC)에 발표된 레코드들을 그룹화하여 저장
+  let reportsByTmfc = {}; 
+  let activeStnReport = null;
 
-  // 1. 모든 레코드 블록을 순회하며 대상 지점(targetStn)과 매칭되는 데이터 수집
-  for (let i = 0; i < blocks.length; i++) {
-     const fields = blocks[i].split('#');
-     // fields[0]: 레코드 인덱스, fields[1]: STN, fields[2]: TM_FC (발표시각)
-     if (fields.length > 3 && parseInt(fields[1], 10) === targetStn) {
-        const tmfc = fields[2];
+  for (const block of blocks) {
+    // # 기호로 필드 분할
+    const fields = block.split('#');
+    const recordIndex = fields[0];
+
+    // 만약 $0# 으로 시작하면 새로운 리포트의 메타데이터임
+    if (recordIndex === '0') {
+      const stn = parseInt(fields[1], 10);
+      const tmfc = fields[2]; // 발표 시각
+
+      // 우리가 찾는 지점(targetStn)이거나 전국(0)인 경우 캡처 시작
+      if (stn === targetStn || (targetStn === 0 && stn === 108)) {
+        // 인덱스 9번부터가 제목임
+        const title = fields.slice(9).join('#').trim();
         
-        // 새로운 타임스탬프가 발견되면 (더 최신일 경우) 기존 데이터를 비우고 갱신 전략
-        if (tmfc > latestTmfc) {
-          latestTmfc = tmfc;
-          resultParts = [];
-        }
-
-        // 현재 시각이 최신 시각과 같다면 본문을 추가
-        if (tmfc === latestTmfc) {
-           // 9번째 '#' 이후부터가 실제 본문 및 제목 내용임
-           // # 기호가 본문 내부에서 줄바꿈이나 섹션 연동으로 쓰이므로 보존
-           const content = fields.slice(9).join('#').trim();
-           if (content.length > 0) {
-             resultParts.push(content);
-           }
-        }
-     }
+        if (!reportsByTmfc[tmfc]) reportsByTmfc[tmfc] = [];
+        
+        activeStnReport = { contentParts: [title], tmfc };
+        reportsByTmfc[tmfc].push(activeStnReport);
+      } else {
+        // 다른 지점 데이터면 캡처 중단
+        activeStnReport = null;
+      }
+    } else if (activeStnReport && !isNaN(parseInt(recordIndex))) {
+      // $0# 이 아닌 $1#, $2# 등의 레코드 조각인 경우
+      // 현재 추적 중인 리포트(activeStnReport)가 있다면 그 본문 발췌
+      // $1# 이후부터는 인덱스 1번부터가 실제 텍스트 내용임
+      const fragment = fields.slice(1).join('#').trim();
+      if (fragment.length > 0) {
+        activeStnReport.contentParts.push(fragment);
+      }
+    }
   }
 
-  if (resultParts.length === 0) return '해당 지점의 최신 날씨 해설 정보를 기상청에서 찾을 수 없습니다.';
+  // 2. 가장 최신 발표 시각(TM_FC)의 리포트 선택
+  const sortedTmfcs = Object.keys(reportsByTmfc).sort().reverse();
+  if (sortedTmfcs.length === 0) {
+    return `선택한 지역(지점번호 ${targetStn})의 예보 통보문이 없습니다.`;
+  }
 
-  // 2. 조각난 본문들을 하나로 합치고 기상청 구분자(#)를 줄바꿈으로 변환
-  let fullText = resultParts.join('\n\n');
+  const latestTmfc = sortedTmfcs[0];
+  const latestReportGroup = reportsByTmfc[latestTmfc][0]; // 같은 시간대에 하나만 있다고 가정
+
+  // 3. 수집된 모든 조각(제목 + 본문 파편)을 조인하고 내부의 # 기호를 줄바꿈으로 치환
+  let fullContent = latestReportGroup.contentParts.join('\n\n');
   
-  // 본문 중간의 # 도 줄바꿈으로 변환하여 제목#본문 구조를 보기 좋게 만듦
-  return fullText.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').trim();
+  // 기상청은 내부 단락 구분에 # 를 사용하므로 이를 줄바꿈으로 변경하여 가독성 확보
+  return fullContent.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').trim();
 };
 
 /**
@@ -94,14 +112,12 @@ export const fetchWeatherCommentary = async (regionId) => {
   try {
     const now = new Date();
     const tmfc2 = formatToKMATime(now);
-    // 데이터를 충분히 확보하기 위해 48시간 전부터 조회함
+    // 충분한 데이터 확보를 위해 48시간 전부터의 데이터를 조회
     const yesterday = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const tmfc1 = formatToKMATime(yesterday);
     
     const stn = getStnByRegion(regionId);
-    
-    // subcd=12 (단기 전망) 요청
-    const subcd = 12;
+    const subcd = 12; // 단기 전망 고정
 
     const url = `/api/kma/api/typ01/url/wthr_cmt_rpt.php?tmfc1=${tmfc1}&tmfc2=${tmfc2}&stn=${stn}&subcd=${subcd}&disp=0&help=1&authKey=${KMA_AUTH_KEY}`;
 
@@ -114,10 +130,10 @@ export const fetchWeatherCommentary = async (regionId) => {
     const decoder = new TextDecoder('euc-kr');
     const rawText = decoder.decode(arrayBuffer);
     
-    // 본문 추출 및 파싱
+    // 조각난 레코드 조각들을 모두 합치는 개선된 파싱 로직 적용
     const parsedContent = parseKmaReport(rawText, stn);
 
-    // 내부 카드 포맷으로 변환
+    // 내부 카드 포맷으로 반환
     return [
       {
         id: `api-commentary-${regionId}-${now.getTime()}`,
