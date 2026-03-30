@@ -5,6 +5,8 @@ import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import SubMenu from './components/SubMenu';
 
+import { fetchWeatherCommentary } from './api/weatherApi';
+
 import {
   REGIONS,
   SUB_MENUS,
@@ -12,7 +14,7 @@ import {
   MOCK_MAX_TEMP_CURRENT, MOCK_MAX_TEMP_TODAY,
   MOCK_PRECIPITATION_1H, MOCK_PRECIPITATION_TODAY, MOCK_PRECIPITATION_YESTERDAY,
   MOCK_SNOW_CURRENT, MOCK_SNOW_TODAY,
-  MOCK_FORECAST_DOC, MOCK_FORECAST_COMMENTARY,
+  MOCK_FORECAST_DOC,
   MOCK_WARNING_CURRENT, MOCK_WARNING_PRELIMINARY
 } from './data/mockData';
 
@@ -21,10 +23,40 @@ function App() {
   const [selectedTab, setSelectedTab] = useState('minTemp');
   const [selectedSubMenu, setSelectedSubMenu] = useState(SUB_MENUS['minTemp'][0].id);
 
+  // API State
+  const [apiData, setApiData] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [apiError, setApiError] = useState(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const handleRefresh = () => {
+    setRefreshTrigger(prev => prev + 1);
+  };
+
   // When tab changes, reset sub-menu to the first option of the new tab
   useEffect(() => {
     setSelectedSubMenu(SUB_MENUS[selectedTab][0].id);
   }, [selectedTab]);
+
+  // Handle actual API fetching for "날씨해설 (Weather Commentary)"
+  useEffect(() => {
+    const loadApiData = async () => {
+      if (selectedTab === 'forecast' && selectedSubMenu === 'commentary') {
+        setIsLoading(true);
+        setApiError(null);
+        try {
+          const data = await fetchWeatherCommentary();
+          setApiData(data);
+        } catch (err) {
+          setApiError(err.message);
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    };
+    loadApiData();
+  }, [selectedTab, selectedSubMenu, refreshTrigger]);
+
 
   const filterByRegion = (dataArray) => {
     if (selectedRegion === 'all' || !dataArray) return dataArray;
@@ -64,7 +96,7 @@ function App() {
   const getActiveCardData = () => {
     switch (selectedTab) {
       case 'forecast':
-        return selectedSubMenu === 'doc' ? MOCK_FORECAST_DOC : MOCK_FORECAST_COMMENTARY;
+        return selectedSubMenu === 'doc' ? MOCK_FORECAST_DOC : apiData;
       case 'warning':
         return selectedSubMenu === 'current' ? MOCK_WARNING_CURRENT : MOCK_WARNING_PRELIMINARY;
       default:
@@ -83,22 +115,24 @@ function App() {
         <div className="animate-fade-in space-y-4">
           <WeatherTable title={`${contentTitle} Top 10`} data={filteredData} />
           {filteredData.length === 0 && (
-            <div className="py-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
+            <div className="py-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200 shadow-sm">
               해당 지역의 데이터가 없습니다.
             </div>
           )}
         </div>
       );
     } else {
-      const filteredData = filterByRegion(getActiveCardData());
+      const isActiveApiCall = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
+      const filteredData = isActiveApiCall ? getActiveCardData() : filterByRegion(getActiveCardData());
+      
       return (
         <div className="animate-fade-in mt-4 mb-8">
-          <ForecastCard data={filteredData} type={selectedTab} />
-          {filteredData.length === 0 && (
-            <div className="py-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
-              해당 지역의 발효 정보가 없습니다.
-            </div>
-          )}
+          <ForecastCard 
+             data={filteredData} 
+             type={selectedTab} 
+             isLoading={isActiveApiCall && isLoading}
+             error={isActiveApiCall ? apiError : null}
+          />
         </div>
       );
     }
@@ -106,7 +140,11 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] font-sans selection:bg-blue-200 flex flex-col">
-      <Header selectedRegion={selectedRegion} onChangeRegion={setSelectedRegion} />
+      <Header 
+         selectedRegion={selectedRegion} 
+         onChangeRegion={setSelectedRegion} 
+         onRefresh={handleRefresh} 
+      />
       <Navigation selectedTab={selectedTab} onSelectTab={setSelectedTab} />
       
       <main className="max-w-screen-xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-2 flex-grow">
