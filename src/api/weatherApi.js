@@ -96,13 +96,27 @@ const parseKmaReport = (rawData, targetStn) => {
   }
 
   const latestTmfc = sortedTmfcs[0];
-  const latestReportGroup = reportsByTmfc[latestTmfc][0]; // 같은 시간대에 하나만 있다고 가정
+  const latestReportGroup = reportsByTmfc[latestTmfc][0];
 
   // 3. 수집된 모든 조각(제목 + 본문 파편)을 조인하고 내부의 # 기호를 줄바꿈으로 치환
   let fullContent = latestReportGroup.contentParts.join('\n\n');
   
   // 기상청은 내부 단락 구분에 # 를 사용하므로 이를 줄바꿈으로 변경하여 가독성 확보
-  return fullContent.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').replace(/[=#]+$/, '').trim();
+  const content = fullContent.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').replace(/[=#]+$/, '').trim();
+  
+  return { content, tmfc: latestTmfc };
+};
+
+/**
+ * 기상청 발표 시각(TM_FC) 문자열을 읽기 좋은 포맷으로 변환 (YYYYMMDDHHmm -> MM월 DD일 HH:mm 발표)
+ */
+const formatTmfcTime = (tmfc) => {
+  if (!tmfc || tmfc.length < 12) return '시간 정보 없음';
+  const month = tmfc.substring(4, 6);
+  const day = tmfc.substring(6, 8);
+  const hour = tmfc.substring(8, 10);
+  const minute = tmfc.substring(10, 12);
+  return `${parseInt(month, 10)}월 ${parseInt(day, 10)}일 ${hour}:${minute} 발표`;
 };
 
 /**
@@ -131,15 +145,15 @@ export const fetchWeatherCommentary = async (regionId) => {
     const rawText = decoder.decode(arrayBuffer);
     
     // 조각난 레코드 조각들을 모두 합치는 개선된 파싱 로직 적용
-    const parsedContent = parseKmaReport(rawText, stn);
+    const { content, tmfc } = parseKmaReport(rawText, stn);
 
-    // 내부 카드 포맷으로 반환
+    // 내부 카드 포맷으로 변환
     return [
       {
-        id: `api-commentary-${regionId}-${now.getTime()}`,
+        id: `api-commentary-${regionId}-${tmfc}`,
         title: '오늘의 단기 예보 날씨해설 (기상청)',
-        time: `${now.getHours()}시 기준 업데이트`,
-        content: parsedContent,
+        time: formatTmfcTime(tmfc),
+        content: content,
         region: regionId === 'all' ? '전국' : '해당 총국'
       }
     ];
