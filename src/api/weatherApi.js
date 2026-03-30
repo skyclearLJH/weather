@@ -37,13 +37,61 @@ const getStnByRegion = (regionId) => {
 };
 
 /**
+ * 기상청 raw 데이터를 파싱하여 본문 내용만 추출하는 함수
+ * @param {string} rawData - EUC-KR로 디코딩된 기상청 데이터
+ * @param {number} targetStn - 필터링할 발표 관서 코드
+ * @returns {string} 파싱된 날씨 해설 내용
+ */
+const parseKmaReport = (rawData, targetStn) => {
+  if (!rawData) return '';
+  
+  // 1. '#'으로 시작하는 상단 주석 라인들 제거
+  const lines = rawData.split('\n');
+  const contentLines = lines.filter(line => !line.trim().startsWith('#'));
+  const cleanedData = contentLines.join('\n');
+  
+  // 2. '$'로 레코드 구분
+  const records = cleanedData.split('$').filter(r => r.trim().length > 0);
+  
+  let finalContent = '';
+  
+  for (const record of records) {
+    // 레코드 형태: X#STN#TM_FC#...#CONTENT#
+    // '#'으로 필드 구분
+    const fields = record.split('#');
+    
+    // 만약 데이터가 너무 짧으면 무시
+    if (fields.length < 5) continue;
+    
+    const recordStn = parseInt(fields[1], 10);
+    
+    // 타겟 지점번호(STN)가 일치하는지 확인 (targetStn이 0이면 전국용으로 첫번째 레코드 사용)
+    if (targetStn === 0 || recordStn === targetStn) {
+      // 9번째 '#' 이후부터가 실제 본문 내용 (사용자 스니펫 및 기상청 문서 참고)
+      // 레코드 헤더가 'X#STN#TM_FC#TM_EF#...#9#' 형태인 경우 index 9번 이후를 모두 합침
+      // 기상청 wthr_cmt_rpt 포맷상 보통 9번째 필드 이후가 본문 시작입니다.
+      // 또는 마지막 '#'를 찾아서 그 이후를 가져오는 방식이 더 안전할 수도 있습니다.
+      
+      const content = fields.slice(9).join('#').trim();
+      
+      // 만약 내용이 있으면 반환 (내용이 비어있는 경우 여러 레코드 중 있는 것을 찾음)
+      if (content.length > 10) {
+        finalContent = content;
+        break; 
+      }
+    }
+  }
+  
+  return finalContent || '해당하는 날씨 해설 정보가 없습니다.';
+};
+
+/**
  * 기상청 날씨해설 전문(Text) 데이터를 가져오는 함수
  */
 export const fetchWeatherCommentary = async (regionId) => {
   try {
     const now = new Date();
     const tmfc2 = formatToKMATime(now);
-
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const tmfc1 = formatToKMATime(yesterday);
     
@@ -58,15 +106,21 @@ export const fetchWeatherCommentary = async (regionId) => {
         throw new Error(`HTTP Error Status: ${response.status}`);
     }
 
-    const textData = await response.text();
+    // EUC-KR 디코딩을 위해 ArrayBuffer로 받음
+    const arrayBuffer = await response.arrayBuffer();
+    const decoder = new TextDecoder('euc-kr');
+    const rawText = decoder.decode(arrayBuffer);
     
-    // Convert text to our internal card format
+    // 본문 내용만 추출
+    const parsedContent = parseKmaReport(rawText, stn);
+
+    // 내부 카드 포맷으로 변환
     return [
       {
-        id: `api-commentary-${regionId}`,
+        id: `api-commentary-${regionId}-${now.getTime()}`,
         title: '오늘의 날씨해설 (기상청)',
         time: `${now.getHours()}시 기준`,
-        content: textData.trim(),
+        content: parsedContent,
         region: regionId === 'all' ? '전국' : '해당 총국'
       }
     ];
