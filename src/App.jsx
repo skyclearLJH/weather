@@ -45,7 +45,7 @@ function App() {
         setIsLoading(true);
         setApiError(null);
         try {
-          const data = await fetchWeatherCommentary();
+          const data = await fetchWeatherCommentary(selectedRegion);
           setApiData(data);
         } catch (err) {
           setApiError(err.message);
@@ -55,7 +55,7 @@ function App() {
       }
     };
     loadApiData();
-  }, [selectedTab, selectedSubMenu, refreshTrigger]);
+  }, [selectedTab, selectedSubMenu, selectedRegion, refreshTrigger]);
 
 
   const filterByRegion = (dataArray) => {
