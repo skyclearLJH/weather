@@ -21,14 +21,14 @@ const formatToKMATime = (date) => {
  */
 const getStnByRegion = (regionId) => {
   const stnMap = {
-    all: 108, // 전국은 서울(108) 기준
+    all: 108,
     hq: 109,
+    chuncheon: 105,
     daejeon: 133,
     cheongju: 131,
     jeonju: 146,
     gwangju: 156,
     jeju: 184,
-    chuncheon: 105,
     daegu: 143,
     busan: 159,
     changwon: 159
@@ -49,7 +49,7 @@ const parseKmaReport = (rawData, targetStn) => {
   // 여러 개의 레코드($0#, $1#, $2#...)로 쪼개져 있는 경우가 많음.
   // 동일한 STN(지점)을 가진 모든 레코드의 텍스트를 하나로 합쳐야 함.
   
-  const blocks = rawData.split('$');
+  const blocks = rawData.split('$').filter(b => b.trim().length > 0);
   let resultParts = [];
   let latestTmfc = "";
 
@@ -61,15 +61,15 @@ const parseKmaReport = (rawData, targetStn) => {
         const tmfc = fields[2];
         
         // 새로운 타임스탬프가 발견되면 (더 최신일 경우) 기존 데이터를 비우고 갱신 전략
-        // 기상청 API는 보통 정렬되어 오므로, 가장 최근 시각의 뭉치를 가져옴
         if (tmfc > latestTmfc) {
           latestTmfc = tmfc;
           resultParts = [];
         }
 
-        // 현재 블록의 시각이 최신 시각과 같다면 본문을 추가
+        // 현재 시각이 최신 시각과 같다면 본문을 추가
         if (tmfc === latestTmfc) {
            // 9번째 '#' 이후부터가 실제 본문 및 제목 내용임
+           // # 기호가 본문 내부에서 줄바꿈이나 섹션 연동으로 쓰이므로 보존
            const content = fields.slice(9).join('#').trim();
            if (content.length > 0) {
              resultParts.push(content);
@@ -80,13 +80,11 @@ const parseKmaReport = (rawData, targetStn) => {
 
   if (resultParts.length === 0) return '해당 지점의 최신 날씨 해설 정보를 기상청에서 찾을 수 없습니다.';
 
-  // 2. 조각난 본문들을 하나로 합치고 기상청 구분자(#)를 가독성을 위해 줄바꿈으로 변환
-  // 사용자가 제공한 <중점 사항> 등의 태그 앞뒤에 줄바꿈이 생겨 가독성이 살아남.
+  // 2. 조각난 본문들을 하나로 합치고 기상청 구분자(#)를 줄바꿈으로 변환
   let fullText = resultParts.join('\n\n');
   
-  // 내부 기호 및 잔여 # 처리
   // 본문 중간의 # 도 줄바꿈으로 변환하여 제목#본문 구조를 보기 좋게 만듦
-  return fullText.replace(/#/g, '\n\n').trim();
+  return fullText.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').trim();
 };
 
 /**

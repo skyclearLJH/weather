@@ -50,13 +50,13 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
     <div className="flex flex-col gap-4">
       {data.map((item) => (
         <div key={item.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow">
-          <div className="p-5 sm:p-6">
-            <div className="flex items-start gap-3 sm:gap-4 mb-3">
-              <div className={`mt-1 p-2 rounded-lg ${bgColor}`}>
+          <div className="p-5 sm:p-6 h-auto">
+            <div className="flex items-start gap-3 sm:gap-4 h-auto">
+              <div className={`mt-1 p-2 rounded-lg ${bgColor} shrink-0`}>
                 <Icon className={iconColor} size={20} />
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2">
+              <div className="flex-1 min-w-0 h-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-3">
                   <h3 className="text-lg font-bold text-slate-900 tracking-tight truncate">
                     {type === 'warning' ? item.type : item.title}
                   </h3>
@@ -64,12 +64,17 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
                     {item.time}
                   </span>
                 </div>
+                
                 {type === 'warning' ? (
-                   <p className="text-sm sm:text-base text-slate-700 leading-relaxed">
+                   <p className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap">
                      <span className="font-semibold text-slate-800 tracking-tight">{item.region}</span>
+                     {item.content && <><br/>{item.content}</>}
                    </p>
                 ) : (
-                   <div className="text-sm sm:text-base text-slate-700 leading-normal whitespace-pre-wrap break-words overflow-x-auto min-h-[100px]">
+                   <div 
+                      className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap break-words h-auto"
+                      style={{ minHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                   >
                      {item.content}
                    </div>
                 )}
