@@ -82,7 +82,13 @@ const parseKmaReport = (rawData, targetStn, subTitleIndex = 9) => {
   const latestReportGroup = reportsByTmfc[latestTmfc][0];
   let fullContent = latestReportGroup.contentParts.join('\n\n');
   
-  const finalContent = fullContent.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').replace(/[=#]+$/, '').trim();
+  // 가독성 확보 및 불필요한 기호(7777END, =, # 등) 제거
+  const finalContent = fullContent
+    .replace(/#/g, '\n\n')
+    .replace(/\n\n\n+/g, '\n\n')
+    .replace(/7777END/g, '')
+    .replace(/[=#\s]+$/, '')
+    .trim();
 
   return {
     content: finalContent,
