@@ -5,7 +5,7 @@ import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import SubMenu from './components/SubMenu';
 
-import { fetchWeatherCommentary } from './api/weatherApi';
+import { fetchWeatherCommentary, fetchWeatherDoc } from './api/weatherApi';
 
 import {
   REGIONS,
@@ -24,7 +24,8 @@ function App() {
   const [selectedSubMenu, setSelectedSubMenu] = useState(SUB_MENUS['minTemp'][0].id);
 
   // API State
-  const [apiData, setApiData] = useState([]);
+  const [apiData, setApiData] = useState([]); // 날씨해설
+  const [docApiData, setDocApiData] = useState([]); // 통보문
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -38,15 +39,23 @@ function App() {
     setSelectedSubMenu(SUB_MENUS[selectedTab][0].id);
   }, [selectedTab]);
 
-  // Handle actual API fetching for "날씨해설 (Weather Commentary)"
+  // Handle actual API fetching
   useEffect(() => {
     const loadApiData = async () => {
-      if (selectedTab === 'forecast' && selectedSubMenu === 'commentary') {
+      const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
+      const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
+      
+      if (isCommentary || isDoc) {
         setIsLoading(true);
         setApiError(null);
         try {
-          const data = await fetchWeatherCommentary(selectedRegion);
-          setApiData(data);
+          if (isCommentary) {
+            const data = await fetchWeatherCommentary(selectedRegion);
+            setApiData(data);
+          } else {
+            const data = await fetchWeatherDoc(selectedRegion);
+            setDocApiData(data);
+          }
         } catch (err) {
           setApiError(err.message);
         } finally {
@@ -96,7 +105,7 @@ function App() {
   const getActiveCardData = () => {
     switch (selectedTab) {
       case 'forecast':
-        return selectedSubMenu === 'doc' ? MOCK_FORECAST_DOC : apiData;
+        return selectedSubMenu === 'doc' ? docApiData : apiData;
       case 'warning':
         return selectedSubMenu === 'current' ? MOCK_WARNING_CURRENT : MOCK_WARNING_PRELIMINARY;
       default:
@@ -122,11 +131,11 @@ function App() {
         </div>
       );
     } else {
-      const isActiveApiCall = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
+      const isActiveApiCall = selectedTab === 'forecast' && (selectedSubMenu === 'commentary' || selectedSubMenu === 'doc');
       const filteredData = isActiveApiCall ? getActiveCardData() : filterByRegion(getActiveCardData());
       
       return (
-        <div className="animate-fade-in mt-4 mb-8">
+        <div className="animate-fade-in mt-4 mb-8 h-auto">
           <ForecastCard 
              data={filteredData} 
              type={selectedTab} 

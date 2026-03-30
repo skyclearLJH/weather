@@ -37,51 +37,35 @@ const getStnByRegion = (regionId) => {
 };
 
 /**
- * 기상청 raw 데이터를 파싱하여 전체 보고서 내용을 추출하는 함수.
- * 기상청 typ01 wthr_cmt_rpt 포맷은 한 리포트가 여러 레코드($0, $1, $2...)로 분절되어 들어옴.
- * $0는 메타데이터와 제목을 포함하고, $1 이후는 본문 파편들을 포함함.
- * 
- * @param {string} rawData - EUC-KR로 디코딩된 기상청 데이터
- * @param {number} targetStn - 필터링할 발표 관서 코드
- * @returns {string} 파싱된 전체 날씨 해설 내용 (제목 + 본문 조각 전체)
+ * 기상청 raw 데이터를 파싱하여 전체 보고서 내용을 추출하는 공통 함수.
  */
-const parseKmaReport = (rawData, targetStn) => {
-  if (!rawData) return '';
+const parseKmaReport = (rawData, targetStn, subTitleIndex = 9) => {
+  if (!rawData) return { content: '', tmfc: '' };
   
-  // 1. 레코드 단위($ 기호)로 분할
   const blocks = rawData.split('$').filter(b => b.trim().length > 0);
-  
-  // 동일한 시각(TM_FC)에 발표된 레코드들을 그룹화하여 저장
   let reportsByTmfc = {}; 
   let activeStnReport = null;
 
   for (const block of blocks) {
-    // # 기호로 필드 분할
     const fields = block.split('#');
     const recordIndex = fields[0];
 
-    // 만약 $0# 으로 시작하면 새로운 리포트의 메타데이터임
     if (recordIndex === '0') {
       const stn = parseInt(fields[1], 10);
-      const tmfc = fields[2]; // 발표 시각
+      const tmfc = fields[2]; 
 
-      // 우리가 찾는 지점(targetStn)이거나 전국(0)인 경우 캡처 시작
       if (stn === targetStn || (targetStn === 0 && stn === 108)) {
-        // 인덱스 9번부터가 제목임
-        const title = fields.slice(9).join('#').trim();
+        // subTitleIndex 이후부터가 본문 혹은 제목임
+        const title = fields.slice(subTitleIndex).join('#').trim();
         
         if (!reportsByTmfc[tmfc]) reportsByTmfc[tmfc] = [];
         
         activeStnReport = { contentParts: [title], tmfc };
         reportsByTmfc[tmfc].push(activeStnReport);
       } else {
-        // 다른 지점 데이터면 캡처 중단
         activeStnReport = null;
       }
     } else if (activeStnReport && !isNaN(parseInt(recordIndex))) {
-      // $0# 이 아닌 $1#, $2# 등의 레코드 조각인 경우
-      // 현재 추적 중인 리포트(activeStnReport)가 있다면 그 본문 발췌
-      // $1# 이후부터는 인덱스 1번부터가 실제 텍스트 내용임
       const fragment = fields.slice(1).join('#').trim();
       if (fragment.length > 0) {
         activeStnReport.contentParts.push(fragment);
@@ -89,81 +73,105 @@ const parseKmaReport = (rawData, targetStn) => {
     }
   }
 
-  // 2. 가장 최신 발표 시각(TM_FC)의 리포트 선택
   const sortedTmfcs = Object.keys(reportsByTmfc).sort().reverse();
   if (sortedTmfcs.length === 0) {
-    return `선택한 지역(지점번호 ${targetStn})의 예보 통보문이 없습니다.`;
+    return { content: `지점번호 ${targetStn}의 최신 통보문이 없습니다.`, tmfc: '' };
   }
 
   const latestTmfc = sortedTmfcs[0];
   const latestReportGroup = reportsByTmfc[latestTmfc][0];
-
-  // 3. 수집된 모든 조각(제목 + 본문 파편)을 조인하고 내부의 # 기호를 줄바꿈으로 치환
   let fullContent = latestReportGroup.contentParts.join('\n\n');
   
-  // 가독성 확보 및 불필요한 기호 제거
   const finalContent = fullContent.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').replace(/[=#]+$/, '').trim();
 
   return {
     content: finalContent,
-    tmfc: latestTmfc // YYYYMMDDHHMM 형태
+    tmfc: latestTmfc
   };
 };
 
 /**
- * 기상청 날씨해설 전문(Text) 데이터를 가져오는 함수
+ * 날짜 포맷팅 (YYYYMMDDHHMM -> YYYY.MM.DD HH:mm 발표)
+ */
+const formatDisplayTime = (tmfc, fallbackDate) => {
+    if (tmfc && tmfc.length >= 10) {
+        const year = tmfc.substring(0, 4);
+        const month = tmfc.substring(4, 6);
+        const day = tmfc.substring(6, 8);
+        const hour = tmfc.substring(8, 10);
+        const min = tmfc.length >= 12 ? tmfc.substring(10, 12) : '00';
+        return `${year}.${month}.${day} ${hour}:${min} 발표`;
+    }
+    return `${fallbackDate.getHours()}시 기준 업데이트`;
+};
+
+/**
+ * 예보 > 날씨해설 전문(Text) 데이터를 가져오는 함수 (wthr_cmt_rpt.php)
  */
 export const fetchWeatherCommentary = async (regionId) => {
   try {
     const now = new Date();
     const tmfc2 = formatToKMATime(now);
-    // 충분한 데이터 확보를 위해 48시간 전부터의 데이터를 조회
     const yesterday = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const tmfc1 = formatToKMATime(yesterday);
-    
     const stn = getStnByRegion(regionId);
-    const subcd = 12; // 단기 전망 고정
 
-    const url = `/api/kma/api/typ01/url/wthr_cmt_rpt.php?tmfc1=${tmfc1}&tmfc2=${tmfc2}&stn=${stn}&subcd=${subcd}&disp=0&help=1&authKey=${KMA_AUTH_KEY}`;
+    const url = `/api/kma/api/typ01/url/wthr_cmt_rpt.php?tmfc1=${tmfc1}&tmfc2=${tmfc2}&stn=${stn}&subcd=12&disp=0&help=1&authKey=${KMA_AUTH_KEY}`;
 
     const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`HTTP Error Status: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
 
     const arrayBuffer = await response.arrayBuffer();
-    const decoder = new TextDecoder('euc-kr');
-    const rawText = decoder.decode(arrayBuffer);
+    const rawText = new TextDecoder('euc-kr').decode(arrayBuffer);
     
-    // 조각난 레코드 조각들을 모두 합치는 개선된 파싱 로직 적용
-    const { content, tmfc } = parseKmaReport(rawText, stn);
+    const { content, tmfc } = parseKmaReport(rawText, stn, 9);
 
-    // 날짜 포맷팅 (YYYYMMDDHHMM -> YYYY.MM.DD HH:mm 발표)
-    let displayTime = tmfc;
-    if (tmfc && tmfc.length >= 12) {
-      const year = tmfc.substring(0, 4);
-      const month = tmfc.substring(4, 6);
-      const day = tmfc.substring(6, 8);
-      const hour = tmfc.substring(8, 10);
-      const min = tmfc.substring(10, 12);
-      displayTime = `${year}.${month}.${day} ${hour}:${min} 발표`;
-    } else {
-      displayTime = `${now.getHours()}시 기준 업데이트`;
-    }
-
-    // 내부 카드 포맷으로 변환
-    return [
-      {
+    return [{
         id: `api-commentary-${regionId}-${tmfc || now.getTime()}`,
         title: '오늘의 단기 예보 날씨해설 (기상청)',
-        time: displayTime,
+        time: formatDisplayTime(tmfc, now),
         content: content,
         region: regionId === 'all' ? '전국' : '해당 총국'
-      }
-    ];
-
+    }];
   } catch (error) {
-    console.error('[API Fetch Error] 날씨해설 데이터를 가져오는 데 실패했습니다.', error);
-    throw new Error('기상청 서버 응답 오류');
+    console.error('[API Fetch Error] 날씨해설 실패', error);
+    throw new Error('기상청 날씨해설 서버 응답 오류');
+  }
+};
+
+/**
+ * 예보 > 통보문 전문(Text) 데이터를 가져오는 함수 (fct_afs_ds.php)
+ */
+export const fetchWeatherDoc = async (regionId) => {
+  try {
+    const now = new Date();
+    // 통보문 API는 보통 시각 형식이 YYYYMMDDHH로 짧을 수 있음
+    const tmfc2 = formatToKMATime(now).substring(0, 10);
+    const yesterday = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const tmfc1 = formatToKMATime(yesterday).substring(0, 10);
+    
+    const stn = getStnByRegion(regionId);
+
+    const url = `/api/kma/api/typ01/url/fct_afs_ds.php?tmfc1=${tmfc1}&tmfc2=${tmfc2}&stn=${stn}&disp=0&help=1&authKey=${KMA_AUTH_KEY}`;
+
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
+
+    const arrayBuffer = await response.arrayBuffer();
+    const rawText = new TextDecoder('euc-kr').decode(arrayBuffer);
+    
+    // 통보문은 메타데이터 필드가 7개임 (fields[6]까지가 메타데이터, 7부터 본문)
+    const { content, tmfc } = parseKmaReport(rawText, stn, 7);
+
+    return [{
+        id: `api-doc-${regionId}-${tmfc || now.getTime()}`,
+        title: '기상청 공식 기상 통보문',
+        time: formatDisplayTime(tmfc, now),
+        content: content,
+        region: regionId === 'all' ? '전국' : '해당 총국'
+    }];
+  } catch (error) {
+    console.error('[API Fetch Error] 통보문 실패', error);
+    throw new Error('기상청 통보문 서버 응답 오류');
   }
 };
