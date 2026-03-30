@@ -17,11 +17,11 @@ const formatToKMATime = (date) => {
 };
 
 /**
- * 각 총국(regionId)에 맞는 기상청 STN(발표관서) 코드 맵핑 (부산, 창원은 둘다 159)
+ * 각 총국(regionId)에 맞는 기상청 STN(발표관서) 코드 맵팅 (부산, 창원은 둘다 159)
  */
 const getStnByRegion = (regionId) => {
   const stnMap = {
-    all: 0,
+    all: 108, // 전국은 서울(108) 기준
     hq: 109,
     daejeon: 133,
     cheongju: 131,
@@ -33,7 +33,7 @@ const getStnByRegion = (regionId) => {
     busan: 159,
     changwon: 159
   };
-  return stnMap[regionId] ?? 0;
+  return stnMap[regionId] ?? 108;
 };
 
 /**
@@ -53,36 +53,37 @@ const parseKmaReport = (rawData, targetStn) => {
   // 2. '$'로 레코드 구분
   const records = cleanedData.split('$').filter(r => r.trim().length > 0);
   
-  let finalContent = '';
-  
-  for (const record of records) {
-    // 레코드 형태: X#STN#TM_FC#...#CONTENT#
-    // '#'으로 필드 구분
+  if (records.length === 0) return '현재 시간대에 해당하는 날씨 해설 정보가 없습니다.';
+
+  // 가장 최신 데이터를 가져오기 위해 뒤에서부터 검색 (기상청 API는 보통 시간순 정렬)
+  // targetStn이 매칭되는 가장 마지막 레코드를 선택
+  let latestRecord = null;
+  for (let i = records.length - 1; i >= 0; i--) {
+    const record = records[i];
     const fields = record.split('#');
-    
-    // 만약 데이터가 너무 짧으면 무시
     if (fields.length < 5) continue;
     
     const recordStn = parseInt(fields[1], 10);
-    
-    // 타겟 지점번호(STN)가 일치하는지 확인 (targetStn이 0이면 전국용으로 첫번째 레코드 사용)
-    if (targetStn === 0 || recordStn === targetStn) {
-      // 9번째 '#' 이후부터가 실제 본문 내용 (사용자 스니펫 및 기상청 문서 참고)
-      // 레코드 헤더가 'X#STN#TM_FC#TM_EF#...#9#' 형태인 경우 index 9번 이후를 모두 합침
-      // 기상청 wthr_cmt_rpt 포맷상 보통 9번째 필드 이후가 본문 시작입니다.
-      // 또는 마지막 '#'를 찾아서 그 이후를 가져오는 방식이 더 안전할 수도 있습니다.
-      
-      const content = fields.slice(9).join('#').trim();
-      
-      // 만약 내용이 있으면 반환 (내용이 비어있는 경우 여러 레코드 중 있는 것을 찾음)
-      if (content.length > 10) {
-        finalContent = content;
-        break; 
-      }
+    // STN 0인 경우는 전체 검색용이지만, 우리는 특정 지점 데이터를 가져옴
+    if (recordStn === targetStn || targetStn === 0) {
+      latestRecord = record;
+      break;
     }
   }
   
-  return finalContent || '해당하는 날씨 해설 정보가 없습니다.';
+  if (!latestRecord) return '해당 지점의 날씨 해설 정보를 찾을 수 없습니다.';
+
+  const fields = latestRecord.split('#');
+  
+  // 기상청 wthr_cmt_rpt 포맷상 보통 9번째 필드 이후가 본문 시작입니다.
+  // 단기 전망(subcd=12) 등의 경우 필드 구성이 조금씩 다를 수 있으나, 
+  // 보통 마지막 메타데이터 필드 이후가 본문입니다.
+  // 사용자 피드백에 따르면 제목만 나왔다고 하므로, 뒤의 모든 필드를 합쳐서 보여줍니다.
+  
+  const content = fields.slice(9).join('#').trim();
+  
+  // 만약 마지막에 '#'가 남았다면 제거 (기상청 데이터 끝자락 특성)
+  return content.replace(/#$/, '').trim();
 };
 
 /**
@@ -92,34 +93,34 @@ export const fetchWeatherCommentary = async (regionId) => {
   try {
     const now = new Date();
     const tmfc2 = formatToKMATime(now);
+    // 단기 전망을 위해 검색 범위를 조금 넉넉히 (24시간 전부터)
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const tmfc1 = formatToKMATime(yesterday);
     
-    // 발표관서 코드 가져오기
     const stn = getStnByRegion(regionId);
+    
+    // subcd=12 (단기 전망) 고정
+    const subcd = 12;
 
-    // CORS 이슈 방지를 위해 vite.config.js에 설정한 /api/kma 프록시 경로 사용
-    const url = `/api/kma/api/typ01/url/wthr_cmt_rpt.php?tmfc1=${tmfc1}&tmfc2=${tmfc2}&stn=${stn}&subcd=0&disp=0&help=1&authKey=${KMA_AUTH_KEY}`;
+    const url = `/api/kma/api/typ01/url/wthr_cmt_rpt.php?tmfc1=${tmfc1}&tmfc2=${tmfc2}&stn=${stn}&subcd=${subcd}&disp=0&help=1&authKey=${KMA_AUTH_KEY}`;
 
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`HTTP Error Status: ${response.status}`);
     }
 
-    // EUC-KR 디코딩을 위해 ArrayBuffer로 받음
     const arrayBuffer = await response.arrayBuffer();
     const decoder = new TextDecoder('euc-kr');
     const rawText = decoder.decode(arrayBuffer);
     
-    // 본문 내용만 추출
     const parsedContent = parseKmaReport(rawText, stn);
 
     // 내부 카드 포맷으로 변환
     return [
       {
         id: `api-commentary-${regionId}-${now.getTime()}`,
-        title: '오늘의 날씨해설 (기상청)',
-        time: `${now.getHours()}시 기준`,
+        title: '오늘의 단기 예보 날씨해설 (기상청)',
+        time: `${now.getHours()}시 기준 업데이트`,
         content: parsedContent,
         region: regionId === 'all' ? '전국' : '해당 총국'
       }
