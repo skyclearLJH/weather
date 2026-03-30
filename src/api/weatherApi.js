@@ -102,7 +102,7 @@ const parseKmaReport = (rawData, targetStn) => {
   let fullContent = latestReportGroup.contentParts.join('\n\n');
   
   // 기상청은 내부 단락 구분에 # 를 사용하므로 이를 줄바꿈으로 변경하여 가독성 확보
-  return fullContent.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').trim();
+  return fullContent.replace(/#/g, '\n\n').replace(/\n\n\n+/g, '\n\n').replace(/[=#]+$/, '').trim();
 };
 
 /**
