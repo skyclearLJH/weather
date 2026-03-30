@@ -45,29 +45,44 @@ const getStnByRegion = (regionId) => {
 const parseKmaReport = (rawData, targetStn) => {
   if (!rawData) return '';
   
-  // 레코드는 '$'로 구분됨
-  const blocks = rawData.split('$').filter(b => b.trim().length > 0);
+  // 기상청 wthr_cmt_rpt 포맷은 '본문 $0#Metadata#' 형태로, 본문이 메타데이터 '앞'에 위치함.
+  // 즉, $0 로 split 했을 때 index 0 번이 $0 메타데이터가 설명하는 텍스트임.
+  const blocks = rawData.split('$');
   
-  let targetBlock = '';
+  let targetBlockIndex = -1;
   // 최신 데이터를 위해 뒤에서부터 검색
-  for (let i = blocks.length - 1; i >= 0; i--) {
-     const fields = blocks[i].split('#');
-     // fields[0]은 레코드 번호(X), fields[1]은 STN
-     if (fields.length > 2 && (parseInt(fields[1], 10) === targetStn || targetStn === 0)) {
-        targetBlock = blocks[i];
-        break;
-     }
+  for (let i = blocks.length - 1; i >= 1; i--) {
+    const fields = blocks[i].split('#');
+    // fields[0]은 인덱스(0, 1...), fields[1]은 STN 지점번호
+    if (fields.length > 2 && parseInt(fields[1], 10) === targetStn) {
+      targetBlockIndex = i;
+      break;
+    }
   }
 
-  if (!targetBlock) return '해당 지점의 최신 예보 정보를 찾을 수 없습니다.';
+  if (targetBlockIndex === -1) {
+    return '현재 지점(STN ' + targetStn + ')의 최신 예보 정보를 기상청에서 찾을 수 없습니다.';
+  }
 
-  // 레코드 블록 예: "0#108#...#9# CONTENT"
-  // '#'으로 필드를 나누면 처음 9개가 메타데이터 헤더임
-  const fields = targetBlock.split('#');
+  // targetBlockIndex 레코드가 설명하는 텍스트는 그 '앞' 블록에 있음
+  let content = blocks[targetBlockIndex - 1];
   
-  // 9번째 '#' 이후부터가 실제 본문 내용 (인덱스 9번 이후를 모두 합침)
-  // 기상청 데이터 끝자락의 '#'를 제거하고 공백을 정리함
-  return fields.slice(9).join('#').trim().replace(/#$/, '');
+  // 1. 만약 헤더가 포함된 첫 블록(index 0)인 경우 # 시작 라인들 제거
+  if (targetBlockIndex === 1) {
+    content = content.split('\n').filter(l => !l.trim().startsWith('#')).join('\n').trim();
+  } else {
+    // 이전 레코드의 메타데이터(예: 0#108#...#9#)를 건너뛰어야 함
+    const fieldsPrev = content.split('#');
+    if (fieldsPrev.length >= 9) {
+      // 9번째 '#' 이후부터가 본문임
+      content = fieldsPrev.slice(9).join('#').trim();
+    }
+  }
+
+  // 2. 기상청 특유의 '#' 구분자 처리
+  // 본문 내에 위치한 '#' 기호는 사실상 섹션 구분자(엔터) 역할을 하므로 줄바꿈으로 치환
+  // 이를 통해 <중점 사항>, <하늘상태 및 강수> 등이 올바르게 표출됨
+  return content.replace(/#/g, '\n\n').trim();
 };
 
 /**
@@ -77,7 +92,7 @@ export const fetchWeatherCommentary = async (regionId) => {
   try {
     const now = new Date();
     const tmfc2 = formatToKMATime(now);
-    const yesterday = new Date(now.getTime() - 48 * 60 * 60 * 1000); // 넉넉히 48시간 전부터
+    const yesterday = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const tmfc1 = formatToKMATime(yesterday);
     
     const stn = getStnByRegion(regionId);
@@ -96,6 +111,7 @@ export const fetchWeatherCommentary = async (regionId) => {
     
     const parsedContent = parseKmaReport(rawText, stn);
 
+    // 내부 카드 포맷으로 변환
     return [
       {
         id: `api-commentary-${regionId}-${now.getTime()}`,
