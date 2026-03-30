@@ -45,44 +45,36 @@ const getStnByRegion = (regionId) => {
 const parseKmaReport = (rawData, targetStn) => {
   if (!rawData) return '';
   
-  // 기상청 wthr_cmt_rpt 포맷은 '본문 $0#Metadata#' 형태로, 본문이 메타데이터 '앞'에 위치함.
-  // 즉, $0 로 split 했을 때 index 0 번이 $0 메타데이터가 설명하는 텍스트임.
-  const blocks = rawData.split('$');
+  // 기상청 wthr_cmt_rpt 포맷은 '$X#Metadata#본문#본문#...' 형태임.
+  // 즉, $로 split 했을 때 각 블록은 해당 레코드의 메타데이터로 시작하고 그 뒤에 본문이 따름.
+  const blocks = rawData.split('$').filter(b => b.trim().length > 0);
   
-  let targetBlockIndex = -1;
+  let targetBlock = '';
   // 최신 데이터를 위해 뒤에서부터 검색
-  for (let i = blocks.length - 1; i >= 1; i--) {
-    const fields = blocks[i].split('#');
-    // fields[0]은 인덱스(0, 1...), fields[1]은 STN 지점번호
-    if (fields.length > 2 && parseInt(fields[1], 10) === targetStn) {
-      targetBlockIndex = i;
-      break;
-    }
+  for (let i = blocks.length - 1; i >= 0; i--) {
+     const fields = blocks[i].split('#');
+     // fields[0]은 레코드 번호(X), fields[1]은 STN
+     if (fields.length > 2 && parseInt(fields[1], 10) === targetStn) {
+        targetBlock = blocks[i];
+        break;
+     }
   }
 
-  if (targetBlockIndex === -1) {
-    return '현재 지점(STN ' + targetStn + ')의 최신 예보 정보를 기상청에서 찾을 수 없습니다.';
-  }
+  if (!targetBlock) return '선택된 지역의 최신 기상 해설 정보가 없습니다.';
 
-  // targetBlockIndex 레코드가 설명하는 텍스트는 그 '앞' 블록에 있음
-  let content = blocks[targetBlockIndex - 1];
+  // 레코드 블록 예: "0#108#2026...#9#제목#본문1#본문2#..."
+  // '#'으로 필드를 나누면 처음 9개가 메타데이터 헤더임 (0~8 인덱스)
+  const fields = targetBlock.split('#');
   
-  // 1. 만약 헤더가 포함된 첫 블록(index 0)인 경우 # 시작 라인들 제거
-  if (targetBlockIndex === 1) {
-    content = content.split('\n').filter(l => !l.trim().startsWith('#')).join('\n').trim();
-  } else {
-    // 이전 레코드의 메타데이터(예: 0#108#...#9#)를 건너뛰어야 함
-    const fieldsPrev = content.split('#');
-    if (fieldsPrev.length >= 9) {
-      // 9번째 '#' 이후부터가 본문임
-      content = fieldsPrev.slice(9).join('#').trim();
-    }
-  }
+  if (fields.length <= 9) return '데이터 포맷 오류: 본문 내용을 찾을 수 없습니다.';
 
-  // 2. 기상청 특유의 '#' 구분자 처리
-  // 본문 내에 위치한 '#' 기호는 사실상 섹션 구분자(엔터) 역할을 하므로 줄바꿈으로 치환
-  // 이를 통해 <중점 사항>, <하늘상태 및 강수> 등이 올바르게 표출됨
-  return content.replace(/#/g, '\n\n').trim();
+  // 9번째 필드(인덱스 9)부터 끝까지가 실제 본문 및 제목 정보임.
+  // 기상청은 본문 내의 섹션(중점 사항 등) 구분을 위해 '#'를 사용하므로, 
+  // 이를 줄바꿈(\n\n)으로 변환하여 가독성 있게 합침.
+  const bodyParts = fields.slice(9).map(part => part.trim()).filter(part => part.length > 0);
+  
+  // 만약 제목과 본문이 나눠져 있다면 줄바꿈으로 연결
+  return bodyParts.join('\n\n');
 };
 
 /**
