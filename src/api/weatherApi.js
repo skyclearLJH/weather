@@ -17,22 +17,18 @@ const formatToKMATime = (date) => {
 };
 
 /**
- * 각 총국(regionId)에 맞는 기상청 STN(발표관서) 코드 맵핑
- * 전국: 108 (전국 요약) / 본사: 109 (서울/인천/경기)
- * 춘천: 105 (강원) / 대전: 133 (충남/대전) / 청주: 131 (충북)
- * 전주: 146 (전북) / 광주: 156 (전남/광주) / 제주: 184 (제주)
- * 대구: 143 (경북/대구) / 부산: 159 (경남/부산/울산) / 창원: 159 (경남)
+ * 각 총국(regionId)에 맞는 기상청 STN(발표관서) 코드 맵핑 (부산, 창원은 둘다 159)
  */
 const getStnByRegion = (regionId) => {
   const stnMap = {
-    all: 108,
+    all: 108, // 전국은 서울(108) 기준
     hq: 109,
-    chuncheon: 105,
     daejeon: 133,
     cheongju: 131,
     jeonju: 146,
     gwangju: 156,
     jeju: 184,
+    chuncheon: 105,
     daegu: 143,
     busan: 159,
     changwon: 159
@@ -49,37 +45,48 @@ const getStnByRegion = (regionId) => {
 const parseKmaReport = (rawData, targetStn) => {
   if (!rawData) return '';
   
-  // 사용자 지침: $X#STN#... 형태의 구분자를 찾고, 해당 구분자부터 다음 구분자가 나오기 전까지의 모든 텍스트를 추출함
-  // Metadata fields(9개)를 제외한 나머지 모든 텍스트를 조인
+  // 기상청 wthr_cmt_rpt 포맷은 필드 수 제한으로 인해 하나의 긴 보고서가 
+  // 여러 개의 레코드($0#, $1#, $2#...)로 쪼개져 있는 경우가 많음.
+  // 동일한 STN(지점)을 가진 모든 레코드의 텍스트를 하나로 합쳐야 함.
   
-  // 1. 모든 레코드 블록 분리 ($ 기호 기준)
   const blocks = rawData.split('$');
-  let targetBlocks = [];
+  let resultParts = [];
+  let latestTmfc = "";
 
+  // 1. 모든 레코드 블록을 순회하며 대상 지점(targetStn)과 매칭되는 데이터 수집
   for (let i = 0; i < blocks.length; i++) {
-    const block = blocks[i];
-    // 레코드 시작 포맷 확인: "번호#지점번호#"
-    // 예: "0#105#2026..."
-    const fields = block.split('#');
-    
-    // fields[0]은 레코드 번호, fields[1]은 STN (지점번호)
-    if (fields.length > 2 && parseInt(fields[1], 10) === targetStn) {
-      // 9번째 필드(인덱스 9)부터가 실제 본문 및 제목 내용임
-      // 제목과 여러 본문 섹션이 '#'로 구분되어 들어오므로, 이를 모두 합쳐서 표출
-      const content = fields.slice(9).join('\n\n').trim();
-      if (content.length > 0) {
-        targetBlocks.push(content);
-      }
-    }
+     const fields = blocks[i].split('#');
+     // fields[0]: 레코드 인덱스, fields[1]: STN, fields[2]: TM_FC (발표시각)
+     if (fields.length > 3 && parseInt(fields[1], 10) === targetStn) {
+        const tmfc = fields[2];
+        
+        // 새로운 타임스탬프가 발견되면 (더 최신일 경우) 기존 데이터를 비우고 갱신 전략
+        // 기상청 API는 보통 정렬되어 오므로, 가장 최근 시각의 뭉치를 가져옴
+        if (tmfc > latestTmfc) {
+          latestTmfc = tmfc;
+          resultParts = [];
+        }
+
+        // 현재 블록의 시각이 최신 시각과 같다면 본문을 추가
+        if (tmfc === latestTmfc) {
+           // 9번째 '#' 이후부터가 실제 본문 및 제목 내용임
+           const content = fields.slice(9).join('#').trim();
+           if (content.length > 0) {
+             resultParts.push(content);
+           }
+        }
+     }
   }
 
-  if (targetBlocks.length === 0) {
-    return `지점번호 ${targetStn}에 대한 최신 기상 예보 전문이 없습니다.`;
-  }
+  if (resultParts.length === 0) return '해당 지점의 최신 날씨 해설 정보를 기상청에서 찾을 수 없습니다.';
 
-  // 가장 최신(마지막) 레코드 반환
-  // 내부의 잔여 '#' 기호가 있다면 줄바꿈으로 통일하여 <중점 사항> 등이 잘 보이도록 처리
-  return targetBlocks[targetBlocks.length - 1].replace(/#/g, '\n\n').trim();
+  // 2. 조각난 본문들을 하나로 합치고 기상청 구분자(#)를 가독성을 위해 줄바꿈으로 변환
+  // 사용자가 제공한 <중점 사항> 등의 태그 앞뒤에 줄바꿈이 생겨 가독성이 살아남.
+  let fullText = resultParts.join('\n\n');
+  
+  // 내부 기호 및 잔여 # 처리
+  // 본문 중간의 # 도 줄바꿈으로 변환하여 제목#본문 구조를 보기 좋게 만듦
+  return fullText.replace(/#/g, '\n\n').trim();
 };
 
 /**
