@@ -295,3 +295,10 @@ export const fetchWeatherWarnings = async (regionId) => {
     throw new Error('기상청 특보 서버 응답 오류');
   }
 };
+
+/**
+ * 기상특보 종합 상황도 이미지 URL 반환
+ */
+export const getWarningImageUrl = (trigger = 0) => {
+  return `/api/kma/api/typ03/cgi/wrn/nph-wrn7?out=0&tmef=1&city=1&name=0&tm=&lon=127.7&lat=36.1&range=300&size=685&wrn=W,R,C,D,O,V,T,S,Y,H,&authKey=${KMA_AUTH_KEY}&_ts=${trigger}`;
+};

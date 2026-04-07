@@ -5,7 +5,7 @@ import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import SubMenu from './components/SubMenu';
 
-import { fetchWeatherCommentary, fetchWeatherDoc, fetchWeatherWarnings } from './api/weatherApi';
+import { fetchWeatherCommentary, fetchWeatherDoc, fetchWeatherWarnings, getWarningImageUrl } from './api/weatherApi';
 
 import {
   REGIONS,
@@ -140,7 +140,17 @@ function App() {
       const filteredData = isActiveApiCall ? getActiveCardData() : filterByRegion(getActiveCardData());
       
       return (
-        <div className="animate-fade-in mt-4 mb-8 h-auto">
+        <div className="animate-fade-in mt-4 mb-8 h-auto flex flex-col gap-4">
+          {selectedTab === 'warning' && (
+             <div className="w-full flex justify-center bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+               <img 
+                 src={getWarningImageUrl(refreshTrigger)} 
+                 alt="기상특보 상황도" 
+                 className="max-w-full h-auto rounded-lg object-contain" 
+                 style={{ maxHeight: '685px' }}
+               />
+             </div>
+          )}
           <ForecastCard 
              data={filteredData} 
              type={selectedTab} 
