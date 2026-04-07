@@ -255,27 +255,48 @@ export const fetchWeatherWarnings = async (regionId) => {
       const levelText = rec.lvl === '주의' ? '주의보' : (rec.lvl === '경보' ? '경보' : rec.lvl);
       const typeName = `${rec.wrn}${levelText}`;
 
+      const broadReg = rec.regUpKo;
       if (!targetMap.has(typeName)) {
         targetMap.set(typeName, new Map());
       }
       
-      const timeMap = targetMap.get(typeName);
+      const broadMap = targetMap.get(typeName);
+      if (!broadMap.has(broadReg)) {
+        broadMap.set(broadReg, new Map());
+      }
+      
+      const timeMap = broadMap.get(broadReg);
       if (!timeMap.has(formattedTime)) {
         timeMap.set(formattedTime, new Set());
       }
-      timeMap.get(formattedTime).add(rec.regKo || rec.regUpKo);
+      const detailReg = rec.regKo || rec.regUpKo;
+      timeMap.get(formattedTime).add(detailReg);
     });
     
-    // 이중 Map을 배열 데이터로 가공
+    // 3중 Map(Type -> Broad -> Time)을 배열 데이터로 가공
     const formatOutput = (map) => {
       const result = [];
       let idx = 0;
-      for (const [typeName, timeMap] of map.entries()) {
+      for (const [typeName, broadMap] of map.entries()) {
         const contentLines = [];
-        for (const [timeStr, regionSet] of timeMap.entries()) {
-          const regionsText = Array.from(regionSet).join(', ');
-          contentLines.push(`▶ ${regionsText} (${timeStr})`);
+        for (const [broadReg, timeMap] of broadMap.entries()) {
+          const subGroups = [];
+          for (const [timeStr, regionSet] of timeMap.entries()) {
+            const regionsArray = Array.from(regionSet);
+            if (regionsArray.length === 1 && regionsArray[0] === broadReg) {
+              subGroups.push(`(${timeStr})`);
+            } else {
+              subGroups.push(`${regionsArray.join(', ')} (${timeStr})`);
+            }
+          }
+          
+          if (subGroups.length === 1 && subGroups[0].startsWith('(')) {
+             contentLines.push(`▶ ${broadReg} ${subGroups[0]}`);
+          } else {
+             contentLines.push(`▶ ${broadReg}: ${subGroups.join(', ')}`);
+          }
         }
+        
         result.push({
           id: `warn-${Date.now()}-${idx++}-${Math.random().toString(36).substr(2, 5)}`,
           type: typeName,
