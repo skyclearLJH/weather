@@ -183,6 +183,50 @@ export const fetchWeatherDoc = async (regionId) => {
   }
 };
 
+const getBroadRegion = (regUpKo, regKo) => {
+  const fullStr = `${regUpKo} ${regKo}`;
+  if (fullStr.includes('서해') && fullStr.includes('앞바다')) return '서해 앞바다';
+  if (fullStr.includes('서해') && fullStr.includes('먼바다')) return '서해 먼바다';
+  if (fullStr.includes('남해') && fullStr.includes('앞바다')) return '남해 앞바다';
+  if (fullStr.includes('남해') && fullStr.includes('먼바다')) return '남해 먼바다';
+  if (fullStr.includes('동해') && fullStr.includes('앞바다')) return '동해 앞바다';
+  if (fullStr.includes('동해') && fullStr.includes('먼바다')) return '동해 먼바다';
+  if (fullStr.includes('제주') && fullStr.includes('앞바다')) return '제주 앞바다';
+  if (fullStr.includes('제주') && fullStr.includes('먼바다')) return '제주 먼바다';
+  
+  if (fullStr.includes('울릉도') || fullStr.includes('독도')) return '경북';
+  if (fullStr.includes('흑산도') || fullStr.includes('홍도')) return '전남';
+  if (fullStr.includes('서해5도')) return '인천';
+  
+  let broad = regUpKo;
+  broad = broad.replace('경상북도', '경북').replace('경상남도', '경남')
+               .replace('전북자치도', '전북').replace('전라북도', '전북')
+               .replace('전라남도', '전남')
+               .replace('충청북도', '충북').replace('충청남도', '충남')
+               .replace('제주도', '제주도');
+  if (broad.endsWith('도') && broad.length > 2) broad = broad.substring(0, broad.length - 1);
+  if (broad.endsWith('특별시') || broad.endsWith('광역시')) broad = broad.substring(0, 2); 
+  return broad;
+};
+
+const formatDetailOcean = (str) => {
+  let res = str.replace(/^(서해|남해|동해|제주도|제주)/, '');
+  res = res.replace(/(남부|북부|중부|동부|서부|남서|남동|북서|북동)/g, '$1 ')
+           .replace(/(남쪽|북쪽|동쪽|서쪽|남서쪽|남동쪽|북서쪽|북동쪽)/g, '$1 ')
+           .replace(/(안쪽|바깥|앞|먼)/g, '$1 ')
+           .replace(/\s+/g, ' ').trim();
+  res = res.replace(/먼 바다/g, '먼바다').replace(/앞 바다/g, '앞바다').trim();
+  return res;
+};
+
+const formatDetailLand = (str) => {
+  let res = str;
+  res = res.replace(/^(강원도|강원|경기도|경기|충청남도|충남|충청북도|충북|전라남도|전남|전북자치도|전라북도|전북|경상남도|경남|경상북도|경북|제주도|제주|서울특별시|서울|인천광역시|인천|대전광역시|대전|대구광역시|대구|부산광역시|부산|울산광역시|울산|광주광역시|광주|세종특별자치시|세종)/, '');
+  res = res.replace(/\./g, '·');
+  if (!res.trim()) return str.replace(/\./g, '·');
+  return res.trim();
+};
+
 /**
  * 기상청 특보 및 예비특보 실황(wrn_now_data.php) 페칭 함수
  */
@@ -240,68 +284,51 @@ export const fetchWeatherWarnings = async (regionId) => {
       const isPreliminary = rec.tmEf.endsWith('59') || rec.tmEf.endsWith('58');
       const targetMap = isPreliminary ? prelimMap : currentMap;
       
-      // 발효시각 포맷팅
-      let formattedTime = rec.tmEf;
-      if (rec.tmEf && rec.tmEf.length >= 10) {
-        const year = rec.tmEf.substring(0, 4);
-        const month = rec.tmEf.substring(4, 6);
-        const day = rec.tmEf.substring(6, 8);
-        const hour = rec.tmEf.substring(8, 10);
-        const min = rec.tmEf.length >= 12 ? rec.tmEf.substring(10, 12) : '00';
-        formattedTime = `${year}.${month}.${day} ${hour}:${min} 발효`;
+      const levelText = rec.lvl === '주의' ? '주의보' : (rec.lvl === '경보' ? '경보' : rec.lvl);
+      const typeName = `${rec.wrn} ${levelText}`;
+      
+      const detailFull = rec.regKo || rec.regUpKo;
+      const broadReg = getBroadRegion(rec.regUpKo, detailFull);
+      let detailReg = detailFull;
+
+      if (isMarine) {
+        detailReg = formatDetailOcean(detailReg);
+      } else {
+        detailReg = formatDetailLand(detailReg);
       }
 
-      // 표출용 특보 명칭 생성 (주의 -> 주의보)
-      const levelText = rec.lvl === '주의' ? '주의보' : (rec.lvl === '경보' ? '경보' : rec.lvl);
-      const typeName = `${rec.wrn}${levelText}`;
-
-      const broadReg = rec.regUpKo;
       if (!targetMap.has(typeName)) {
         targetMap.set(typeName, new Map());
       }
       
       const broadMap = targetMap.get(typeName);
       if (!broadMap.has(broadReg)) {
-        broadMap.set(broadReg, new Map());
+        broadMap.set(broadReg, new Set());
       }
       
-      const timeMap = broadMap.get(broadReg);
-      if (!timeMap.has(formattedTime)) {
-        timeMap.set(formattedTime, new Set());
-      }
-      const detailReg = rec.regKo || rec.regUpKo;
-      timeMap.get(formattedTime).add(detailReg);
+      broadMap.get(broadReg).add(detailReg);
     });
     
-    // 3중 Map(Type -> Broad -> Time)을 배열 데이터로 가공
+    // 이중 Map(Type -> Broad)을 가공
     const formatOutput = (map) => {
       const result = [];
       let idx = 0;
       for (const [typeName, broadMap] of map.entries()) {
-        const contentLines = [];
-        for (const [broadReg, timeMap] of broadMap.entries()) {
-          const subGroups = [];
-          for (const [timeStr, regionSet] of timeMap.entries()) {
-            const regionsArray = Array.from(regionSet);
-            if (regionsArray.length === 1 && regionsArray[0] === broadReg) {
-              subGroups.push(`(${timeStr})`);
-            } else {
-              subGroups.push(`${regionsArray.join(', ')} (${timeStr})`);
-            }
-          }
-          
-          if (subGroups.length === 1 && subGroups[0].startsWith('(')) {
-             contentLines.push(`▶ ${broadReg} ${subGroups[0]}`);
-          } else {
-             contentLines.push(`▶ ${broadReg}: ${subGroups.join(', ')}`);
-          }
+        const broadGroups = [];
+        for (const [broadReg, detailSet] of broadMap.entries()) {
+           const details = Array.from(detailSet).filter(d => d && d !== broadReg);
+           if (details.length === 0) {
+             broadGroups.push(`${broadReg}`);
+           } else {
+             broadGroups.push(`${broadReg}(${details.join('·')})`);
+           }
         }
         
         result.push({
           id: `warn-${Date.now()}-${idx++}-${Math.random().toString(36).substr(2, 5)}`,
           type: typeName,
           time: '',
-          content: contentLines.join('\n')
+          content: broadGroups.join(', ')
         });
       }
       return result;
