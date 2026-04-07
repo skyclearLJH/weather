@@ -60,9 +60,11 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
                   <h3 className="text-lg font-bold text-slate-900 tracking-tight">
                     {type === 'warning' ? item.type : item.title}
                   </h3>
-                  <span className="text-xs sm:text-sm font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md w-fit whitespace-nowrap">
-                    {item.time}
-                  </span>
+                  {item.time && (
+                    <span className="text-xs sm:text-sm font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md w-fit whitespace-nowrap">
+                      {item.time}
+                    </span>
+                  )}
                 </div>
                 
                 {/* 텍스트 내용 표출 영역 - 잘림 현상 방지를 위해 overflow-visible 및 h-auto 적용 */}

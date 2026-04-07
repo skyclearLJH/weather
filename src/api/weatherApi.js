@@ -251,26 +251,40 @@ export const fetchWeatherWarnings = async (regionId) => {
         formattedTime = `${year}.${month}.${day} ${hour}:${min} 발효`;
       }
 
-      // 동일 발효조건 문자열 결합을 위한 해시 키 생성
-      const key = `${rec.wrn}:${rec.lvl}:${rec.cmd}:${rec.tmEf}`;
-      if (!targetMap.has(key)) {
-        targetMap.set(key, {
-          type: `${rec.wrn}${rec.lvl} ${rec.cmd}`,
-          time: formattedTime,
-          regions: new Set()
-        });
+      // 표출용 특보 명칭 생성 (주의 -> 주의보)
+      const levelText = rec.lvl === '주의' ? '주의보' : (rec.lvl === '경보' ? '경보' : rec.lvl);
+      const typeName = `${rec.wrn}${levelText}`;
+
+      if (!targetMap.has(typeName)) {
+        targetMap.set(typeName, new Map());
       }
-      // 구역이름 추가
-      targetMap.get(key).regions.add(rec.regKo || rec.regUpKo);
+      
+      const timeMap = targetMap.get(typeName);
+      if (!timeMap.has(formattedTime)) {
+        timeMap.set(formattedTime, new Set());
+      }
+      timeMap.get(formattedTime).add(rec.regKo || rec.regUpKo);
     });
     
-    // Set을 배열로 가공 및 Map -> Array 화
-    const formatOutput = (map) => Array.from(map.values()).map((g, idx) => ({
-      id: `warn-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
-      type: g.type,
-      time: g.time,
-      content: Array.from(g.regions).join(', ')
-    }));
+    // 이중 Map을 배열 데이터로 가공
+    const formatOutput = (map) => {
+      const result = [];
+      let idx = 0;
+      for (const [typeName, timeMap] of map.entries()) {
+        const contentLines = [];
+        for (const [timeStr, regionSet] of timeMap.entries()) {
+          const regionsText = Array.from(regionSet).join(', ');
+          contentLines.push(`${regionsText}(${timeStr})`);
+        }
+        result.push({
+          id: `warn-${Date.now()}-${idx++}-${Math.random().toString(36).substr(2, 5)}`,
+          type: typeName,
+          time: '',
+          content: contentLines.join('\n')
+        });
+      }
+      return result;
+    };
     
     return {
       current: formatOutput(currentMap),
