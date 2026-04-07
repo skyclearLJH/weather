@@ -300,5 +300,13 @@ export const fetchWeatherWarnings = async (regionId) => {
  * 기상특보 종합 상황도 이미지 URL 반환
  */
 export const getWarningImageUrl = (trigger = 0) => {
-  return `/api/kma/api/typ03/cgi/wrn/nph-wrn7?out=0&tmef=1&city=1&name=0&tm=&lon=127.7&lat=36.1&range=300&size=685&wrn=W,R,C,D,O,V,T,S,Y,H,&authKey=${KMA_AUTH_KEY}&_ts=${trigger}`;
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = padZero(now.getMonth() + 1);
+  const dd = padZero(now.getDate());
+  const hh = padZero(now.getHours());
+  const mi = padZero(now.getMinutes());
+  const tmStr = `${yyyy}${mm}${dd}${hh}${mi}`;
+
+  return `/api/kma/api/typ03/cgi/wrn/nph-wrn7?out=0&tmef=1&city=1&name=0&tm=${tmStr}&lon=127.7&lat=36.1&range=300&size=685&wrn=W,R,C,D,O,V,T,S,Y,H,&authKey=${KMA_AUTH_KEY}&_ts=${trigger}`;
 };
