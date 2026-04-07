@@ -9,14 +9,14 @@ export const INITIAL_TABS = [
 
 export const REGIONS = [
   { id: 'all', label: '전국', keywords: [] },
-  { id: 'hq', label: '본사', keywords: ['서울', '인천', '경기'] },
+  { id: 'hq', label: '본사', keywords: ['서울', '인천', '경기', '서해5도'] },
   { id: 'daejeon', label: '대전총국', keywords: ['대전', '세종', '충청남도', '충남'] },
   { id: 'cheongju', label: '청주총국', keywords: ['충청북도', '충북'] },
   { id: 'jeonju', label: '전주총국', keywords: ['전라북도', '전북'] },
-  { id: 'gwangju', label: '광주총국', keywords: ['광주', '전라남도', '전남'] },
+  { id: 'gwangju', label: '광주총국', keywords: ['광주', '전라남도', '전남', '흑산도.홍도'] },
   { id: 'jeju', label: '제주총국', keywords: ['제주'] },
   { id: 'chuncheon', label: '춘천총국', keywords: ['강원'] },
-  { id: 'daegu', label: '대구총국', keywords: ['대구', '경상북도', '경북'] },
+  { id: 'daegu', label: '대구총국', keywords: ['대구', '경상북도', '경북', '울릉도.독도'] },
   { id: 'busan', label: '부산총국', keywords: ['부산', '울산'] },
   { id: 'changwon', label: '창원총국', keywords: ['경상남도', '경남'] },
 ];
