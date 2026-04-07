@@ -1,4 +1,5 @@
 import { KMA_AUTH_KEY } from '../utils/constants';
+import { REGIONS } from '../data/mockData';
 
 /**
  * 10보다 작은 숫자에 0을 붙여 2자리로 만드는 헬퍼 함수
@@ -179,5 +180,104 @@ export const fetchWeatherDoc = async (regionId) => {
   } catch (error) {
     console.error('[API Fetch Error] 통보문 실패', error);
     throw new Error('기상청 통보문 서버 응답 오류');
+  }
+};
+
+/**
+ * 기상청 특보 및 예비특보 실황(wrn_now_data.php) 페칭 함수
+ */
+export const fetchWeatherWarnings = async (regionId) => {
+  try {
+    const url = `/api/kma/api/typ01/url/wrn_now_data.php?fe=f&tm=&disp=0&help=1&authKey=${KMA_AUTH_KEY}`;
+
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP Error Status: ${response.status}`);
+
+    const arrayBuffer = await response.arrayBuffer();
+    const rawText = new TextDecoder('euc-kr').decode(arrayBuffer);
+    
+    const lines = rawText.split('\n');
+    const records = [];
+    
+    for (const line of lines) {
+      if (!line || line.trim().startsWith('#')) continue;
+      const fields = line.split(',').map(s => s.trim());
+      if (fields.length >= 10) {
+        records.push({
+          regUpKo: fields[1],
+          regKo: fields[3],
+          tmFc: fields[4],
+          tmEf: fields[5],
+          wrn: fields[6],
+          lvl: fields[7],
+          cmd: fields[8],
+          edTm: fields[9]
+        });
+      }
+    }
+    
+    const currentMap = new Map();
+    const prelimMap = new Map();
+    
+    const targetRegionObj = REGIONS.find(r => r.id === regionId);
+    
+    records.forEach(rec => {
+      // 해상 특보 필터링 규칙 (전국 'all' 일 때만 표시)
+      const isMarine = /해상|바다|앞바다|먼바다/.test(rec.regUpKo) || /해상|바다|앞바다|먼바다/.test(rec.regKo);
+      if (isMarine && regionId !== 'all') return;
+      
+      // 내륙 특보 필터링 규칙 (all이 아닐 경우 키워드 매칭)
+      if (!isMarine && regionId !== 'all') {
+        if (targetRegionObj && targetRegionObj.keywords.length > 0) {
+          const match = targetRegionObj.keywords.some(kw => 
+            rec.regUpKo.includes(kw) || rec.regKo.includes(kw)
+          );
+          if (!match) return; // 포함 안 되면 건너뜀
+        }
+      }
+      
+      // 예비특보 분리 규칙 (TM_EF 끝자리가 59 또는 58)
+      const isPreliminary = rec.tmEf.endsWith('59') || rec.tmEf.endsWith('58');
+      const targetMap = isPreliminary ? prelimMap : currentMap;
+      
+      // 발효시각 포맷팅
+      let formattedTime = rec.tmEf;
+      if (rec.tmEf && rec.tmEf.length >= 10) {
+        const year = rec.tmEf.substring(0, 4);
+        const month = rec.tmEf.substring(4, 6);
+        const day = rec.tmEf.substring(6, 8);
+        const hour = rec.tmEf.substring(8, 10);
+        const min = rec.tmEf.length >= 12 ? rec.tmEf.substring(10, 12) : '00';
+        formattedTime = `${year}.${month}.${day} ${hour}:${min} 발효`;
+      }
+
+      // 동일 발효조건 문자열 결합을 위한 해시 키 생성
+      const key = `${rec.wrn}:${rec.lvl}:${rec.cmd}:${rec.tmEf}`;
+      if (!targetMap.has(key)) {
+        targetMap.set(key, {
+          type: `${rec.wrn}${rec.lvl} ${rec.cmd}`,
+          time: formattedTime,
+          regions: new Set()
+        });
+      }
+      // 구역이름 추가
+      targetMap.get(key).regions.add(rec.regKo || rec.regUpKo);
+    });
+    
+    // Set을 배열로 가공 및 Map -> Array 화
+    const formatOutput = (map) => Array.from(map.values()).map((g, idx) => ({
+      id: `warn-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
+      type: g.type,
+      time: g.time,
+      content: Array.from(g.regions).join(', ')
+    }));
+    
+    return {
+      current: formatOutput(currentMap),
+      preliminary: formatOutput(prelimMap)
+    };
+  } catch (error) {
+    console.error('[API Fetch Error] 특보/예비특보 실패', error);
+    throw new Error('기상청 특보 서버 응답 오류');
   }
 };

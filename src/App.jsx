@@ -5,7 +5,7 @@ import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import SubMenu from './components/SubMenu';
 
-import { fetchWeatherCommentary, fetchWeatherDoc } from './api/weatherApi';
+import { fetchWeatherCommentary, fetchWeatherDoc, fetchWeatherWarnings } from './api/weatherApi';
 
 import {
   REGIONS,
@@ -26,6 +26,7 @@ function App() {
   // API State
   const [apiData, setApiData] = useState([]); // 날씨해설
   const [docApiData, setDocApiData] = useState([]); // 통보문
+  const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] }); // 특보 및 예비특보
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -44,17 +45,21 @@ function App() {
     const loadApiData = async () => {
       const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
       const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
+      const isWarning = selectedTab === 'warning';
       
-      if (isCommentary || isDoc) {
+      if (isCommentary || isDoc || isWarning) {
         setIsLoading(true);
         setApiError(null);
         try {
           if (isCommentary) {
             const data = await fetchWeatherCommentary(selectedRegion);
             setApiData(data);
-          } else {
+          } else if (isDoc) {
             const data = await fetchWeatherDoc(selectedRegion);
             setDocApiData(data);
+          } else if (isWarning) {
+            const data = await fetchWeatherWarnings(selectedRegion);
+            setWarningApiData(data);
           }
         } catch (err) {
           setApiError(err.message);
@@ -107,7 +112,7 @@ function App() {
       case 'forecast':
         return selectedSubMenu === 'doc' ? docApiData : apiData;
       case 'warning':
-        return selectedSubMenu === 'current' ? MOCK_WARNING_CURRENT : MOCK_WARNING_PRELIMINARY;
+        return selectedSubMenu === 'current' ? warningApiData.current : warningApiData.preliminary;
       default:
         return [];
     }
@@ -131,7 +136,7 @@ function App() {
         </div>
       );
     } else {
-      const isActiveApiCall = selectedTab === 'forecast' && (selectedSubMenu === 'commentary' || selectedSubMenu === 'doc');
+      const isActiveApiCall = (selectedTab === 'forecast' && (selectedSubMenu === 'commentary' || selectedSubMenu === 'doc')) || selectedTab === 'warning';
       const filteredData = isActiveApiCall ? getActiveCardData() : filterByRegion(getActiveCardData());
       
       return (
