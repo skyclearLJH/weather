@@ -38,6 +38,25 @@ const getStnByRegion = (regionId) => {
 };
 
 /**
+ * 지점 번호(STN)를 바탕으로 발표 관서 이름을 반환하는 함수
+ */
+const getIssuingOfficeName = (stn) => {
+  const officeMap = {
+    108: '기상청',
+    109: '수도권청',
+    133: '대전청',
+    131: '청주청',
+    146: '전주청',
+    156: '광주청',
+    184: '제주청',
+    105: '강원청',
+    143: '대구청',
+    159: '부산청'
+  };
+  return officeMap[stn] ?? '기상청';
+};
+
+/**
  * 기상청 raw 데이터를 파싱하여 전체 보고서 내용을 추출하는 공통 함수.
  */
 const parseKmaReport = (rawData, targetStn, subTitleIndex = 9) => {
@@ -135,7 +154,7 @@ export const fetchWeatherCommentary = async (regionId) => {
 
     return [{
         id: `api-commentary-${regionId}-${tmfc || now.getTime()}`,
-        title: '오늘의 단기 예보 날씨해설 (기상청)',
+        title: `날씨해설(${getIssuingOfficeName(stn)})`,
         time: formatDisplayTime(tmfc, now),
         content: content,
         region: regionId === 'all' ? '전국' : '해당 총국'
@@ -172,7 +191,7 @@ export const fetchWeatherDoc = async (regionId) => {
 
     return [{
         id: `api-doc-${regionId}-${tmfc || now.getTime()}`,
-        title: '기상청 공식 기상 통보문',
+        title: `단기예보(${getIssuingOfficeName(stn)})`,
         time: formatDisplayTime(tmfc, now),
         content: content,
         region: regionId === 'all' ? '전국' : '해당 총국'
