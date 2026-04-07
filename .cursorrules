@@ -1,3 +1,6 @@
 # GitHub Auto Upload Rule
 사용자가 요청한 코딩 작업이나 수정 사항을 전부 완료한 후에는, 
 반드시 별도의 지시가 없더라도 `.agents/workflows/auto-push.md` 에 정의된 내용(git commit & push)을 실행하여 `https://github.com/skyclearLJH/weather` 에 업로드해야 합니다.
+
+# KMA API Auth Key Rule
+사용자의 기상청 API 허브 (KMA API Hub) 영구 인증키는 `KkmPfomzTJyJj36Js9ycNQ` 입니다. 기상청 API 요청과 관련하여 인증키를 사용/언급할 일이 있다면 반드시 이 키를 사용해야 합니다.

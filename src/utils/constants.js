@@ -1,1 +1,1 @@
-export const KMA_AUTH_KEY = 'KXemOYdWQ163pjmHVpNeeQ';
+export const KMA_AUTH_KEY = 'KkmPfomzTJyJj36Js9ycNQ';
