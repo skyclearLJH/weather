@@ -211,8 +211,7 @@ const getBroadRegion = (regUpKo, regKo) => {
 
 const formatDetailOcean = (str) => {
   let res = str.replace(/^(서해|남해|동해|제주도|제주)/, '');
-  res = res.replace(/(남부|북부|중부|동부|서부|남서|남동|북서|북동)/g, '$1 ')
-           .replace(/(남쪽|북쪽|동쪽|서쪽|남서쪽|남동쪽|북서쪽|북동쪽)/g, '$1 ')
+  res = res.replace(/(남동쪽|남서쪽|북동쪽|북서쪽|남쪽|북쪽|동쪽|서쪽|남동|남서|북동|북서|남부|북부|중부|동부|서부)/g, '$1 ')
            .replace(/(안쪽|바깥|앞|먼)/g, '$1 ')
            .replace(/\s+/g, ' ').trim();
   res = res.replace(/먼 바다/g, '먼바다').replace(/앞 바다/g, '앞바다').trim();
@@ -328,7 +327,7 @@ export const fetchWeatherWarnings = async (regionId) => {
           id: `warn-${Date.now()}-${idx++}-${Math.random().toString(36).substr(2, 5)}`,
           type: typeName,
           time: '',
-          content: broadGroups.join(', ')
+          content: broadGroups.map(bg => '▶ ' + bg).join('\n')
         });
       }
       return result;
