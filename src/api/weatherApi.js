@@ -274,7 +274,7 @@ export const fetchWeatherWarnings = async (regionId) => {
         const contentLines = [];
         for (const [timeStr, regionSet] of timeMap.entries()) {
           const regionsText = Array.from(regionSet).join(', ');
-          contentLines.push(`${regionsText}(${timeStr})`);
+          contentLines.push(`▶ ${regionsText} (${timeStr})`);
         }
         result.push({
           id: `warn-${Date.now()}-${idx++}-${Math.random().toString(36).substr(2, 5)}`,
