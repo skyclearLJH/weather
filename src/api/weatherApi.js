@@ -380,7 +380,6 @@ export const getWarningImageUrl = (trigger = 0) => {
 /**
  * 적설(Total) 및 신적설(New) 데이터를 가져오는 함수
  * @param {string} type - 'tot' (적설) 또는 'day' (신적설)
- * @param {string} regionId - 지역 ID
  * @param {string} customTm - 테스트용 시각 (YYYYMMDDHHMM)
  */
 export const fetchSnowData = async (type = 'tot', customTm = null) => {
@@ -389,28 +388,7 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
     // 분 단위는 00으로 고정하여 요청 (기상청 API 특성)
     const tm = customTm || formatToKMATime(now);
     
-    // 1. 적설 관측 지점 정보 가져오기 (이름 및 주소 맵핑용)
-    // stn_snow.php는 지점 정보를 반환함
-    const stnUrl = `/api/kma/api/typ01/url/stn_snow.php?stn=&tm=201601051200&mode=0&help=0&authKey=${KMA_AUTH_KEY}`;
-    const stnRes = await fetch(stnUrl);
-    const stnBuf = await stnRes.arrayBuffer();
-    const stnRaw = new TextDecoder('euc-kr').decode(stnBuf);
-    
-    const stnMap = new Map();
-    const stnLines = stnRaw.split('\n');
-    for (const line of stnLines) {
-      if (!line || line.trim().startsWith('#')) continue;
-      const f = line.trim().split(/\s+/);
-      if (f.length >= 7) {
-        const id = f[0];
-        const name = f[6];
-        // 지점 코드 맵핑 (디버깅 로그)
-        stnMap.set(id, { name, address: name });
-      }
-    }
-    console.log(`[Snow API] 관측지점 ${stnMap.size}개 로드 완료`);
-
-    // 2. 실제 적설 데이터 가져오기
+    // 1. 적설 데이터 가져오기
     const dataUrl = `/api/kma/api/typ01/url/kma_snow1.php?sd=${type}&tm=${tm}&help=0&authKey=${KMA_AUTH_KEY}`;
     const dataRes = await fetch(dataUrl);
     const dataBuf = await dataRes.arrayBuffer();
@@ -421,27 +399,27 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
     
     for (const line of dataLines) {
       if (!line || line.trim().startsWith('#')) continue;
-      // 콤마로 분리하되 빈 필드 제거
-      const f = line.split(',').map(s => s.trim()).filter(s => s.length > 0);
+      // 콤마로 분리 (빈 필드 포함하여 구조 유지)
+      const f = line.split(',').map(s => s.trim());
       
-      if (f.length >= 3) {
-        const id = f[1];
-        // 숫자 이외의 기호 제거 (일부 지점에서 발생하는 ,= 등 대응)
-        const snowStr = f[2].replace(/[^0-9.-]/g, '');
+      // help=0 모드 데이터 구조: YYMMDDHHMI, STN_ID, STN_KO, LON, LAT, STN_SP, SNW, ...
+      // 실제 적설 값은 6번 인덱스에 위치함
+      if (f.length >= 7) {
+        const name = f[2]; // 지점명
+        const snowStr = f[6].replace(/[^0-9.-]/g, ''); // 적설 값 (숫자 이외 기호 제거)
         const snow = parseFloat(snowStr);
         
         if (!isNaN(snow) && snow >= 0) {
-          const stnInfo = stnMap.get(id) || { name: `지점 ${id}`, address: '정보 없음' };
           result.push({
-            name: stnInfo.name,
+            name: name,
             record: `${snow.toFixed(1)} cm`,
             value: snow,
-            address: stnInfo.address
+            address: name
           });
         }
       }
     }
-    console.log(`[Snow API] ${type} 데이터 ${result.length}개 분석 완료 (타겟: ${tm})`);
+    console.log(`[Snow API] ${type} 데이터 ${result.length}개 분석 완료 (타겟 시각: ${tm})`);
 
     // 내림차순 정렬 후 순위 부여
     return result
