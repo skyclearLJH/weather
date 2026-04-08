@@ -108,12 +108,18 @@ function App() {
         return selectedSubMenu === 'current' ? MOCK_MIN_TEMP_CURRENT : MOCK_MIN_TEMP_TODAY;
       case 'maxTemp':
         return selectedSubMenu === 'current' ? MOCK_MAX_TEMP_CURRENT : MOCK_MAX_TEMP_TODAY;
-      case 'precipitation':
-        if (selectedSubMenu === '1h') return MOCK_PRECIPITATION_1H;
-        if (selectedSubMenu === 'today') return MOCK_PRECIPITATION_TODAY;
-        return MOCK_PRECIPITATION_YESTERDAY;
-      case 'snow':
-        return selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
+      case 'precipitation': {
+        const pData = selectedSubMenu === '1h' 
+          ? MOCK_PRECIPITATION_1H 
+          : selectedSubMenu === 'today' 
+            ? MOCK_PRECIPITATION_TODAY 
+            : MOCK_PRECIPITATION_YESTERDAY;
+        return pData.filter(item => parseFloat(item.record) > 0);
+      }
+      case 'snow': {
+        const sData = selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
+        return sData.filter(item => parseFloat(item.record) > 0);
+      }
       default:
         return [];
     }
@@ -160,7 +166,11 @@ function App() {
           <WeatherTable title={`${contentTitle} Top 10`} data={filteredData} />
           {filteredData.length === 0 && (
             <div className="py-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200 shadow-sm">
-              해당 지역의 데이터가 없습니다.
+              {(() => {
+                if (selectedTab === 'snow') return '현재 적설이 관측된 지점이 없습니다.';
+                if (selectedTab === 'precipitation') return '현재 강수가 관측된 지점이 없습니다.';
+                return '해당 지역의 데이터가 없습니다.';
+              })()}
             </div>
           )}
         </div>

@@ -385,43 +385,76 @@ export const getWarningImageUrl = (trigger = 0) => {
 export const fetchSnowData = async (type = 'tot', customTm = null) => {
   try {
     const now = new Date();
-    // 분 단위는 00으로 고정하여 요청 (기상청 API 특성)
     const tm = customTm || formatToKMATime(now);
     
-    // 1. 적설 데이터 가져오기
-    const dataUrl = `/api/kma/api/typ01/url/kma_snow1.php?sd=${type}&tm=${tm}&help=0&authKey=${KMA_AUTH_KEY}`;
-    const dataRes = await fetch(dataUrl);
-    const dataBuf = await dataRes.arrayBuffer();
-    const dataRaw = new TextDecoder('euc-kr').decode(dataBuf);
-    
+    // 1. 지점 정보(stn_snow.php) 페쳐서 주소 맵 만들기
+    const stnUrl = `/api/kma/api/typ01/url/stn_snow.php?stn=&tm=${tm}&mode=0&help=0&authKey=${KMA_AUTH_KEY}`;
+    const [dataRes, stnRes] = await Promise.all([
+      fetch(`/api/kma/api/typ01/url/kma_snow1.php?sd=${type}&tm=${tm}&help=0&authKey=${KMA_AUTH_KEY}`),
+      fetch(stnUrl)
+    ]);
+
+    const [dataBuf, stnBuf] = await Promise.all([dataRes.arrayBuffer(), stnRes.arrayBuffer()]);
+    const decoder = new TextDecoder('euc-kr');
+    const dataRaw = decoder.decode(dataBuf);
+    const stnRaw = decoder.decode(stnBuf);
+
+    // 지점 메타데이터 파싱 (STN_ID -> Address)
+    const stnMetadata = new Map();
+    const SIDO_NAMES = {
+      '11': '서울특별시', '26': '부산광역시', '27': '대구광역시', '28': '인천광역시',
+      '29': '광주광역시', '30': '대전광역시', '31': '울산광역시', '36': '세종특별자치시',
+      '41': '경기도', '42': '강원특별자치도', '43': '충청북도', '44': '충청남도',
+      '45': '전북특별자치도', '46': '전라남도', '47': '경상북도', '48': '경상남도',
+      '50': '제주특별자치도'
+    };
+
+    stnRaw.split('\n').forEach(line => {
+      if (!line || line.trim().startsWith('#')) return;
+      const f = line.trim().split(/\s+/);
+      if (f.length >= 7) {
+        const id = f[0];
+        // 지점명 찾기: 한글이 포함된 필드 찾기 또는 고정 인덱스 (기존 분석 기반)
+        const name = f.find(field => /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(field)) || f[6] || f[5];
+        // 법정동 코드 찾기: 10자리 숫자 필드 찾기
+        const legalCode = f.find(field => /^\d{10}$/.test(field));
+        
+        if (legalCode) {
+          const sidoCode = legalCode.substring(0, 2);
+          const sido = SIDO_NAMES[sidoCode] || '';
+          const address = sido ? `${sido} ${name}` : name;
+          stnMetadata.set(id, { name, address });
+        } else {
+          stnMetadata.set(id, { name, address: name });
+        }
+      }
+    });
+
+    // 2. 적설 데이터 파싱
     const dataLines = dataRaw.split('\n');
     const result = [];
     
     for (const line of dataLines) {
       if (!line || line.trim().startsWith('#')) continue;
-      // 콤마로 분리 (빈 필드 포함하여 구조 유지)
       const f = line.split(',').map(s => s.trim());
       
-      // help=0 모드 데이터 구조: YYMMDDHHMI, STN_ID, STN_KO, LON, LAT, STN_SP, SNW, ...
-      // 실제 적설 값은 6번 인덱스에 위치함
       if (f.length >= 7) {
-        const name = f[2]; // 지점명
-        const snowStr = f[6].replace(/[^0-9.-]/g, ''); // 적설 값 (숫자 이외 기호 제거)
+        const id = f[1];
+        const snowStr = f[6].replace(/[^0-9.-]/g, '');
         const snow = parseFloat(snowStr);
         
-        if (!isNaN(snow) && snow >= 0) {
+        if (!isNaN(snow) && snow > 0) {
+          const meta = stnMetadata.get(id) || { name: f[2], address: f[2] };
           result.push({
-            name: name,
+            name: meta.name,
             record: `${snow.toFixed(1)} cm`,
             value: snow,
-            address: name
+            address: meta.address
           });
         }
       }
     }
-    console.log(`[Snow API] ${type} 데이터 ${result.length}개 분석 완료 (타겟 시각: ${tm})`);
 
-    // 내림차순 정렬 후 순위 부여
     return result
       .sort((a, b) => b.value - a.value)
       .map((item, idx) => ({
