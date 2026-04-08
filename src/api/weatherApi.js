@@ -400,14 +400,15 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
     const stnLines = stnRaw.split('\n');
     for (const line of stnLines) {
       if (!line || line.trim().startsWith('#')) continue;
-      // stn_snow.php는 공백 기준 고정폭에 가까운 형식이므로 연속 공백을 하나로 합쳐서 나눔
       const f = line.trim().split(/\s+/);
       if (f.length >= 7) {
         const id = f[0];
         const name = f[6];
-        stnMap.set(id, { name, address: name }); // 상세 주소가 없으면 이름을 주소로 사용
+        // 지점 코드 맵핑 (디버깅 로그)
+        stnMap.set(id, { name, address: name });
       }
     }
+    console.log(`[Snow API] 관측지점 ${stnMap.size}개 로드 완료`);
 
     // 2. 실제 적설 데이터 가져오기
     const dataUrl = `/api/kma/api/typ01/url/kma_snow1.php?sd=${type}&tm=${tm}&help=0&authKey=${KMA_AUTH_KEY}`;
@@ -420,25 +421,27 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
     
     for (const line of dataLines) {
       if (!line || line.trim().startsWith('#')) continue;
-      // kma_snow1.php는 콤마로 구분됨 (TM, STN, SNW)
-      const f = line.split(',').map(s => s.trim());
+      // 콤마로 분리하되 빈 필드 제거
+      const f = line.split(',').map(s => s.trim()).filter(s => s.length > 0);
+      
       if (f.length >= 3) {
         const id = f[1];
-        const snow = parseFloat(f[2]);
+        // 숫자 이외의 기호 제거 (일부 지점에서 발생하는 ,= 등 대응)
+        const snowStr = f[2].replace(/[^0-9.-]/g, '');
+        const snow = parseFloat(snowStr);
         
-        // 적설량이 0보다 큰 경우만 표시 (보통 적설 데이터는 그런 경우가 유의미함)
-        // 단, 테스트 중에는 0이라도 나오게 할 수 있으나 유인물(WeatherTable) 특성상 큰 값 위주로 정렬 예정
-        if (snow >= 0) {
+        if (!isNaN(snow) && snow >= 0) {
           const stnInfo = stnMap.get(id) || { name: `지점 ${id}`, address: '정보 없음' };
           result.push({
             name: stnInfo.name,
             record: `${snow.toFixed(1)} cm`,
-            value: snow, // 정렬용
+            value: snow,
             address: stnInfo.address
           });
         }
       }
     }
+    console.log(`[Snow API] ${type} 데이터 ${result.length}개 분석 완료 (타겟: ${tm})`);
 
     // 내림차순 정렬 후 순위 부여
     return result
