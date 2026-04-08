@@ -5,7 +5,7 @@ import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import SubMenu from './components/SubMenu';
 
-import { fetchWeatherCommentary, fetchWeatherDoc, fetchWeatherWarnings, getWarningImageUrl } from './api/weatherApi';
+import { fetchWeatherCommentary, fetchWeatherDoc, fetchWeatherWarnings, getWarningImageUrl, fetchSnowData } from './api/weatherApi';
 
 import {
   REGIONS,
@@ -27,9 +27,12 @@ function App() {
   const [apiData, setApiData] = useState([]); // 날씨해설
   const [docApiData, setDocApiData] = useState([]); // 통보문
   const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] }); // 특보 및 예비특보
+  const [snowApiData, setSnowApiData] = useState({ tot: [], day: [] }); // 적설 및 신적설
+  
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [testTime, setTestTime] = useState(null); // 테스트용 시각 (2026.03.02 18:00)
 
   const handleRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
@@ -38,6 +41,7 @@ function App() {
   // When tab changes, reset sub-menu to the first option of the new tab
   useEffect(() => {
     setSelectedSubMenu(SUB_MENUS[selectedTab][0].id);
+    setTestTime(null); // 탭 이동 시 테스트 시각 초기화
   }, [selectedTab]);
 
   // Handle actual API fetching
@@ -46,8 +50,9 @@ function App() {
       const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
       const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
       const isWarning = selectedTab === 'warning';
+      const isSnow = selectedTab === 'snow';
       
-      if (isCommentary || isDoc || isWarning) {
+      if (isCommentary || isDoc || isWarning || isSnow) {
         setIsLoading(true);
         setApiError(null);
         try {
@@ -60,6 +65,13 @@ function App() {
           } else if (isWarning) {
             const data = await fetchWeatherWarnings(selectedRegion);
             setWarningApiData(data);
+          } else if (isSnow) {
+            // 적설과 신적설 모두 페칭 (병렬)
+            const [totData, dayData] = await Promise.all([
+              fetchSnowData('tot', testTime),
+              fetchSnowData('day', testTime)
+            ]);
+            setSnowApiData({ tot: totData, day: dayData });
           }
         } catch (err) {
           setApiError(err.message);
@@ -69,7 +81,7 @@ function App() {
       }
     };
     loadApiData();
-  }, [selectedTab, selectedSubMenu, selectedRegion, refreshTrigger]);
+  }, [selectedTab, selectedSubMenu, selectedRegion, refreshTrigger, testTime]);
 
 
   const filterByRegion = (dataArray) => {
@@ -101,7 +113,7 @@ function App() {
         if (selectedSubMenu === 'today') return MOCK_PRECIPITATION_TODAY;
         return MOCK_PRECIPITATION_YESTERDAY;
       case 'snow':
-        return selectedSubMenu === 'current' ? MOCK_SNOW_CURRENT : MOCK_SNOW_TODAY;
+        return selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
       default:
         return [];
     }
@@ -127,6 +139,24 @@ function App() {
       const filteredData = filterByRegion(getActiveTableData()).slice(0, 10);
       return (
         <div className="animate-fade-in space-y-4">
+          {selectedTab === 'snow' && !testTime && (
+            <div className="flex justify-end mb-2">
+              <button 
+                onClick={() => setTestTime('202603021800')}
+                className="text-xs px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors font-medium flex items-center gap-1.5 shadow-sm"
+              >
+                <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse"></span>
+                테스트 데이터 불러오기 (2026.03.02)
+              </button>
+            </div>
+          )}
+          {selectedTab === 'snow' && testTime && (
+            <div className="flex justify-end mb-2">
+              <div className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg font-medium shadow-sm">
+                현재 테스트 시점: 2026년 3월 2일 18시
+              </div>
+            </div>
+          )}
           <WeatherTable title={`${contentTitle} Top 10`} data={filteredData} />
           {filteredData.length === 0 && (
             <div className="py-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200 shadow-sm">

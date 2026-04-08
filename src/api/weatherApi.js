@@ -376,3 +376,82 @@ export const getWarningImageUrl = (trigger = 0) => {
 
   return `/api/kma/api/typ03/cgi/wrn/nph-wrn7?out=0&tmef=1&city=1&name=0&tm=${tmStr}&lon=127.7&lat=36.1&range=300&size=685&wrn=W,R,C,D,O,V,T,S,Y,H,&authKey=${KMA_AUTH_KEY}&_ts=${trigger}`;
 };
+
+/**
+ * 적설(Total) 및 신적설(New) 데이터를 가져오는 함수
+ * @param {string} type - 'tot' (적설) 또는 'day' (신적설)
+ * @param {string} regionId - 지역 ID
+ * @param {string} customTm - 테스트용 시각 (YYYYMMDDHHMM)
+ */
+export const fetchSnowData = async (type = 'tot', customTm = null) => {
+  try {
+    const now = new Date();
+    // 분 단위는 00으로 고정하여 요청 (기상청 API 특성)
+    const tm = customTm || formatToKMATime(now);
+    
+    // 1. 적설 관측 지점 정보 가져오기 (이름 및 주소 맵핑용)
+    // stn_snow.php는 지점 정보를 반환함
+    const stnUrl = `/api/kma/api/typ01/url/stn_snow.php?stn=&tm=201601051200&mode=0&help=0&authKey=${KMA_AUTH_KEY}`;
+    const stnRes = await fetch(stnUrl);
+    const stnBuf = await stnRes.arrayBuffer();
+    const stnRaw = new TextDecoder('euc-kr').decode(stnBuf);
+    
+    const stnMap = new Map();
+    const stnLines = stnRaw.split('\n');
+    for (const line of stnLines) {
+      if (!line || line.trim().startsWith('#')) continue;
+      // stn_snow.php는 공백 기준 고정폭에 가까운 형식이므로 연속 공백을 하나로 합쳐서 나눔
+      const f = line.trim().split(/\s+/);
+      if (f.length >= 7) {
+        const id = f[0];
+        const name = f[6];
+        stnMap.set(id, { name, address: name }); // 상세 주소가 없으면 이름을 주소로 사용
+      }
+    }
+
+    // 2. 실제 적설 데이터 가져오기
+    const dataUrl = `/api/kma/api/typ01/url/kma_snow1.php?sd=${type}&tm=${tm}&help=0&authKey=${KMA_AUTH_KEY}`;
+    const dataRes = await fetch(dataUrl);
+    const dataBuf = await dataRes.arrayBuffer();
+    const dataRaw = new TextDecoder('euc-kr').decode(dataBuf);
+    
+    const dataLines = dataRaw.split('\n');
+    const result = [];
+    
+    for (const line of dataLines) {
+      if (!line || line.trim().startsWith('#')) continue;
+      // kma_snow1.php는 콤마로 구분됨 (TM, STN, SNW)
+      const f = line.split(',').map(s => s.trim());
+      if (f.length >= 3) {
+        const id = f[1];
+        const snow = parseFloat(f[2]);
+        
+        // 적설량이 0보다 큰 경우만 표시 (보통 적설 데이터는 그런 경우가 유의미함)
+        // 단, 테스트 중에는 0이라도 나오게 할 수 있으나 유인물(WeatherTable) 특성상 큰 값 위주로 정렬 예정
+        if (snow >= 0) {
+          const stnInfo = stnMap.get(id) || { name: `지점 ${id}`, address: '정보 없음' };
+          result.push({
+            name: stnInfo.name,
+            record: `${snow.toFixed(1)} cm`,
+            value: snow, // 정렬용
+            address: stnInfo.address
+          });
+        }
+      }
+    }
+
+    // 내림차순 정렬 후 순위 부여
+    return result
+      .sort((a, b) => b.value - a.value)
+      .map((item, idx) => ({
+        rank: idx + 1,
+        name: item.name,
+        record: item.record,
+        address: item.address
+      }));
+
+  } catch (error) {
+    console.error('[API Fetch Error] 적설 데이터 실패', error);
+    throw new Error('기상청 적설 API 서버 응답 오류');
+  }
+};
