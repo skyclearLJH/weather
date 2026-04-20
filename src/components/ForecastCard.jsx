@@ -67,13 +67,12 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
                   )}
                 </div>
                 
-                <div 
+                <div
                    className="h-auto overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
-                   style={{ 
-                     minHeight: '200px',
-                     whiteSpace: 'pre-wrap', 
+                   style={{
+                     whiteSpace: 'pre-wrap',
                      wordBreak: 'break-word',
-                     lineHeight: '1.6'
+                     lineHeight: '1.6',
                    }}
                 >
                   {item.content}
