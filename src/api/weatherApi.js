@@ -123,7 +123,11 @@ const parseAwsStationMetadata = (rawText) => {
 
     const stationId = fields[0];
     const stationName = fields[8];
-    const lawAddress = fields.slice(13).join(' ').trim();
+    const lawAddress = fields
+      .slice(13)
+      .join(' ')
+      .replace(/^\d+\s+/, '')
+      .trim();
 
     stationMetadata.set(stationId, {
       name: stationName,

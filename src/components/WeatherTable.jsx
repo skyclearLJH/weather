@@ -13,7 +13,7 @@ const WeatherTable = ({ title, subtitle, data }) => {
         {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
       </div>
 
-      <div className="hidden grid-cols-[88px_minmax(0,1.2fr)_120px_minmax(0,1.8fr)] gap-4 border-b border-slate-200 bg-slate-50 px-6 py-3 text-sm font-semibold text-slate-500 md:grid">
+      <div className="hidden grid-cols-[88px_minmax(0,1.1fr)_120px_minmax(0,1.9fr)] gap-4 border-b border-slate-200 bg-slate-50 px-6 py-3 text-sm font-semibold text-slate-500 md:grid">
         <div className="text-center">순위</div>
         <div>지점명</div>
         <div className="text-right">기록</div>
@@ -39,7 +39,7 @@ const WeatherTable = ({ title, subtitle, data }) => {
                 </div>
               </div>
 
-              <div className="hidden grid-cols-[88px_minmax(0,1.2fr)_120px_minmax(0,1.8fr)] items-center gap-4 px-6 py-4 md:grid">
+              <div className="hidden grid-cols-[88px_minmax(0,1.1fr)_120px_minmax(0,1.9fr)] items-center gap-4 px-6 py-4 md:grid">
                 <div className="flex justify-center">
                   <span className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold ${rankBadgeClassName(item.rank)}`}>
                     {item.rank}
@@ -47,7 +47,7 @@ const WeatherTable = ({ title, subtitle, data }) => {
                 </div>
                 <div className="font-semibold text-slate-900">{item.name}</div>
                 <div className="text-right font-extrabold text-slate-900">{item.record}</div>
-                <div className="truncate text-sm text-slate-500">{item.address}</div>
+                <div className="text-sm leading-6 break-words text-slate-500">{item.address}</div>
               </div>
             </li>
           );
