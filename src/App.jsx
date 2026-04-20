@@ -281,17 +281,6 @@ function App() {
       </div>
 
       <main className="mx-auto flex w-full max-w-screen-xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <section className="rounded-[32px] border border-slate-200 bg-white px-5 py-6 shadow-sm sm:px-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0033a0]">Weather Overview</p>
-          <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-            KBS 재난미디어센터를 위한 기상 브리핑 허브
-          </h1>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
-            예보, 특보, 강수량, 기온, 적설량을 탭 메뉴로 분리해 필요한 정보를 바로 확인할 수 있도록
-            일반 웹사이트 형태로 구성했습니다.
-          </p>
-        </section>
-
         {SHOW_SUBMENU_TABS.has(selectedTab) ? (
           <SubMenu items={SUB_MENUS[selectedTab]} selectedId={selectedSubMenu} onSelect={setSelectedSubMenu} />
         ) : null}
