@@ -51,12 +51,12 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
       {data.map((item) => (
         <div key={item.id} className="overflow-visible rounded-3xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
           <div className="p-5 sm:p-6 h-auto">
-            <div className="flex items-start gap-3 sm:gap-4 h-auto">
+            <div className="flex items-start gap-3 sm:gap-4">
               <div className={`mt-1 p-2 rounded-lg ${bgColor} shrink-0`}>
                 <Icon className={iconColor} size={20} />
               </div>
-              <div className="flex-1 min-w-0 h-auto">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                   <h3 className="text-lg font-bold text-slate-900 tracking-tight">
                     {type === 'warning' ? item.type : item.title}
                   </h3>
@@ -66,18 +66,18 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
                     </span>
                   )}
                 </div>
-                
-                <div
-                   className="h-auto overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
-                   style={{
-                     whiteSpace: 'pre-wrap',
-                     wordBreak: 'break-word',
-                     lineHeight: '1.6',
-                   }}
-                >
-                  {item.content}
-                </div>
               </div>
+            </div>
+
+            <div
+              className="mt-4 overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
+              style={{
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                lineHeight: '1.6',
+              }}
+            >
+              {item.content}
             </div>
           </div>
         </div>
