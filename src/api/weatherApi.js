@@ -758,7 +758,9 @@ export const fetchWeatherWarnings = async (regionId) => {
       const isPreliminary = record.tmEf?.endsWith('58') || record.tmEf?.endsWith('59');
       const targetMap = isPreliminary ? preliminaryMap : currentMap;
       const levelLabel = record.lvl === '주의' ? '주의보' : record.lvl === '경보' ? '경보' : record.lvl;
-      const typeName = `${record.wrn} ${levelLabel}`;
+      const typeName = isPreliminary
+        ? `${record.wrn} ${levelLabel} 특보`
+        : `${record.wrn} ${levelLabel}`;
       const broadRegion = getBroadRegion(record.regUpKo, record.regKo || record.regUpKo);
       const detailRegion = isMarine
         ? formatDetailOcean(record.regKo || record.regUpKo)
