@@ -49,7 +49,7 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
   return (
     <div className="flex flex-col gap-4">
       {data.map((item) => (
-        <div key={item.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-visible hover:shadow-md transition-shadow">
+        <div key={item.id} className="overflow-visible rounded-3xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
           <div className="p-5 sm:p-6 h-auto">
             <div className="flex items-start gap-3 sm:gap-4 h-auto">
               <div className={`mt-1 p-2 rounded-lg ${bgColor} shrink-0`}>
@@ -61,17 +61,16 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
                     {type === 'warning' ? item.type : item.title}
                   </h3>
                   {item.time && (
-                    <span className="text-xs sm:text-sm font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md w-fit whitespace-nowrap">
+                    <span className="w-fit whitespace-nowrap rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500 sm:text-sm">
                       {item.time}
                     </span>
                   )}
                 </div>
                 
-                {/* 텍스트 내용 표출 영역 - 잘림 현상 방지를 위해 overflow-visible 및 h-auto 적용 */}
                 <div 
-                   className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap break-words h-auto overflow-visible"
+                   className="h-auto overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
                    style={{ 
-                     minHeight: '200px', 
+                     minHeight: '200px',
                      whiteSpace: 'pre-wrap', 
                      wordBreak: 'break-word',
                      lineHeight: '1.6'

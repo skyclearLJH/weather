@@ -2,7 +2,7 @@
 import fs from 'fs';
 
 async function testParsing() {
-    const KMA_AUTH_KEY = 'KkmPfomzTJyJj36Js9ycNQ';
+const KMA_AUTH_KEY = process.env.KMA_AUTH_KEY || process.env.VITE_KMA_AUTH_KEY || '';
     const tm = '202603021800';
     
     // Simulate stnRaw parsing

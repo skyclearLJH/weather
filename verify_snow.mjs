@@ -1,4 +1,4 @@
-const KMA_AUTH_KEY = 'KkmPfomzTJyJj36Js9ycNQ';
+const KMA_AUTH_KEY = process.env.KMA_AUTH_KEY || process.env.VITE_KMA_AUTH_KEY || '';
 
 async function fetchSnowData(type = 'tot', customTm = null) {
     const tm = customTm || '20260408100000'.substring(0, 10);

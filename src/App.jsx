@@ -1,228 +1,305 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Header from './components/Header';
 import Navigation from './components/Navigation';
 import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import SubMenu from './components/SubMenu';
-
-import { fetchWeatherCommentary, fetchWeatherDoc, fetchWeatherWarnings, getWarningImageUrl, fetchSnowData } from './api/weatherApi';
-
+import {
+  fetchWeatherCommentary,
+  fetchWeatherDoc,
+  fetchWeatherWarnings,
+  getWarningImageUrl,
+  fetchSnowData,
+} from './api/weatherApi';
 import {
   REGIONS,
   SUB_MENUS,
-  MOCK_MIN_TEMP_CURRENT, MOCK_MIN_TEMP_TODAY,
-  MOCK_MAX_TEMP_CURRENT, MOCK_MAX_TEMP_TODAY,
-  MOCK_PRECIPITATION_1H, MOCK_PRECIPITATION_TODAY, MOCK_PRECIPITATION_YESTERDAY,
-  MOCK_SNOW_CURRENT, MOCK_SNOW_TODAY,
-  MOCK_FORECAST_DOC,
-  MOCK_WARNING_CURRENT, MOCK_WARNING_PRELIMINARY
+  MOCK_MIN_TEMP_CURRENT,
+  MOCK_MIN_TEMP_TODAY,
+  MOCK_MAX_TEMP_CURRENT,
+  MOCK_MAX_TEMP_TODAY,
+  MOCK_PRECIPITATION_1H,
+  MOCK_PRECIPITATION_TODAY,
+  MOCK_PRECIPITATION_YESTERDAY,
 } from './data/mockData';
+
+const DEFAULT_UPDATED_AT = new Date();
+
+const EMPTY_STATE_MESSAGE = {
+  precipitation: '현재 강수 기록이 있는 지점이 없습니다.',
+  snow: '현재 적설 기록이 있는 지점이 없습니다.',
+  default: '해당 조건의 데이터가 없습니다.',
+};
+
+const SHOW_SUBMENU_TABS = new Set(['forecast', 'warning', 'precipitation', 'snow']);
 
 function App() {
   const [selectedRegion, setSelectedRegion] = useState('all');
-  const [selectedTab, setSelectedTab] = useState('minTemp');
-  const [selectedSubMenu, setSelectedSubMenu] = useState(SUB_MENUS['minTemp'][0].id);
-
-  // API State
-  const [apiData, setApiData] = useState([]); // 날씨해설
-  const [docApiData, setDocApiData] = useState([]); // 통보문
-  const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] }); // 특보 및 예비특보
-  const [snowApiData, setSnowApiData] = useState({ tot: [], day: [] }); // 적설 및 신적설
-  
+  const [selectedTab, setSelectedTab] = useState('forecast');
+  const [selectedSubMenu, setSelectedSubMenu] = useState(SUB_MENUS.forecast[0].id);
+  const [apiData, setApiData] = useState([]);
+  const [docApiData, setDocApiData] = useState([]);
+  const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] });
+  const [snowApiData, setSnowApiData] = useState({ tot: [], day: [] });
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const [testTime, setTestTime] = useState(null); // 테스트용 시각 (2026.03.02 18:00)
+  const [testTime, setTestTime] = useState(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(DEFAULT_UPDATED_AT);
 
   const handleRefresh = () => {
-    setRefreshTrigger(prev => prev + 1);
+    setRefreshTrigger((previous) => previous + 1);
+    setLastUpdatedAt(new Date());
   };
 
-  // When tab changes, reset sub-menu to the first option of the new tab
   useEffect(() => {
-    setSelectedSubMenu(SUB_MENUS[selectedTab][0].id);
-    setTestTime(null); // 탭 이동 시 테스트 시각 초기화
+    if (SHOW_SUBMENU_TABS.has(selectedTab)) {
+      setSelectedSubMenu(SUB_MENUS[selectedTab][0].id);
+    }
+
+    if (selectedTab !== 'snow') {
+      setTestTime(null);
+    }
   }, [selectedTab]);
 
-  // Handle actual API fetching
   useEffect(() => {
     const loadApiData = async () => {
       const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
       const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
       const isWarning = selectedTab === 'warning';
       const isSnow = selectedTab === 'snow';
-      
-      if (isCommentary || isDoc || isWarning || isSnow) {
-        setIsLoading(true);
-        setApiError(null);
-        try {
-          if (isCommentary) {
-            const data = await fetchWeatherCommentary(selectedRegion);
-            setApiData(data);
-          } else if (isDoc) {
-            const data = await fetchWeatherDoc(selectedRegion);
-            setDocApiData(data);
-          } else if (isWarning) {
-            const data = await fetchWeatherWarnings(selectedRegion);
-            setWarningApiData(data);
-          } else if (isSnow) {
-            // 적설과 신적설 모두 페칭 (병렬)
-            const [totData, dayData] = await Promise.all([
-              fetchSnowData('tot', testTime),
-              fetchSnowData('day', testTime)
-            ]);
-            setSnowApiData({ tot: totData, day: dayData });
-          }
-        } catch (err) {
-          setApiError(err.message);
-        } finally {
-          setIsLoading(false);
+
+      if (!isCommentary && !isDoc && !isWarning && !isSnow) {
+        return;
+      }
+
+      setIsLoading(true);
+      setApiError(null);
+
+      try {
+        if (isCommentary) {
+          const data = await fetchWeatherCommentary(selectedRegion);
+          setApiData(data);
+        } else if (isDoc) {
+          const data = await fetchWeatherDoc(selectedRegion);
+          setDocApiData(data);
+        } else if (isWarning) {
+          const data = await fetchWeatherWarnings(selectedRegion);
+          setWarningApiData(data);
+        } else if (isSnow) {
+          const [totData, dayData] = await Promise.all([
+            fetchSnowData('tot', testTime),
+            fetchSnowData('day', testTime),
+          ]);
+          setSnowApiData({ tot: totData, day: dayData });
         }
+
+        setLastUpdatedAt(new Date());
+      } catch (error) {
+        setApiError(error.message);
+      } finally {
+        setIsLoading(false);
       }
     };
+
     loadApiData();
-  }, [selectedTab, selectedSubMenu, selectedRegion, refreshTrigger, testTime]);
+  }, [refreshTrigger, selectedRegion, selectedSubMenu, selectedTab, testTime]);
 
+  const filterByRegion = (dataArray = []) => {
+    if (selectedRegion === 'all') {
+      return dataArray;
+    }
 
-  const filterByRegion = (dataArray) => {
-    if (selectedRegion === 'all' || !dataArray) return dataArray;
-    
-    const targetRegionObj = REGIONS.find(r => r.id === selectedRegion);
-    if (!targetRegionObj || targetRegionObj.keywords.length === 0) return dataArray;
-    
-    const filtered = dataArray.filter(item => {
-      const searchStr = item.address || item.region || '';
-      return targetRegionObj.keywords.some(keyword => searchStr.includes(keyword));
+    const targetRegion = REGIONS.find((region) => region.id === selectedRegion);
+    if (!targetRegion?.keywords?.length) {
+      return dataArray;
+    }
+
+    const filtered = dataArray.filter((item) => {
+      const searchText = `${item.address ?? ''} ${item.region ?? ''}`.trim();
+      return targetRegion.keywords.some((keyword) => searchText.includes(keyword));
     });
 
-    // Re-assign ranks for tables
     if (filtered.length > 0 && filtered[0].rank !== undefined) {
-      return filtered.map((item, idx) => ({ ...item, rank: idx + 1 }));
+      return filtered.map((item, index) => ({ ...item, rank: index + 1 }));
     }
+
     return filtered;
   };
 
-  const getActiveTableData = () => {
-    switch (selectedTab) {
-      case 'minTemp':
-        return selectedSubMenu === 'current' ? MOCK_MIN_TEMP_CURRENT : MOCK_MIN_TEMP_TODAY;
-      case 'maxTemp':
-        return selectedSubMenu === 'current' ? MOCK_MAX_TEMP_CURRENT : MOCK_MAX_TEMP_TODAY;
-      case 'precipitation': {
-        const pData = selectedSubMenu === '1h' 
-          ? MOCK_PRECIPITATION_1H 
-          : selectedSubMenu === 'today' 
-            ? MOCK_PRECIPITATION_TODAY 
-            : MOCK_PRECIPITATION_YESTERDAY;
-        return pData.filter(item => parseFloat(item.record) > 0);
-      }
-      case 'snow': {
-        const sData = selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
-        return sData.filter(item => parseFloat(item.record) > 0);
-      }
-      default:
-        return [];
-    }
-  };
+  const precipitationData = useMemo(() => {
+    if (selectedSubMenu === '1h') return MOCK_PRECIPITATION_1H;
+    if (selectedSubMenu === 'today') return MOCK_PRECIPITATION_TODAY;
+    return MOCK_PRECIPITATION_YESTERDAY;
+  }, [selectedSubMenu]);
 
-  const getActiveCardData = () => {
-    switch (selectedTab) {
-      case 'forecast':
-        return selectedSubMenu === 'doc' ? docApiData : apiData;
-      case 'warning':
-        return selectedSubMenu === 'current' ? warningApiData.current : warningApiData.preliminary;
-      default:
-        return [];
-    }
+  const snowData = selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
+
+  const renderEmptyState = (message) => (
+    <div className="rounded-3xl border border-slate-200 bg-white px-6 py-12 text-center text-slate-500 shadow-sm">
+      {message}
+    </div>
+  );
+
+  const renderDualTables = (title, description, currentData, todayData) => {
+    const currentTopTen = filterByRegion(currentData).slice(0, 10);
+    const todayTopTen = filterByRegion(todayData).slice(0, 10);
+
+    return (
+      <section className="space-y-5">
+        <div className="rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-sm sm:px-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0033a0]">{title}</p>
+          <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{description}</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            각 메뉴에서 현재와 오늘 기준 Top 10을 한 번에 비교할 수 있도록 구성했습니다.
+          </p>
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-2">
+          {currentTopTen.length > 0 ? (
+            <WeatherTable title="현재 Top 10" subtitle="실시간 관측 기준" data={currentTopTen} />
+          ) : (
+            renderEmptyState(EMPTY_STATE_MESSAGE.default)
+          )}
+          {todayTopTen.length > 0 ? (
+            <WeatherTable title="오늘 Top 10" subtitle="금일 누적 기준" data={todayTopTen} />
+          ) : (
+            renderEmptyState(EMPTY_STATE_MESSAGE.default)
+          )}
+        </div>
+      </section>
+    );
   };
 
   const renderContent = () => {
-    const isTableView = ['minTemp', 'maxTemp', 'precipitation', 'snow'].includes(selectedTab);
-    const subMenuDef = SUB_MENUS[selectedTab].find(s => s.id === selectedSubMenu);
-    const contentTitle = subMenuDef ? subMenuDef.label : selectedTab;
+    if (selectedTab === 'minTemp') {
+      return renderDualTables('최저기온', '최저기온 현황', MOCK_MIN_TEMP_CURRENT, MOCK_MIN_TEMP_TODAY);
+    }
 
-    if (isTableView) {
-      const filteredData = filterByRegion(getActiveTableData()).slice(0, 10);
+    if (selectedTab === 'maxTemp') {
+      return renderDualTables('최고기온', '최고기온 현황', MOCK_MAX_TEMP_CURRENT, MOCK_MAX_TEMP_TODAY);
+    }
+
+    if (selectedTab === 'precipitation') {
+      const filteredData = filterByRegion(precipitationData).slice(0, 10);
+
+      return filteredData.length > 0 ? (
+        <WeatherTable
+          title="강수량 Top 10"
+          subtitle="선택한 기준으로 가장 높은 강수 기록을 보여줍니다."
+          data={filteredData}
+        />
+      ) : (
+        renderEmptyState(EMPTY_STATE_MESSAGE.precipitation)
+      );
+    }
+
+    if (selectedTab === 'snow') {
+      const filteredData = filterByRegion(snowData).slice(0, 10);
+
       return (
-        <div className="animate-fade-in space-y-4">
-          {selectedTab === 'snow' && !testTime && (
-            <div className="flex justify-end mb-2">
-              <button 
+        <section className="space-y-4">
+          {!testTime ? (
+            <div className="flex justify-end">
+              <button
+                type="button"
                 onClick={() => setTestTime('202603021800')}
-                className="text-xs px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors font-medium flex items-center gap-1.5 shadow-sm"
+                className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
               >
-                <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse"></span>
-                테스트 데이터 불러오기 (2026.03.02)
+                테스트 데이터 불러오기 (2026.03.02 18:00)
               </button>
             </div>
-          )}
-          {selectedTab === 'snow' && testTime && (
-            <div className="flex justify-end mb-2">
-              <div className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg font-medium shadow-sm">
+          ) : (
+            <div className="flex justify-end">
+              <div className="rounded-full border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700">
                 현재 테스트 시점: 2026년 3월 2일 18시
               </div>
             </div>
           )}
-          <WeatherTable title={`${contentTitle} Top 10`} data={filteredData} />
-          {filteredData.length === 0 && (
-            <div className="py-12 text-center text-slate-500 bg-white rounded-xl border border-slate-200 shadow-sm">
-              {(() => {
-                if (selectedTab === 'snow') return '현재 적설이 관측된 지점이 없습니다.';
-                if (selectedTab === 'precipitation') return '현재 강수가 관측된 지점이 없습니다.';
-                return '해당 지역의 데이터가 없습니다.';
-              })()}
-            </div>
+
+          {isLoading ? (
+            renderEmptyState('적설 데이터를 불러오는 중입니다.')
+          ) : filteredData.length > 0 ? (
+            <WeatherTable
+              title="적설량 Top 10"
+              subtitle="현재 적설량과 오늘 신적설량을 탭으로 전환해 확인할 수 있습니다."
+              data={filteredData}
+            />
+          ) : (
+            renderEmptyState(EMPTY_STATE_MESSAGE.snow)
           )}
-        </div>
-      );
-    } else {
-      const isActiveApiCall = (selectedTab === 'forecast' && (selectedSubMenu === 'commentary' || selectedSubMenu === 'doc')) || selectedTab === 'warning';
-      const filteredData = isActiveApiCall ? getActiveCardData() : filterByRegion(getActiveCardData());
-      
-      return (
-        <div className="animate-fade-in mt-4 mb-8 h-auto flex flex-col gap-4">
-          {selectedTab === 'warning' && (
-             <div className="w-full flex justify-center bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-               <img 
-                 src={getWarningImageUrl(refreshTrigger)} 
-                 alt="기상특보 상황도" 
-                 className="max-w-full h-auto rounded-lg object-contain" 
-                 style={{ maxHeight: '685px' }}
-               />
-             </div>
-          )}
-          <ForecastCard 
-             data={filteredData} 
-             type={selectedTab} 
-             isLoading={isActiveApiCall && isLoading}
-             error={isActiveApiCall ? apiError : null}
-          />
-        </div>
+        </section>
       );
     }
+
+    const isActiveApiCall =
+      (selectedTab === 'forecast' && ['commentary', 'doc'].includes(selectedSubMenu)) ||
+      selectedTab === 'warning';
+    const cardData =
+      selectedTab === 'forecast'
+        ? selectedSubMenu === 'doc'
+          ? docApiData
+          : apiData
+        : selectedSubMenu === 'current'
+          ? warningApiData.current
+          : warningApiData.preliminary;
+
+    return (
+      <section className="space-y-4">
+        {selectedTab === 'warning' ? (
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+            <img
+              src={getWarningImageUrl(refreshTrigger)}
+              alt="기상특보 상황도"
+              className="mx-auto h-auto max-w-full rounded-2xl object-contain"
+              style={{ maxHeight: '685px' }}
+            />
+          </div>
+        ) : null}
+
+        <ForecastCard
+          data={cardData}
+          type={selectedTab}
+          isLoading={isActiveApiCall && isLoading}
+          error={isActiveApiCall ? apiError : null}
+        />
+      </section>
+    );
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] font-sans selection:bg-blue-200 flex flex-col">
-      <Header 
-         selectedRegion={selectedRegion} 
-         onChangeRegion={setSelectedRegion} 
-         onRefresh={handleRefresh} 
-      />
-      <Navigation selectedTab={selectedTab} onSelectTab={setSelectedTab} />
-      
-      <main className="max-w-screen-xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-2 flex-grow">
-        <SubMenu 
-          items={SUB_MENUS[selectedTab]} 
-          selectedId={selectedSubMenu} 
-          onSelect={setSelectedSubMenu} 
+    <div className="min-h-screen text-slate-900">
+      <div className="sticky top-0 z-50">
+        <Header
+          selectedRegion={selectedRegion}
+          onChangeRegion={setSelectedRegion}
+          onRefresh={handleRefresh}
+          lastUpdatedAt={lastUpdatedAt}
+          isRefreshing={isLoading}
         />
-        <div className="flex-1 min-w-0">
-          {renderContent()}
-        </div>
+        <Navigation selectedTab={selectedTab} onSelectTab={setSelectedTab} />
+      </div>
+
+      <main className="mx-auto flex w-full max-w-screen-xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+        <section className="rounded-[32px] border border-slate-200 bg-white px-5 py-6 shadow-sm sm:px-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0033a0]">Weather Overview</p>
+          <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+            KBS 재난미디어센터를 위한 기상 브리핑 허브
+          </h1>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
+            예보, 특보, 강수량, 기온, 적설량을 탭 메뉴로 분리해 필요한 정보를 바로 확인할 수 있도록
+            일반 웹사이트 형태로 구성했습니다.
+          </p>
+        </section>
+
+        {SHOW_SUBMENU_TABS.has(selectedTab) ? (
+          <SubMenu items={SUB_MENUS[selectedTab]} selectedId={selectedSubMenu} onSelect={setSelectedSubMenu} />
+        ) : null}
+
+        {renderContent()}
       </main>
-      
-      <footer className="bg-white border-t border-slate-200 py-8 text-center text-slate-500 text-sm mt-auto">
+
+      <footer className="border-t border-slate-200 bg-white/80 py-8 text-center text-sm text-slate-500">
         <p>&copy; {new Date().getFullYear()} KBS Disaster Media Center. All rights reserved.</p>
       </footer>
     </div>

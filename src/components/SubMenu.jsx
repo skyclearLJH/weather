@@ -1,21 +1,30 @@
 const SubMenu = ({ items, selectedId, onSelect }) => {
-  if (!items || items.length === 0) return null;
+  if (!items?.length) {
+    return null;
+  }
 
   return (
-    <div className="flex gap-2.5 overflow-x-auto scrollbar-hide py-4 mb-4">
-      {items.map(item => (
-        <button
-          key={item.id}
-          onClick={() => onSelect(item.id)}
-          className={`px-5 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all shadow-sm border
-            ${selectedId === item.id 
-              ? 'bg-[#0033a0] text-white border-[#0033a0]' 
-              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-[#0033a0]'}
-          `}
-        >
-          {item.label}
-        </button>
-      ))}
+    <div className="mb-6 overflow-x-auto scrollbar-hide">
+      <div className="inline-flex min-w-full gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+        {items.map((item) => {
+          const isActive = selectedId === item.id;
+
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item.id)}
+              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                isActive
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 };

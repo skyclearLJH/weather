@@ -1,11 +1,13 @@
 
 
+const authKey = process.env.KMA_AUTH_KEY || process.env.VITE_KMA_AUTH_KEY || '';
+
 async function testFetch() {
-    const urls = [
-        "https://apihub.kma.go.kr/api/typ01/url/stn_snow.php?stn=&tm=201601051200&mode=0&help=1&authKey=KkmPfomzTJyJj36Js9ycNQ",
-        "https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=tot&tm=202403021800&help=1&authKey=KkmPfomzTJyJj36Js9ycNQ",
-        "https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=day&tm=202403021800&help=1&authKey=KkmPfomzTJyJj36Js9ycNQ"
-    ];
+  const urls = [
+    `https://apihub.kma.go.kr/api/typ01/url/stn_snow.php?stn=&tm=201601051200&mode=0&help=1&authKey=${authKey}`,
+    `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=tot&tm=202403021800&help=1&authKey=${authKey}`,
+    `https://apihub.kma.go.kr/api/typ01/url/kma_snow1.php?sd=day&tm=202403021800&help=1&authKey=${authKey}`
+  ];
 
     for (const url of urls) {
         console.log(`\n--- Fetching: ${url} ---\n`);

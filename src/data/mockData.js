@@ -12,11 +12,11 @@ export const REGIONS = [
   { id: 'hq', label: '본사', keywords: ['서울', '인천', '경기', '서해5도'] },
   { id: 'daejeon', label: '대전총국', keywords: ['대전', '세종', '충청남도', '충남'] },
   { id: 'cheongju', label: '청주총국', keywords: ['충청북도', '충북'] },
-  { id: 'jeonju', label: '전주총국', keywords: ['전라북도', '전북'] },
-  { id: 'gwangju', label: '광주총국', keywords: ['광주', '전라남도', '전남', '흑산도.홍도'] },
+  { id: 'jeonju', label: '전주총국', keywords: ['전북특별자치도', '전북', '전라북도'] },
+  { id: 'gwangju', label: '광주총국', keywords: ['광주', '전라남도', '전남', '흑산도', '홍도'] },
   { id: 'jeju', label: '제주총국', keywords: ['제주'] },
   { id: 'chuncheon', label: '춘천총국', keywords: ['강원'] },
-  { id: 'daegu', label: '대구총국', keywords: ['대구', '경상북도', '경북', '울릉도.독도'] },
+  { id: 'daegu', label: '대구총국', keywords: ['대구', '경상북도', '경북', '울릉도', '독도'] },
   { id: 'busan', label: '부산총국', keywords: ['부산', '울산'] },
   { id: 'changwon', label: '창원총국', keywords: ['경상남도', '경남'] },
 ];
@@ -27,79 +27,139 @@ export const SUB_MENUS = {
     { id: 'commentary', label: '날씨해설' },
   ],
   warning: [
-    { id: 'current', label: '특보' },
+    { id: 'current', label: '현재 특보' },
     { id: 'preliminary', label: '예비특보' },
   ],
   precipitation: [
-    { id: '1h', label: '1시간 강수량' },
-    { id: 'today', label: '오늘 강수량' },
-    { id: 'since_yesterday', label: '어제부터 강수량' },
+    { id: '1h', label: '1시간' },
+    { id: 'today', label: '오늘 누적' },
+    { id: 'since_yesterday', label: '어제부터 누적' },
   ],
   minTemp: [
-    { id: 'current', label: '현재 최저기온' },
-    { id: 'today', label: '오늘 최저기온' },
+    { id: 'current', label: '현재' },
+    { id: 'today', label: '오늘' },
   ],
   maxTemp: [
-    { id: 'current', label: '현재 최고기온' },
-    { id: 'today', label: '오늘 최고기온' },
+    { id: 'current', label: '현재' },
+    { id: 'today', label: '오늘' },
   ],
   snow: [
-    { id: 'current', label: '적설(현재)' },
-    { id: 'new_today', label: '신적설(오늘)' },
-  ]
+    { id: 'current', label: '현재 적설' },
+    { id: 'new_today', label: '오늘 신적설' },
+  ],
 };
 
-// --- DATA SETS ---
-const generateData = (base) => {
-  return [...base, 
-    { name: '서울', record: '-2.0°C', address: '서울특별시 종로구 송월길 52' },
-    { name: '인천', record: '-1.5°C', address: '인천광역시 중구 자유공원서로' },
-    { name: '수원', record: '-1.8°C', address: '경기도 수원시 권선구 권선로' },
-    { name: '대전', record: '-3.0°C', address: '대전광역시 유성구 대학로' },
-    { name: '천안', record: '-2.5°C', address: '충청남도 천안시 서북구 쌍용대로' },
-    { name: '전주', record: '-1.0°C', address: '전북특별자치도 전주시 완산구 기린대로' },
-    { name: '광주', record: '0.0°C', address: '광주광역시 북구 서하로' },
-    { name: '대구', record: '-0.5°C', address: '대구광역시 동구 효동로' },
-    { name: '부산', record: '2.5°C', address: '부산광역시 중구 대청로' },
-    { name: '창원', record: '1.5°C', address: '경상남도 창원시 마산합포구 가포로' },
-    { name: '제주', record: '5.5°C', address: '제주특별자치도 제주시 만덕로' },
-  ].sort((a,b) => parseFloat(a.record) - parseFloat(b.record)).map((item, index) => ({...item, rank: index + 1}));
-};
+const withRanks = (items, compareFn) =>
+  [...items]
+    .sort(compareFn)
+    .map((item, index) => ({ ...item, rank: index + 1 }));
 
-export const MOCK_MIN_TEMP_CURRENT = generateData([
-  { name: '대관령', record: '-5.2°C', address: '강원특별자치도 평창군 대관령면 경강로' },
-  { name: '철원', record: '-3.1°C', address: '강원특별자치도 철원군 갈말읍 명성로' },
-]);
+const sortNumericAsc = (a, b) => parseFloat(a.record) - parseFloat(b.record);
+const sortNumericDesc = (a, b) => parseFloat(b.record) - parseFloat(a.record);
 
-export const MOCK_MIN_TEMP_TODAY = generateData([
-  { name: '태백', record: '-6.0°C', address: '강원특별자치도 태백시 천제단길' },
-  { name: '대관령', record: '-5.8°C', address: '강원특별자치도 평창군 대관령면 경강로' },
-]);
-
-export const MOCK_MAX_TEMP_CURRENT = MOCK_MIN_TEMP_CURRENT.map(i => ({...i, record: (parseFloat(i.record) + 15).toFixed(1) + '°C'})).reverse().map((item, index) => ({...item, rank: index + 1}));
-export const MOCK_MAX_TEMP_TODAY = MOCK_MIN_TEMP_TODAY.map(i => ({...i, record: (parseFloat(i.record) + 15).toFixed(1) + '°C'})).reverse().map((item, index) => ({...item, rank: index + 1}));
-
-export const MOCK_PRECIPITATION_1H = generateData([{ name: '서귀포', record: '45.5mm', address: '제주특별자치도 서귀포시 신중로' }]).map(i=>({...i, record: Math.abs(parseFloat(i.record)*3).toFixed(1) + 'mm'})).reverse().map((i, idx) => ({...i, rank: idx+1}));
-export const MOCK_PRECIPITATION_TODAY = MOCK_PRECIPITATION_1H.map(i=>({...i, record: (parseFloat(i.record)*4).toFixed(1) + 'mm'}));
-export const MOCK_PRECIPITATION_YESTERDAY = MOCK_PRECIPITATION_1H.map(i=>({...i, record: (parseFloat(i.record)*8).toFixed(1) + 'mm'}));
-
-export const MOCK_SNOW_CURRENT = generateData([{ name: '울릉도', record: '15.2cm', address: '경상북도 울릉군 울릉읍 도동길' }]).map(i=>({...i, record: Math.max(0, parseFloat(i.record) + 5).toFixed(1) + 'cm'})).reverse().map((i, idx) => ({...i, rank: idx+1}));
-export const MOCK_SNOW_TODAY = MOCK_SNOW_CURRENT.map(i=>({...i, record: (parseFloat(i.record)*0.5).toFixed(1) + 'cm'}));
-
-
-export const MOCK_FORECAST_DOC = [
-  { id: 1, title: '전국 대체로 맑으나 동해안 눈/비', time: '10:00 발표', content: '오늘(30일) 전국이 대체로 맑겠으나, 동풍의 영향으로 강원 영동과 경북 동해안에는 오후까지 비나 눈이 오는 곳이 있겠습니다.', region: '전국' },
+const minCurrentBase = [
+  { name: '대관령', record: '-5.2°C', address: '강원도 평창군 대관령면 경강로 5721' },
+  { name: '철원', record: '-4.8°C', address: '강원도 철원군 갈말읍 명성로 179' },
+  { name: '봉화', record: '-4.3°C', address: '경상북도 봉화군 봉화읍 내성로 134' },
+  { name: '제천', record: '-3.8°C', address: '충청북도 제천시 의림대로 242' },
+  { name: '서울', record: '-2.0°C', address: '서울시 종로구 송월길 52' },
+  { name: '수원', record: '-1.8°C', address: '경기도 수원시 권선구 권선로 276' },
+  { name: '전주', record: '-1.0°C', address: '전북특별자치도 전주시 완산구 기린대로 213' },
+  { name: '광주', record: '0.0°C', address: '광주시 북구 서하로 172' },
+  { name: '대구', record: '0.6°C', address: '대구시 동구 효동로 2길 10' },
+  { name: '부산', record: '2.4°C', address: '부산시 중구 대청로 116' },
+  { name: '제주', record: '5.5°C', address: '제주시 남성로 2길 18' },
 ];
 
-export const MOCK_FORECAST_COMMENTARY = [
-  { id: 2, title: '찬 대륙고기압 영향, 내일 더 춥다', time: '05:00 발표', content: '북서쪽에서 찬 공기가 남하하면서 내일 아침 기온은 오늘보다 5~10도 가량 큰 폭으로 떨어지겠습니다.', region: '전국' }
+const minTodayBase = [
+  { name: '임실', record: '-6.2°C', address: '전북특별자치도 임실군 임실읍 봉황로 124' },
+  { name: '대관령', record: '-5.8°C', address: '강원도 평창군 대관령면 경강로 5721' },
+  { name: '철원', record: '-5.4°C', address: '강원도 철원군 갈말읍 명성로 179' },
+  { name: '봉화', record: '-4.9°C', address: '경상북도 봉화군 봉화읍 내성로 134' },
+  { name: '제천', record: '-4.2°C', address: '충청북도 제천시 의림대로 242' },
+  { name: '서울', record: '-2.9°C', address: '서울시 종로구 송월길 52' },
+  { name: '수원', record: '-2.6°C', address: '경기도 수원시 권선구 권선로 276' },
+  { name: '전주', record: '-1.8°C', address: '전북특별자치도 전주시 완산구 기린대로 213' },
+  { name: '광주', record: '-0.7°C', address: '광주시 북구 서하로 172' },
+  { name: '대구', record: '0.2°C', address: '대구시 동구 효동로 2길 10' },
+  { name: '부산', record: '1.8°C', address: '부산시 중구 대청로 116' },
 ];
 
-export const MOCK_WARNING_CURRENT = [
-  { id: 1, type: '대설주의보', region: '강원도', time: '09:00 발효' },
-  { id: 2, type: '풍랑주의보', region: '제주도전해상', time: '08:00 발효' },
+const maxCurrentBase = [
+  { name: '구미', record: '26.4°C', address: '경상북도 구미시 송원서로 7' },
+  { name: '밀양', record: '26.0°C', address: '경상남도 밀양시 중앙로 265' },
+  { name: '대구', record: '25.8°C', address: '대구시 동구 효동로 2길 10' },
+  { name: '합천', record: '25.2°C', address: '경상남도 합천군 합천읍 동서로 95' },
+  { name: '전주', record: '24.9°C', address: '전북특별자치도 전주시 완산구 기린대로 213' },
+  { name: '서울', record: '24.1°C', address: '서울시 종로구 송월길 52' },
+  { name: '광주', record: '23.7°C', address: '광주시 북구 서하로 172' },
+  { name: '수원', record: '23.4°C', address: '경기도 수원시 권선구 권선로 276' },
+  { name: '부산', record: '22.8°C', address: '부산시 중구 대청로 116' },
+  { name: '강릉', record: '22.4°C', address: '강원도 강릉시 솔올로 57' },
+  { name: '제주', record: '21.9°C', address: '제주시 남성로 2길 18' },
 ];
 
-export const MOCK_WARNING_PRELIMINARY = [
-  { id: 3, type: '한파주의보', region: '경기도, 충청북도, 춘천 등 지역 내일', time: '21:00 발효 예정' }
+const maxTodayBase = [
+  { name: '밀양', record: '28.6°C', address: '경상남도 밀양시 중앙로 265' },
+  { name: '구미', record: '28.3°C', address: '경상북도 구미시 송원서로 7' },
+  { name: '대구', record: '27.8°C', address: '대구시 동구 효동로 2길 10' },
+  { name: '합천', record: '27.5°C', address: '경상남도 합천군 합천읍 동서로 95' },
+  { name: '전주', record: '26.9°C', address: '전북특별자치도 전주시 완산구 기린대로 213' },
+  { name: '광주', record: '26.4°C', address: '광주시 북구 서하로 172' },
+  { name: '서울', record: '25.6°C', address: '서울시 종로구 송월길 52' },
+  { name: '수원', record: '25.1°C', address: '경기도 수원시 권선구 권선로 276' },
+  { name: '부산', record: '24.6°C', address: '부산시 중구 대청로 116' },
+  { name: '강릉', record: '24.2°C', address: '강원도 강릉시 솔올로 57' },
+  { name: '제주', record: '23.8°C', address: '제주시 남성로 2길 18' },
 ];
+
+const precipitation1hBase = [
+  { name: '관악', record: '13.0mm', address: '서울시 관악구 신림동' },
+  { name: '서귀포', record: '11.8mm', address: '제주도 서귀포시 토평동' },
+  { name: '해남', record: '10.6mm', address: '전라남도 해남군 해남읍' },
+  { name: '부산', record: '9.7mm', address: '부산시 중구 대청동' },
+  { name: '강릉', record: '8.9mm', address: '강원도 강릉시 교동' },
+  { name: '광주', record: '7.8mm', address: '광주시 북구 운암동' },
+  { name: '대전', record: '6.2mm', address: '대전시 유성구 구성동' },
+  { name: '청주', record: '5.6mm', address: '충청북도 청주시 상당구' },
+  { name: '전주', record: '4.8mm', address: '전북특별자치도 전주시 덕진구' },
+  { name: '수원', record: '3.9mm', address: '경기도 수원시 권선구' },
+];
+
+export const MOCK_MIN_TEMP_CURRENT = withRanks(minCurrentBase, sortNumericAsc);
+export const MOCK_MIN_TEMP_TODAY = withRanks(minTodayBase, sortNumericAsc);
+export const MOCK_MAX_TEMP_CURRENT = withRanks(maxCurrentBase, sortNumericDesc);
+export const MOCK_MAX_TEMP_TODAY = withRanks(maxTodayBase, sortNumericDesc);
+export const MOCK_PRECIPITATION_1H = withRanks(precipitation1hBase, sortNumericDesc);
+export const MOCK_PRECIPITATION_TODAY = withRanks(
+  precipitation1hBase.map((item) => ({
+    ...item,
+    record: `${(parseFloat(item.record) * 2.8).toFixed(1)}mm`,
+  })),
+  sortNumericDesc,
+);
+export const MOCK_PRECIPITATION_YESTERDAY = withRanks(
+  precipitation1hBase.map((item) => ({
+    ...item,
+    record: `${(parseFloat(item.record) * 5.2).toFixed(1)}mm`,
+  })),
+  sortNumericDesc,
+);
+
+export const MOCK_SNOW_CURRENT = withRanks(
+  [
+    { name: '대관령', record: '14.2cm', address: '강원도 평창군 대관령면 경강로 5721' },
+    { name: '진부령', record: '11.5cm', address: '강원도 고성군 간성읍 진부령로 663' },
+    { name: '미시령', record: '9.7cm', address: '강원도 속초시 설악산로 833' },
+  ],
+  sortNumericDesc,
+);
+
+export const MOCK_SNOW_TODAY = withRanks(
+  [
+    { name: '대관령', record: '6.8cm', address: '강원도 평창군 대관령면 경강로 5721' },
+    { name: '진부령', record: '5.4cm', address: '강원도 고성군 간성읍 진부령로 663' },
+    { name: '미시령', record: '4.1cm', address: '강원도 속초시 설악산로 833' },
+  ],
+  sortNumericDesc,
+);

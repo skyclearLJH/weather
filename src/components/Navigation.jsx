@@ -2,27 +2,29 @@ import { INITIAL_TABS } from '../data/mockData';
 
 const Navigation = ({ selectedTab, onSelectTab }) => {
   return (
-    <nav className="w-full bg-white border-b border-gray-200">
-      <div className="max-w-screen-xl mx-auto px-4 relative">
-        <ul className="flex space-x-6 sm:space-x-12 overflow-x-auto scrollbar-hide snap-x relative h-14">
-          {INITIAL_TABS.map((tab) => (
-            <li key={tab.id} className="snap-start shrink-0 flex items-center justify-center">
-              <button
-                onClick={() => onSelectTab(tab.id)}
-                className={`text-sm sm:text-base font-medium py-4 px-2 whitespace-nowrap transition-all duration-200 relative
-                  ${selectedTab === tab.id ? 'text-[#0033a0] font-bold' : 'text-slate-600 hover:text-slate-900'}
-                `}
-              >
-                {tab.label}
-                {selectedTab === tab.id && (
-                  <span className="absolute bottom-0 left-0 w-full h-[3px] bg-[#0033a0] rounded-t-sm animate-fade-in-up" />
-                )}
-              </button>
-            </li>
-          ))}
+    <nav className="border-b border-slate-200 bg-white/95 backdrop-blur">
+      <div className="mx-auto max-w-screen-xl px-4 sm:px-6 lg:px-8">
+        <ul className="flex gap-2 overflow-x-auto py-3 scrollbar-hide">
+          {INITIAL_TABS.map((tab) => {
+            const isActive = selectedTab === tab.id;
+
+            return (
+              <li key={tab.id} className="shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onSelectTab(tab.id)}
+                  className={`rounded-full px-4 py-2.5 text-sm font-semibold transition sm:px-5 ${
+                    isActive
+                      ? 'bg-[#0033a0] text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              </li>
+            );
+          })}
         </ul>
-        {/* Fading edge for scroll hint on mobile */}
-        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none md:hidden" />
       </div>
     </nav>
   );

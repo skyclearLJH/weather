@@ -1,17 +1,22 @@
 @import "tailwindcss";
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
   font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
-  background-color: #f8fafc; /* Tailwind slate-50 */
-  color: #1e293b; /* Tailwind slate-800 */
+  background:
+    radial-gradient(circle at top, rgba(191, 219, 254, 0.45), transparent 30%),
+    linear-gradient(180deg, #f8fbff 0%, #f8fafc 35%, #f1f5f9 100%);
+  color: #1e293b;
 }
 
-/* Custom scrollbar for horizontal menu */
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
 .scrollbar-hide {
-  -ms-overflow-style: none; /* IE and Edge */
-  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
