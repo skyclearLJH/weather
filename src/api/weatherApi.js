@@ -1,4 +1,5 @@
 import { REGIONS } from '../data/mockData';
+import { KMA_SNOW_LAW_ADDRESS_MAP } from '../data/kmaSnowLawAddressMap';
 import { KMA_PROXY_BASE } from '../utils/constants';
 
 const padZero = (value) => value.toString().padStart(2, '0');
@@ -381,29 +382,10 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
 
     const [dataRaw, stnRaw] = await Promise.all([
       fetchKmaText('api/typ01/url/kma_snow1.php', { sd: type, tm, help: 0 }),
-      fetchKmaText('api/typ01/url/stn_snow.php', { stn: '', tm, mode: 0, help: 0 }),
+      fetchKmaText('api/typ01/url/stn_snow.php', { stn: '', tm, mode: 0, help: 1 }),
     ]);
 
     const stationMetadata = new Map();
-    const provinceNames = {
-      '11': '서울시',
-      '26': '부산시',
-      '27': '대구시',
-      '28': '인천시',
-      '29': '광주시',
-      '30': '대전시',
-      '31': '울산시',
-      '36': '세종시',
-      '41': '경기도',
-      '42': '강원도',
-      '43': '충청북도',
-      '44': '충청남도',
-      '45': '전북특별자치도',
-      '46': '전라남도',
-      '47': '경상북도',
-      '48': '경상남도',
-      '50': '제주도',
-    };
 
     stnRaw.split('\n').forEach((line) => {
       if (!line || line.trim().startsWith('#')) {
@@ -411,16 +393,14 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
       }
 
       const fields = line.trim().split(/\s+/);
-      if (fields.length < 7) {
+      if (fields.length < 9) {
         return;
       }
 
       const stationId = fields[0];
-      const legalCode = fields.find((field) => /^\d{10}$/.test(field));
-      const stationName = fields.find((field) => /[가-힣]/.test(field)) || fields[6] || fields[5];
-      const provinceCode = legalCode?.slice(0, 2);
-      const province = provinceNames[provinceCode] ?? '';
-      const address = province ? `${province} ${stationName}` : stationName;
+      const stationName = fields[6];
+      const legalCode = fields[8];
+      const address = KMA_SNOW_LAW_ADDRESS_MAP[legalCode] ?? stationName;
 
       stationMetadata.set(stationId, { name: stationName, address });
     });

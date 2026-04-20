@@ -15,6 +15,13 @@ dist-ssr
 .env.*
 !.env.example
 .npm-cache
+code_go_regCodeL.html
+legal_codes.txt
+legal_codes_download.bin
+legal_codes_download.zip
+legal_codes_extract/
+stn_snow_*.txt
+kma_snow_*_*.txt
 
 # Editor directories and files
 .vscode/*
