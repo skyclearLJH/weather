@@ -512,6 +512,10 @@ export const fetchPrecipitationRankings = async () => {
 const normalizeReportText = (content) =>
   content
     .replace(/#/g, '\n\n')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.replace(/^[ \t]+/g, '').replace(/[ \t]+$/g, ''))
+    .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/7777END/g, '')
     .replace(/[=\s]+$/g, '')
