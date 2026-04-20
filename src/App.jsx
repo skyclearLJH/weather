@@ -394,7 +394,7 @@ function App() {
         {selectedTab === 'warning' ? (
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
             <img
-              src={getWarningImageUrl(refreshTrigger)}
+              src={getWarningImageUrl(selectedSubMenu, refreshTrigger)}
               alt="기상특보 상황도"
               className="mx-auto h-auto max-w-full rounded-2xl object-contain"
               style={{ maxHeight: '685px' }}

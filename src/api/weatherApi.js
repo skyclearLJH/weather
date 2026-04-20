@@ -823,12 +823,13 @@ export const fetchWeatherWarnings = async (regionId) => {
   }
 };
 
-export const getWarningImageUrl = (trigger = 0) => {
+export const getWarningImageUrl = (warningMode = 'current', trigger = 0) => {
   const now = new Date();
+  const isPreliminary = warningMode === 'preliminary';
 
   return buildKmaUrl('api/typ03/cgi/wrn/nph-wrn7', {
     out: 0,
-    tmef: 1,
+    tmef: isPreliminary ? 0 : 1,
     city: 1,
     name: 0,
     tm: formatKmaMinuteTime(now),
