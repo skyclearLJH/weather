@@ -22,6 +22,11 @@ legal_codes_download.zip
 legal_codes_extract/
 stn_snow_*.txt
 kma_snow_*_*.txt
+aws_*_sample.txt
+aws_*_live.txt
+aws_min_*.txt
+aws_stn_inf.txt
+aws_day_*.txt
 
 # Editor directories and files
 .vscode/*

@@ -10,18 +10,10 @@ import {
   fetchWeatherWarnings,
   getWarningImageUrl,
   fetchSnowData,
+  fetchTemperatureRankings,
+  fetchPrecipitationRankings,
 } from './api/weatherApi';
-import {
-  REGIONS,
-  SUB_MENUS,
-  MOCK_MIN_TEMP_CURRENT,
-  MOCK_MIN_TEMP_TODAY,
-  MOCK_MAX_TEMP_CURRENT,
-  MOCK_MAX_TEMP_TODAY,
-  MOCK_PRECIPITATION_1H,
-  MOCK_PRECIPITATION_TODAY,
-  MOCK_PRECIPITATION_YESTERDAY,
-} from './data/mockData';
+import { REGIONS, SUB_MENUS } from './data/mockData';
 
 const DEFAULT_UPDATED_AT = new Date();
 
@@ -41,6 +33,17 @@ function App() {
   const [docApiData, setDocApiData] = useState([]);
   const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] });
   const [snowApiData, setSnowApiData] = useState({ tot: [], day: [] });
+  const [temperatureApiData, setTemperatureApiData] = useState({
+    minCurrent: [],
+    maxCurrent: [],
+    minToday: [],
+    maxToday: [],
+  });
+  const [precipitationApiData, setPrecipitationApiData] = useState({
+    oneHour: [],
+    today: [],
+    sinceYesterday: [],
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -68,8 +71,10 @@ function App() {
       const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
       const isWarning = selectedTab === 'warning';
       const isSnow = selectedTab === 'snow';
+      const isTemperature = selectedTab === 'minTemp' || selectedTab === 'maxTemp';
+      const isPrecipitation = selectedTab === 'precipitation';
 
-      if (!isCommentary && !isDoc && !isWarning && !isSnow) {
+      if (!isCommentary && !isDoc && !isWarning && !isSnow && !isTemperature && !isPrecipitation) {
         return;
       }
 
@@ -86,6 +91,12 @@ function App() {
         } else if (isWarning) {
           const data = await fetchWeatherWarnings(selectedRegion);
           setWarningApiData(data);
+        } else if (isTemperature) {
+          const data = await fetchTemperatureRankings();
+          setTemperatureApiData(data);
+        } else if (isPrecipitation) {
+          const data = await fetchPrecipitationRankings();
+          setPrecipitationApiData(data);
         } else if (isSnow) {
           const [totData, dayData] = await Promise.all([
             fetchSnowData('tot', testTime),
@@ -128,10 +139,10 @@ function App() {
   };
 
   const precipitationData = useMemo(() => {
-    if (selectedSubMenu === '1h') return MOCK_PRECIPITATION_1H;
-    if (selectedSubMenu === 'today') return MOCK_PRECIPITATION_TODAY;
-    return MOCK_PRECIPITATION_YESTERDAY;
-  }, [selectedSubMenu]);
+    if (selectedSubMenu === '1h') return precipitationApiData.oneHour;
+    if (selectedSubMenu === 'today') return precipitationApiData.today;
+    return precipitationApiData.sinceYesterday;
+  }, [precipitationApiData, selectedSubMenu]);
 
   const snowData = selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
 
@@ -173,14 +184,36 @@ function App() {
 
   const renderContent = () => {
     if (selectedTab === 'minTemp') {
-      return renderDualTables('최저기온', '최저기온 현황', MOCK_MIN_TEMP_CURRENT, MOCK_MIN_TEMP_TODAY);
+      if (isLoading) {
+        return renderEmptyState('최저기온 데이터를 불러오는 중입니다.');
+      }
+
+      return renderDualTables(
+        '최저기온',
+        '최저기온 현황',
+        temperatureApiData.minCurrent,
+        temperatureApiData.minToday,
+      );
     }
 
     if (selectedTab === 'maxTemp') {
-      return renderDualTables('최고기온', '최고기온 현황', MOCK_MAX_TEMP_CURRENT, MOCK_MAX_TEMP_TODAY);
+      if (isLoading) {
+        return renderEmptyState('최고기온 데이터를 불러오는 중입니다.');
+      }
+
+      return renderDualTables(
+        '최고기온',
+        '최고기온 현황',
+        temperatureApiData.maxCurrent,
+        temperatureApiData.maxToday,
+      );
     }
 
     if (selectedTab === 'precipitation') {
+      if (isLoading) {
+        return renderEmptyState('강수량 데이터를 불러오는 중입니다.');
+      }
+
       const filteredData = filterByRegion(precipitationData).slice(0, 10);
 
       return filteredData.length > 0 ? (

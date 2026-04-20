@@ -16,6 +16,9 @@ const formatKmaMinuteTime = (date) => {
 const formatKmaHourTime = (date) => formatKmaMinuteTime(date).slice(0, 10);
 
 const subtractHours = (date, hours) => new Date(date.getTime() - hours * 60 * 60 * 1000);
+const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
+const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
+const formatStationInfoTime = (date) => formatKmaMinuteTime(date).slice(0, 10) + '00';
 
 const getStnByRegion = (regionId) => {
   const stnMap = {
@@ -78,6 +81,249 @@ const fetchKmaArrayBuffer = async (path, params = {}) => {
 const fetchKmaText = async (path, params = {}) => {
   const buffer = await fetchKmaArrayBuffer(path, params);
   return new TextDecoder('euc-kr').decode(buffer);
+};
+
+let awsStationMetadataPromise = null;
+
+const isFiniteObservation = (value) => Number.isFinite(value) && value > -50;
+
+const parseNumericValue = (value) => {
+  const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+};
+
+const buildRankingRows = (items, unit, sortDirection = 'desc') =>
+  [...items]
+    .sort((left, right) => {
+      if (sortDirection === 'asc') {
+        return left.value - right.value;
+      }
+      return right.value - left.value;
+    })
+    .map((item, index) => ({
+      rank: index + 1,
+      name: item.name,
+      record: `${item.value.toFixed(1)}${unit}`,
+      address: item.address,
+    }));
+
+const parseAwsStationMetadata = (rawText) => {
+  const stationMetadata = new Map();
+
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const fields = trimmed.split(/\s+/);
+    if (fields.length < 14) {
+      return;
+    }
+
+    const stationId = fields[0];
+    const stationName = fields[8];
+    const lawAddress = fields.slice(13).join(' ').trim();
+
+    stationMetadata.set(stationId, {
+      name: stationName,
+      address: lawAddress || stationName,
+    });
+  });
+
+  return stationMetadata;
+};
+
+const fetchAwsStationMetadata = async () => {
+  if (!awsStationMetadataPromise) {
+    awsStationMetadataPromise = fetchKmaText('api/typ01/url/stn_inf.php', {
+      inf: 'AWS',
+      stn: '',
+      tm: formatStationInfoTime(new Date()),
+      help: 1,
+    }).then(parseAwsStationMetadata);
+  }
+
+  return awsStationMetadataPromise;
+};
+
+const parseAwsMinuteObservations = (rawText, stationMetadata) =>
+  rawText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.split(/\s+/))
+    .filter((fields) => fields.length >= 18)
+    .map((fields) => {
+      const stationId = fields[1];
+      const metadata = stationMetadata.get(stationId) ?? { name: stationId, address: stationId };
+
+      return {
+        stationId,
+        name: metadata.name,
+        address: metadata.address,
+        temperature: parseNumericValue(fields[8]),
+        precipitationOneHour: parseNumericValue(fields[11]),
+        precipitationToday: parseNumericValue(fields[13]),
+      };
+    });
+
+const parseAwsDailyObservations = (rawText, stationMetadata) =>
+  rawText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.split(/\s+/))
+    .filter((fields) => fields.length >= 7)
+    .map((fields) => {
+      const stationId = fields[1];
+      const metadata = stationMetadata.get(stationId) ?? {
+        name: fields.slice(6).join(' ').trim() || stationId,
+        address: fields.slice(6).join(' ').trim() || stationId,
+      };
+
+      return {
+        stationId,
+        name: metadata.name,
+        address: metadata.address,
+        value: parseNumericValue(fields[5]),
+      };
+    });
+
+export const fetchTemperatureRankings = async () => {
+  try {
+    const now = new Date();
+    const stationMetadata = await fetchAwsStationMetadata();
+
+    const [currentRaw, minDailyRaw, maxDailyRaw] = await Promise.all([
+      fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
+        tm2: formatKmaMinuteTime(now),
+        stn: 0,
+        disp: 0,
+        help: 1,
+      }),
+      fetchKmaText('api/typ01/url/sfc_aws_day.php', {
+        tm2: formatKmaDay(now),
+        obs: 'ta_min',
+        stn: 0,
+        disp: 0,
+        help: 1,
+      }),
+      fetchKmaText('api/typ01/url/sfc_aws_day.php', {
+        tm2: formatKmaDay(now),
+        obs: 'ta_max',
+        stn: 0,
+        disp: 0,
+        help: 1,
+      }),
+    ]);
+
+    const currentRows = parseAwsMinuteObservations(currentRaw, stationMetadata);
+    const dailyMinRows = parseAwsDailyObservations(minDailyRaw, stationMetadata);
+    const dailyMaxRows = parseAwsDailyObservations(maxDailyRaw, stationMetadata);
+
+    return {
+      minCurrent: buildRankingRows(
+        currentRows
+          .filter((item) => isFiniteObservation(item.temperature))
+          .map((item) => ({ name: item.name, address: item.address, value: item.temperature })),
+        '°C',
+        'asc',
+      ),
+      maxCurrent: buildRankingRows(
+        currentRows
+          .filter((item) => isFiniteObservation(item.temperature))
+          .map((item) => ({ name: item.name, address: item.address, value: item.temperature })),
+        '°C',
+        'desc',
+      ),
+      minToday: buildRankingRows(
+        dailyMinRows
+          .filter((item) => isFiniteObservation(item.value))
+          .map((item) => ({ name: item.name, address: item.address, value: item.value })),
+        '°C',
+        'asc',
+      ),
+      maxToday: buildRankingRows(
+        dailyMaxRows
+          .filter((item) => isFiniteObservation(item.value))
+          .map((item) => ({ name: item.name, address: item.address, value: item.value })),
+        '°C',
+        'desc',
+      ),
+    };
+  } catch (error) {
+    console.error('[API Fetch Error] 기온 랭킹 실패', error);
+    throw new Error('기온 랭킹 데이터를 불러오지 못했습니다.');
+  }
+};
+
+export const fetchPrecipitationRankings = async () => {
+  try {
+    const now = new Date();
+    const yesterday = subtractDays(now, 1);
+    const stationMetadata = await fetchAwsStationMetadata();
+
+    const [currentRaw, yesterdayRaw] = await Promise.all([
+      fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
+        tm2: formatKmaMinuteTime(now),
+        stn: 0,
+        disp: 0,
+        help: 1,
+      }),
+      fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
+        tm2: `${formatKmaDay(yesterday)}2359`,
+        stn: 0,
+        disp: 0,
+        help: 1,
+      }),
+    ]);
+
+    const currentRows = parseAwsMinuteObservations(currentRaw, stationMetadata);
+    const yesterdayRows = parseAwsMinuteObservations(yesterdayRaw, stationMetadata);
+    const yesterdayMap = new Map(
+      yesterdayRows.map((item) => [item.stationId, item.precipitationToday]),
+    );
+
+    return {
+      oneHour: buildRankingRows(
+        currentRows
+          .filter((item) => item.precipitationOneHour > 0)
+          .map((item) => ({
+            name: item.name,
+            address: item.address,
+            value: item.precipitationOneHour,
+          })),
+        'mm',
+        'desc',
+      ),
+      today: buildRankingRows(
+        currentRows
+          .filter((item) => item.precipitationToday > 0)
+          .map((item) => ({
+            name: item.name,
+            address: item.address,
+            value: item.precipitationToday,
+          })),
+        'mm',
+        'desc',
+      ),
+      sinceYesterday: buildRankingRows(
+        currentRows
+          .map((item) => ({
+            name: item.name,
+            address: item.address,
+            value: Math.max(0, item.precipitationToday) + Math.max(0, yesterdayMap.get(item.stationId) ?? 0),
+          }))
+          .filter((item) => item.value > 0),
+        'mm',
+        'desc',
+      ),
+    };
+  } catch (error) {
+    console.error('[API Fetch Error] 강수 랭킹 실패', error);
+    throw new Error('강수량 랭킹 데이터를 불러오지 못했습니다.');
+  }
 };
 
 const normalizeReportText = (content) =>
