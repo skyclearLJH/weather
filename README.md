@@ -1,16 +1,27 @@
-# React + Vite
+# weathernow
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+KBS 재난미디어센터용 기상 정보 포털입니다. React, Vite, Tailwind CSS 기반으로 작성되어 있으며 KMA 프록시와 Cloudflare Pages Functions 구성을 포함합니다.
 
-Currently, two official plugins are available:
+## Local Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. `.env`에 KMA 인증키를 설정합니다.
+2. `npm install`
+3. `npm run dev`
 
-## React Compiler
+## Build Checks
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `npm run build`
+- `npm run lint`
 
-## Expanding the ESLint configuration
+## Auto Push
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+이 저장소는 `.githooks/post-commit` 훅을 사용합니다.
+
+- 커밋이 성공하면 현재 브랜치를 자동으로 `origin`에 푸시합니다.
+- 업스트림이 없는 브랜치라면 처음 한 번 `origin/<branch>`로 연결한 뒤 푸시합니다.
+- 로그는 `.git/.codex-hooks/post-commit.log`에 남습니다.
+
+주의:
+
+- 자동 업로드는 `커밋 이후`에 동작합니다. 파일 저장만으로는 푸시되지 않습니다.
+- 원격 인증이 풀려 있으면 자동 푸시는 실패할 수 있습니다.

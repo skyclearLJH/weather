@@ -1,0 +1,39 @@
+#!/bin/sh
+
+set -eu
+
+ROOT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || printf '.')
+LOG_DIR="$ROOT_DIR/.git/.codex-hooks"
+LOG_FILE="$LOG_DIR/post-commit.log"
+
+mkdir -p "$LOG_DIR"
+
+{
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] post-commit auto-push start"
+
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Not inside a git repository, skipping."
+    exit 0
+  fi
+
+  BRANCH_NAME=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  if [ -z "$BRANCH_NAME" ]; then
+    echo "Detached HEAD detected, skipping auto-push."
+    exit 0
+  fi
+
+  if ! git remote get-url origin >/dev/null 2>&1; then
+    echo "Remote 'origin' is missing, skipping auto-push."
+    exit 0
+  fi
+
+  if git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
+    echo "Pushing branch '$BRANCH_NAME' to configured upstream."
+    git push
+  else
+    echo "No upstream configured for '$BRANCH_NAME'. Setting upstream to origin/$BRANCH_NAME."
+    git push -u origin "$BRANCH_NAME"
+  fi
+
+  echo "Auto-push finished successfully."
+} >>"$LOG_FILE" 2>&1
