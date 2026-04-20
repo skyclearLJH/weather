@@ -23,7 +23,7 @@ const EMPTY_STATE_MESSAGE = {
   default: '해당 조건의 데이터가 없습니다.',
 };
 
-const SHOW_SUBMENU_TABS = new Set(['forecast', 'warning', 'precipitation', 'snow']);
+const SHOW_SUBMENU_TABS = new Set(['forecast', 'warning', 'precipitation', 'minTemp', 'maxTemp', 'snow']);
 
 function App() {
   const [selectedRegion, setSelectedRegion] = useState('all');
@@ -268,51 +268,28 @@ function App() {
     </div>
   );
 
-  const renderDualTables = (title, description, currentData, todayData, observedLabel) => {
-    const currentTopTen = filterByRegion(currentData).slice(0, 10);
-    const todayTopTen = filterByRegion(todayData).slice(0, 10);
-
-    return (
-      <section className="space-y-5">
-        <div className="rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-sm sm:px-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0033a0]">{title}</p>
-          <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{description}</h1>
-          <p className="mt-2 text-sm leading-6 text-slate-500">
-            각 메뉴에서 현재와 오늘 기준 Top 10을 한 번에 비교할 수 있도록 구성했습니다.
-          </p>
-          {observedLabel ? (
-            <p className="mt-2 text-sm font-semibold text-slate-700">{observedLabel}</p>
-          ) : null}
-        </div>
-
-        <div className="grid gap-5 xl:grid-cols-2">
-          {currentTopTen.length > 0 ? (
-            <WeatherTable title="현재 Top 10" subtitle="실시간 관측 기준" data={currentTopTen} />
-          ) : (
-            renderEmptyState(EMPTY_STATE_MESSAGE.default)
-          )}
-          {todayTopTen.length > 0 ? (
-            <WeatherTable title="오늘 Top 10" subtitle="금일 누적 기준" data={todayTopTen} />
-          ) : (
-            renderEmptyState(EMPTY_STATE_MESSAGE.default)
-          )}
-        </div>
-      </section>
-    );
-  };
-
   const renderContent = () => {
     if (selectedTab === 'minTemp') {
       if (isLoading) {
         return renderEmptyState('최저기온 데이터를 불러오는 중입니다.');
       }
 
-      return renderDualTables(
-        '최저기온',
-        '최저기온 현황',
-        temperatureApiData.minCurrent,
-        temperatureApiData.minToday,
-        temperatureApiData.observedLabel,
+      const tableData =
+        selectedSubMenu === 'today' ? temperatureApiData.minToday : temperatureApiData.minCurrent;
+      const filteredData = filterByRegion(tableData).slice(0, 10);
+
+      return filteredData.length > 0 ? (
+        <WeatherTable
+          title="최저기온 Top 10"
+          subtitle={
+            temperatureApiData.observedLabel
+              ? `${selectedSubMenu === 'today' ? '금일 최저기온' : '실시간 관측'} 기준입니다. ${temperatureApiData.observedLabel}`
+              : `${selectedSubMenu === 'today' ? '금일 최저기온' : '실시간 관측'} 기준입니다.`
+          }
+          data={filteredData}
+        />
+      ) : (
+        renderEmptyState(EMPTY_STATE_MESSAGE.default)
       );
     }
 
@@ -321,12 +298,22 @@ function App() {
         return renderEmptyState('최고기온 데이터를 불러오는 중입니다.');
       }
 
-      return renderDualTables(
-        '최고기온',
-        '최고기온 현황',
-        temperatureApiData.maxCurrent,
-        temperatureApiData.maxToday,
-        temperatureApiData.observedLabel,
+      const tableData =
+        selectedSubMenu === 'today' ? temperatureApiData.maxToday : temperatureApiData.maxCurrent;
+      const filteredData = filterByRegion(tableData).slice(0, 10);
+
+      return filteredData.length > 0 ? (
+        <WeatherTable
+          title="최고기온 Top 10"
+          subtitle={
+            temperatureApiData.observedLabel
+              ? `${selectedSubMenu === 'today' ? '금일 최고기온' : '실시간 관측'} 기준입니다. ${temperatureApiData.observedLabel}`
+              : `${selectedSubMenu === 'today' ? '금일 최고기온' : '실시간 관측'} 기준입니다.`
+          }
+          data={filteredData}
+        />
+      ) : (
+        renderEmptyState(EMPTY_STATE_MESSAGE.default)
       );
     }
 
