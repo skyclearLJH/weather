@@ -4,6 +4,34 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': '*',
 };
 
+const getCacheTtl = (pathname, searchParams) => {
+  if (pathname.includes('/nph-aws2_min')) {
+    return 60;
+  }
+
+  if (pathname.includes('/wrn_now_data.php') || pathname.includes('/kma_snow1.php')) {
+    return 60;
+  }
+
+  if (pathname.includes('/stn_snow.php') || pathname.includes('/stn_inf.php')) {
+    return 86400;
+  }
+
+  if (pathname.includes('/sfc_aws_day.php')) {
+    return 300;
+  }
+
+  if (pathname.includes('/wthr_cmt_rpt.php') || pathname.includes('/fct_afs_ds.php')) {
+    return 180;
+  }
+
+  if (searchParams.get('help') === '1') {
+    return 300;
+  }
+
+  return 60;
+};
+
 const readAuthKey = (context) =>
   context.env?.KMA_AUTH_KEY ||
   context.env?.VITE_KMA_AUTH_KEY ||
@@ -44,6 +72,7 @@ export async function onRequest(context) {
   }
 
   try {
+    const cacheTtl = getCacheTtl(targetUrl.pathname, targetUrl.searchParams);
     const proxiedRequest = new Request(targetUrl.toString(), {
       method: request.method,
       headers: request.headers,
@@ -51,12 +80,23 @@ export async function onRequest(context) {
       redirect: 'follow',
     });
 
-    const response = await fetch(proxiedRequest);
+    const response = await fetch(proxiedRequest, request.method === 'GET' || request.method === 'HEAD'
+      ? {
+          cf: {
+            cacheEverything: true,
+            cacheTtl,
+          },
+        }
+      : undefined);
     const nextHeaders = new Headers(response.headers);
 
     Object.entries(corsHeaders).forEach(([key, value]) => {
       nextHeaders.set(key, value);
     });
+
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      nextHeaders.set('Cache-Control', `public, max-age=30, s-maxage=${cacheTtl}`);
+    }
 
     return new Response(response.body, {
       status: response.status,

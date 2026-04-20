@@ -70,55 +70,167 @@ function App() {
   }, [selectedTab]);
 
   useEffect(() => {
+    const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
+    const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
+    const isWarning = selectedTab === 'warning';
+
+    if (!isCommentary && !isDoc && !isWarning) {
+      return undefined;
+    }
+
+    let isActive = true;
+
     const loadApiData = async () => {
-      const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
-      const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
-      const isWarning = selectedTab === 'warning';
-      const isSnow = selectedTab === 'snow';
-      const isTemperature = selectedTab === 'minTemp' || selectedTab === 'maxTemp';
-      const isPrecipitation = selectedTab === 'precipitation';
-
-      if (!isCommentary && !isDoc && !isWarning && !isSnow && !isTemperature && !isPrecipitation) {
-        return;
-      }
-
       setIsLoading(true);
       setApiError(null);
 
       try {
         if (isCommentary) {
           const data = await fetchWeatherCommentary(selectedRegion);
-          setApiData(data);
+          if (isActive) {
+            setApiData(data);
+          }
         } else if (isDoc) {
           const data = await fetchWeatherDoc(selectedRegion);
-          setDocApiData(data);
+          if (isActive) {
+            setDocApiData(data);
+          }
         } else if (isWarning) {
           const data = await fetchWeatherWarnings(selectedRegion);
-          setWarningApiData(data);
-        } else if (isTemperature) {
-          const data = await fetchTemperatureRankings();
-          setTemperatureApiData(data);
-        } else if (isPrecipitation) {
-          const data = await fetchPrecipitationRankings();
-          setPrecipitationApiData(data);
-        } else if (isSnow) {
-          const [totData, dayData] = await Promise.all([
-            fetchSnowData('tot', testTime),
-            fetchSnowData('day', testTime),
-          ]);
-          setSnowApiData({ tot: totData, day: dayData });
+          if (isActive) {
+            setWarningApiData(data);
+          }
         }
 
-        setLastUpdatedAt(new Date());
+        if (isActive) {
+          setLastUpdatedAt(new Date());
+        }
       } catch (error) {
-        setApiError(error.message);
+        if (isActive) {
+          setApiError(error.message);
+        }
       } finally {
-        setIsLoading(false);
+        if (isActive) {
+          setIsLoading(false);
+        }
       }
     };
 
     loadApiData();
-  }, [refreshTrigger, selectedRegion, selectedSubMenu, selectedTab, testTime]);
+
+    return () => {
+      isActive = false;
+    };
+  }, [refreshTrigger, selectedRegion, selectedSubMenu, selectedTab]);
+
+  useEffect(() => {
+    if (selectedTab !== 'minTemp' && selectedTab !== 'maxTemp') {
+      return undefined;
+    }
+
+    let isActive = true;
+
+    const loadTemperatureData = async () => {
+      setIsLoading(true);
+      setApiError(null);
+
+      try {
+        const data = await fetchTemperatureRankings();
+        if (isActive) {
+          setTemperatureApiData(data);
+          setLastUpdatedAt(new Date());
+        }
+      } catch (error) {
+        if (isActive) {
+          setApiError(error.message);
+        }
+      } finally {
+        if (isActive) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadTemperatureData();
+
+    return () => {
+      isActive = false;
+    };
+  }, [refreshTrigger, selectedTab]);
+
+  useEffect(() => {
+    if (selectedTab !== 'precipitation') {
+      return undefined;
+    }
+
+    let isActive = true;
+
+    const loadPrecipitationData = async () => {
+      setIsLoading(true);
+      setApiError(null);
+
+      try {
+        const data = await fetchPrecipitationRankings();
+        if (isActive) {
+          setPrecipitationApiData(data);
+          setLastUpdatedAt(new Date());
+        }
+      } catch (error) {
+        if (isActive) {
+          setApiError(error.message);
+        }
+      } finally {
+        if (isActive) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadPrecipitationData();
+
+    return () => {
+      isActive = false;
+    };
+  }, [refreshTrigger, selectedTab]);
+
+  useEffect(() => {
+    if (selectedTab !== 'snow') {
+      return undefined;
+    }
+
+    let isActive = true;
+
+    const loadSnowData = async () => {
+      setIsLoading(true);
+      setApiError(null);
+
+      try {
+        const [totData, dayData] = await Promise.all([
+          fetchSnowData('tot', testTime),
+          fetchSnowData('day', testTime),
+        ]);
+
+        if (isActive) {
+          setSnowApiData({ tot: totData, day: dayData });
+          setLastUpdatedAt(new Date());
+        }
+      } catch (error) {
+        if (isActive) {
+          setApiError(error.message);
+        }
+      } finally {
+        if (isActive) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadSnowData();
+
+    return () => {
+      isActive = false;
+    };
+  }, [refreshTrigger, selectedTab, testTime]);
 
   const filterByRegion = (dataArray = []) => {
     if (selectedRegion === 'all') {
