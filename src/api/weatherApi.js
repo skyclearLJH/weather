@@ -5,6 +5,7 @@ import { KMA_PROXY_BASE } from '../utils/constants';
 const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
+const AWS_MINUTE_LOOKBACK_STEPS = [1, 2, 3, 5, 7, 10, 15];
 const TEXT_CACHE = new Map();
 const TEXT_IN_FLIGHT = new Map();
 const DATA_CACHE = new Map();
@@ -31,6 +32,7 @@ const formatKmaMinuteTime = (date) => {
 
 const formatKmaHourTime = (date) => formatKmaMinuteTime(date).slice(0, 10);
 
+const subtractMinutes = (date, minutes) => new Date(date.getTime() - minutes * 60 * 1000);
 const subtractHours = (date, hours) => new Date(date.getTime() - hours * 60 * 60 * 1000);
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
 const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
@@ -316,6 +318,37 @@ const parseAwsMinuteObservations = (rawText, stationMetadata) =>
       };
     });
 
+const hasValidAwsMinuteObservation = (rows) =>
+  rows.some(
+    (item) =>
+      isFiniteObservation(item.temperature) ||
+      item.precipitationOneHour >= 0 ||
+      item.precipitationToday >= 0,
+  );
+
+const fetchLatestAwsMinuteObservations = async (stationMetadata) => {
+  const now = new Date();
+
+  for (const offsetMinutes of AWS_MINUTE_LOOKBACK_STEPS) {
+    const observedAt = formatKmaMinuteTime(subtractMinutes(now, offsetMinutes));
+    const rawText = await fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
+      tm2: observedAt,
+      stn: 0,
+      disp: 0,
+      help: 1,
+    }, {
+      ttlMs: TTL.awsMinute,
+    });
+    const rows = parseAwsMinuteObservations(rawText, stationMetadata);
+
+    if (hasValidAwsMinuteObservation(rows)) {
+      return { observedAt, rows };
+    }
+  }
+
+  throw new Error('유효한 AWS 분자료를 찾지 못했습니다.');
+};
+
 const parseAwsDailyObservations = (rawText, stationMetadata) =>
   rawText
     .split('\n')
@@ -342,18 +375,10 @@ export const fetchTemperatureRankings = async () => {
   return withDataCache('temperature-rankings', TTL.awsMinute, async () => {
     try {
       const now = new Date();
-      const observedAt = formatKmaMinuteTime(now);
       const stationMetadata = await fetchAwsStationMetadata();
 
-      const [currentRaw, minDailyRaw, maxDailyRaw] = await Promise.all([
-        fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
-          tm2: observedAt,
-          stn: 0,
-          disp: 0,
-          help: 1,
-        }, {
-          ttlMs: TTL.awsMinute,
-        }),
+      const [{ observedAt, rows: currentRows }, minDailyRaw, maxDailyRaw] = await Promise.all([
+        fetchLatestAwsMinuteObservations(stationMetadata),
         fetchKmaText('api/typ01/url/sfc_aws_day.php', {
           tm2: formatKmaDay(now),
           obs: 'ta_min',
@@ -374,7 +399,6 @@ export const fetchTemperatureRankings = async () => {
         }),
       ]);
 
-      const currentRows = parseAwsMinuteObservations(currentRaw, stationMetadata);
       const dailyMinRows = parseAwsDailyObservations(minDailyRaw, stationMetadata);
       const dailyMaxRows = parseAwsDailyObservations(maxDailyRaw, stationMetadata);
 
@@ -422,18 +446,10 @@ export const fetchPrecipitationRankings = async () => {
     try {
       const now = new Date();
       const yesterday = subtractDays(now, 1);
-      const observedAt = formatKmaMinuteTime(now);
       const stationMetadata = await fetchAwsStationMetadata();
 
-      const [currentRaw, yesterdayRaw] = await Promise.all([
-        fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
-          tm2: observedAt,
-          stn: 0,
-          disp: 0,
-          help: 1,
-        }, {
-          ttlMs: TTL.awsMinute,
-        }),
+      const [{ observedAt, rows: currentRows }, yesterdayRaw] = await Promise.all([
+        fetchLatestAwsMinuteObservations(stationMetadata),
         fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
           tm2: `${formatKmaDay(yesterday)}2359`,
           stn: 0,
@@ -444,7 +460,6 @@ export const fetchPrecipitationRankings = async () => {
         }),
       ]);
 
-      const currentRows = parseAwsMinuteObservations(currentRaw, stationMetadata);
       const yesterdayRows = parseAwsMinuteObservations(yesterdayRaw, stationMetadata);
       const yesterdayMap = new Map(
         yesterdayRows.map((item) => [item.stationId, item.precipitationToday]),
