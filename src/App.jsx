@@ -34,12 +34,16 @@ function App() {
   const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] });
   const [snowApiData, setSnowApiData] = useState({ tot: [], day: [] });
   const [temperatureApiData, setTemperatureApiData] = useState({
+    observedAt: '',
+    observedLabel: '',
     minCurrent: [],
     maxCurrent: [],
     minToday: [],
     maxToday: [],
   });
   const [precipitationApiData, setPrecipitationApiData] = useState({
+    observedAt: '',
+    observedLabel: '',
     oneHour: [],
     today: [],
     sinceYesterday: [],
@@ -152,7 +156,7 @@ function App() {
     </div>
   );
 
-  const renderDualTables = (title, description, currentData, todayData) => {
+  const renderDualTables = (title, description, currentData, todayData, observedLabel) => {
     const currentTopTen = filterByRegion(currentData).slice(0, 10);
     const todayTopTen = filterByRegion(todayData).slice(0, 10);
 
@@ -164,6 +168,9 @@ function App() {
           <p className="mt-2 text-sm leading-6 text-slate-500">
             각 메뉴에서 현재와 오늘 기준 Top 10을 한 번에 비교할 수 있도록 구성했습니다.
           </p>
+          {observedLabel ? (
+            <p className="mt-2 text-sm font-semibold text-slate-700">{observedLabel}</p>
+          ) : null}
         </div>
 
         <div className="grid gap-5 xl:grid-cols-2">
@@ -193,6 +200,7 @@ function App() {
         '최저기온 현황',
         temperatureApiData.minCurrent,
         temperatureApiData.minToday,
+        temperatureApiData.observedLabel,
       );
     }
 
@@ -206,6 +214,7 @@ function App() {
         '최고기온 현황',
         temperatureApiData.maxCurrent,
         temperatureApiData.maxToday,
+        temperatureApiData.observedLabel,
       );
     }
 
@@ -219,7 +228,11 @@ function App() {
       return filteredData.length > 0 ? (
         <WeatherTable
           title="강수량 Top 10"
-          subtitle="선택한 기준으로 가장 높은 강수 기록을 보여줍니다."
+          subtitle={
+            precipitationApiData.observedLabel
+              ? `선택한 기준으로 가장 높은 강수 기록을 보여줍니다. ${precipitationApiData.observedLabel}`
+              : '선택한 기준으로 가장 높은 강수 기록을 보여줍니다.'
+          }
           data={filteredData}
         />
       ) : (
@@ -322,7 +335,7 @@ function App() {
       </main>
 
       <footer className="border-t border-slate-200 bg-white/80 py-8 text-center text-sm text-slate-500">
-        <p>&copy; {new Date().getFullYear()} KBS Disaster Media Center. All rights reserved.</p>
+        <p>&copy; {new Date().getFullYear()} KBS Public Safety News Center. All rights reserved.</p>
       </footer>
     </div>
   );

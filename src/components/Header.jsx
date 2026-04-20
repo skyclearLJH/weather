@@ -37,7 +37,7 @@ const Header = ({ selectedRegion, onChangeRegion, onRefresh, lastUpdatedAt, isRe
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <label className="relative flex min-w-[180px] items-center rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm shadow-sm">
-              <span className="mr-2 shrink-0 text-slate-500">총국</span>
+              <span className="mr-2 shrink-0 text-slate-500">지역</span>
               <select
                 value={selectedRegion}
                 onChange={(event) => onChangeRegion(event.target.value)}

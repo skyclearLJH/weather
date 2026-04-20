@@ -19,6 +19,19 @@ const subtractHours = (date, hours) => new Date(date.getTime() - hours * 60 * 60
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
 const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
 const formatStationInfoTime = (date) => formatKmaMinuteTime(date).slice(0, 10) + '00';
+const formatDisplayKoreanDateTime = (timestamp) => {
+  if (!timestamp || timestamp.length < 12) {
+    return '';
+  }
+
+  const year = timestamp.slice(0, 4);
+  const month = Number.parseInt(timestamp.slice(4, 6), 10);
+  const day = Number.parseInt(timestamp.slice(6, 8), 10);
+  const hour = timestamp.slice(8, 10);
+  const minute = timestamp.slice(10, 12);
+
+  return `${year}년 ${month}월 ${day}일 ${hour}시 ${minute}분 현재`;
+};
 
 const getStnByRegion = (regionId) => {
   const stnMap = {
@@ -197,6 +210,7 @@ const parseAwsDailyObservations = (rawText, stationMetadata) =>
 export const fetchTemperatureRankings = async () => {
   try {
     const now = new Date();
+    const observedAt = formatKmaMinuteTime(now);
     const stationMetadata = await fetchAwsStationMetadata();
 
     const [currentRaw, minDailyRaw, maxDailyRaw] = await Promise.all([
@@ -227,6 +241,8 @@ export const fetchTemperatureRankings = async () => {
     const dailyMaxRows = parseAwsDailyObservations(maxDailyRaw, stationMetadata);
 
     return {
+      observedAt,
+      observedLabel: formatDisplayKoreanDateTime(observedAt),
       minCurrent: buildRankingRows(
         currentRows
           .filter((item) => isFiniteObservation(item.temperature))
@@ -266,6 +282,7 @@ export const fetchPrecipitationRankings = async () => {
   try {
     const now = new Date();
     const yesterday = subtractDays(now, 1);
+    const observedAt = formatKmaMinuteTime(now);
     const stationMetadata = await fetchAwsStationMetadata();
 
     const [currentRaw, yesterdayRaw] = await Promise.all([
@@ -290,6 +307,8 @@ export const fetchPrecipitationRankings = async () => {
     );
 
     return {
+      observedAt,
+      observedLabel: formatDisplayKoreanDateTime(observedAt),
       oneHour: buildRankingRows(
         currentRows
           .filter((item) => item.precipitationOneHour > 0)
