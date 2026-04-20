@@ -5,7 +5,7 @@ import { KMA_PROXY_BASE } from '../utils/constants';
 const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
-const AWS_MINUTE_LOOKBACK_STEPS = [1, 2, 3, 5, 7, 10, 15];
+const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const TEXT_CACHE = new Map();
 const TEXT_IN_FLIGHT = new Map();
 const DATA_CACHE = new Map();
