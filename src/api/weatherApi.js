@@ -320,15 +320,13 @@ const parseAwsMinuteObservations = (rawText, stationMetadata) =>
       };
     });
 
-const hasValidAwsMinuteObservation = (rows) =>
-  rows.some(
-    (item) =>
-      isFiniteObservation(item.temperature) ||
-      item.precipitationOneHour >= 0 ||
-      item.precipitationToday >= 0,
-  );
+const hasValidAwsTemperatureObservation = (rows) =>
+  rows.some((item) => isFiniteObservation(item.temperature));
 
-const fetchLatestAwsMinuteObservations = async (stationMetadata) => {
+const hasValidAwsPrecipitationObservation = (rows) =>
+  rows.some((item) => item.precipitationOneHour >= 0 || item.precipitationToday >= 0);
+
+const fetchLatestAwsMinuteObservations = async (stationMetadata, validator) => {
   const now = new Date();
 
   for (const offsetMinutes of AWS_MINUTE_LOOKBACK_STEPS) {
@@ -343,7 +341,7 @@ const fetchLatestAwsMinuteObservations = async (stationMetadata) => {
     });
     const rows = parseAwsMinuteObservations(rawText, stationMetadata);
 
-    if (hasValidAwsMinuteObservation(rows)) {
+    if (validator(rows)) {
       return { observedAt, rows };
     }
   }
@@ -379,8 +377,8 @@ export const fetchTemperatureRankings = async () => {
       const now = new Date();
       const stationMetadata = await fetchAwsStationMetadata();
 
-      const [{ observedAt, rows: currentRows }, minDailyRaw, maxDailyRaw] = await Promise.all([
-        fetchLatestAwsMinuteObservations(stationMetadata),
+        const [{ observedAt, rows: currentRows }, minDailyRaw, maxDailyRaw] = await Promise.all([
+        fetchLatestAwsMinuteObservations(stationMetadata, hasValidAwsTemperatureObservation),
         fetchKmaText('api/typ01/url/sfc_aws_day.php', {
           tm2: formatKmaDay(now),
           obs: 'ta_min',
@@ -450,8 +448,8 @@ export const fetchPrecipitationRankings = async () => {
       const yesterday = subtractDays(now, 1);
       const stationMetadata = await fetchAwsStationMetadata();
 
-      const [{ observedAt, rows: currentRows }, yesterdayRaw] = await Promise.all([
-        fetchLatestAwsMinuteObservations(stationMetadata),
+        const [{ observedAt, rows: currentRows }, yesterdayRaw] = await Promise.all([
+        fetchLatestAwsMinuteObservations(stationMetadata, hasValidAwsPrecipitationObservation),
         fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
           tm2: `${formatKmaDay(yesterday)}2359`,
           stn: 0,
