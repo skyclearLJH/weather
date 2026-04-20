@@ -6,10 +6,12 @@ const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
+const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const TEXT_CACHE = new Map();
 const TEXT_IN_FLIGHT = new Map();
 const DATA_CACHE = new Map();
 const DATA_IN_FLIGHT = new Map();
+const LAST_SUCCESS_DATA = new Map();
 const TTL = {
   awsMinute: 60 * 1000,
   awsDaily: 5 * 60 * 1000,
@@ -636,36 +638,55 @@ const formatDetailLand = (value) =>
 
 export const fetchWeatherCommentary = async (regionId) => {
   return withDataCache(`commentary-${regionId}`, TTL.commentary, async () => {
-    try {
-      const now = new Date();
-      const stn = getStnByRegion(regionId);
+    const now = new Date();
+    const stn = getStnByRegion(regionId);
+    const fallbackKey = `commentary-last-success-${regionId}`;
+    let lastError = null;
 
-      const rawText = await fetchKmaText('api/typ01/url/wthr_cmt_rpt.php', {
-        tmfc1: formatKmaMinuteTime(subtractHours(now, 72)),
-        tmfc2: formatKmaMinuteTime(now),
-        stn,
-        subcd: 12,
-        disp: 0,
-        help: 1,
-      }, {
-        ttlMs: TTL.commentary,
-      });
+    for (const lookbackHours of COMMENTARY_LOOKBACK_HOURS) {
+      try {
+        const rawText = await fetchKmaText('api/typ01/url/wthr_cmt_rpt.php', {
+          tmfc1: formatKmaMinuteTime(subtractHours(now, lookbackHours)),
+          tmfc2: formatKmaMinuteTime(now),
+          stn,
+          subcd: 12,
+          disp: 0,
+          help: 1,
+        }, {
+          ttlMs: TTL.commentary,
+          cacheKey: `commentary-${regionId}-${lookbackHours}h`,
+          timeoutMs: 9000,
+        });
 
-      const { content, tmfc } = parseKmaReport(rawText, stn, 9);
+        const { content, tmfc } = parseKmaReport(rawText, stn, 9);
+        if (!tmfc && !content) {
+          continue;
+        }
 
-      return [
-        {
-          id: `commentary-${regionId}-${tmfc || Date.now()}`,
-          title: `날씨해설 (${getIssuingOfficeName(stn)})`,
-          time: formatDisplayTime(tmfc),
-          content: content || '표출 가능한 날씨해설이 아직 없습니다.',
-          region: regionId === 'all' ? '전국' : REGIONS.find((item) => item.id === regionId)?.label ?? '',
-        },
-      ];
-    } catch (error) {
-      console.error('[API Fetch Error] 날씨해설 실패', error);
-      throw new Error('기상청 날씨해설 데이터를 불러오지 못했습니다.');
+        const payload = [
+          {
+            id: `commentary-${regionId}-${tmfc || Date.now()}`,
+            title: `날씨해설 (${getIssuingOfficeName(stn)})`,
+            time: formatDisplayTime(tmfc),
+            content: content || '표출 가능한 날씨해설이 아직 없습니다.',
+            region: regionId === 'all' ? '전국' : REGIONS.find((item) => item.id === regionId)?.label ?? '',
+          },
+        ];
+
+        LAST_SUCCESS_DATA.set(fallbackKey, payload);
+        return payload;
+      } catch (error) {
+        lastError = error;
+      }
     }
+
+    const cachedFallback = LAST_SUCCESS_DATA.get(fallbackKey);
+    if (cachedFallback) {
+      return cachedFallback;
+    }
+
+    console.error('[API Fetch Error] 날씨해설 실패', lastError);
+    throw new Error('기상청 날씨해설 데이터를 불러오지 못했습니다.');
   });
 };
 
