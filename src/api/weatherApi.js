@@ -391,14 +391,45 @@ const parseAwsDailyObservations = (rawText, stationMetadata) =>
       };
     });
 
-export const fetchTemperatureRankings = async () => {
-  return withDataCache('temperature-rankings', TTL.awsMinute, async () => {
+export const fetchTemperatureCurrentRankings = async () =>
+  withDataCache('temperature-current-rankings', TTL.awsMinute, async () => {
+    try {
+      const stationMetadata = await fetchAwsStationMetadata();
+      const { observedAt, rows: currentRows } = await fetchLatestAwsMinuteObservations(
+        stationMetadata,
+        hasValidAwsTemperatureObservation,
+      );
+
+      return {
+        observedAt,
+        observedLabel: formatDisplayKoreanDateTime(observedAt),
+        minCurrent: buildRankingRows(
+          currentRows
+            .filter((item) => isFiniteObservation(item.temperature))
+            .map((item) => ({ name: item.name, address: item.address, value: item.temperature })),
+          '°C',
+          'asc',
+        ),
+        maxCurrent: buildRankingRows(
+          currentRows
+            .filter((item) => isFiniteObservation(item.temperature))
+            .map((item) => ({ name: item.name, address: item.address, value: item.temperature })),
+          '°C',
+          'desc',
+        ),
+      };
+    } catch (error) {
+      console.error('[API Fetch Error] 현재 기온 랭킹 실패', error);
+      throw new Error('현재 기온 랭킹 데이터를 불러오지 못했습니다.');
+    }
+  });
+
+export const fetchTemperatureTodayRankings = async () =>
+  withDataCache('temperature-today-rankings', TTL.awsDaily, async () => {
     try {
       const now = new Date();
       const stationMetadata = await fetchAwsStationMetadata();
-
-        const [{ observedAt, rows: currentRows }, minDailyRaw, maxDailyRaw] = await Promise.all([
-        fetchLatestAwsMinuteObservations(stationMetadata, hasValidAwsTemperatureObservation),
+      const [minDailyRaw, maxDailyRaw] = await Promise.all([
         fetchKmaText('api/typ01/url/sfc_aws_day.php', {
           tm2: formatKmaDay(now),
           obs: 'ta_min',
@@ -419,26 +450,13 @@ export const fetchTemperatureRankings = async () => {
         }),
       ]);
 
+      const observedAt = formatKmaMinuteTime(now);
       const dailyMinRows = parseAwsDailyObservations(minDailyRaw, stationMetadata);
       const dailyMaxRows = parseAwsDailyObservations(maxDailyRaw, stationMetadata);
 
       return {
         observedAt,
         observedLabel: formatDisplayKoreanDateTime(observedAt),
-        minCurrent: buildRankingRows(
-          currentRows
-            .filter((item) => isFiniteObservation(item.temperature))
-            .map((item) => ({ name: item.name, address: item.address, value: item.temperature })),
-          '°C',
-          'asc',
-        ),
-        maxCurrent: buildRankingRows(
-          currentRows
-            .filter((item) => isFiniteObservation(item.temperature))
-            .map((item) => ({ name: item.name, address: item.address, value: item.temperature })),
-          '°C',
-          'desc',
-        ),
         minToday: buildRankingRows(
           dailyMinRows
             .filter((item) => isFiniteObservation(item.value))
@@ -455,14 +473,54 @@ export const fetchTemperatureRankings = async () => {
         ),
       };
     } catch (error) {
-      console.error('[API Fetch Error] 기온 랭킹 실패', error);
-      throw new Error('기온 랭킹 데이터를 불러오지 못했습니다.');
+      console.error('[API Fetch Error] 오늘 기온 랭킹 실패', error);
+      throw new Error('오늘 기온 랭킹 데이터를 불러오지 못했습니다.');
     }
   });
-};
 
-export const fetchPrecipitationRankings = async () => {
-  return withDataCache('precipitation-rankings', TTL.awsMinute, async () => {
+export const fetchPrecipitationCurrentRankings = async () =>
+  withDataCache('precipitation-current-rankings', TTL.awsMinute, async () => {
+    try {
+      const stationMetadata = await fetchAwsStationMetadata();
+      const { observedAt, rows: currentRows } = await fetchLatestAwsMinuteObservations(
+        stationMetadata,
+        hasValidAwsPrecipitationObservation,
+      );
+
+      return {
+        observedAt,
+        observedLabel: formatDisplayKoreanDateTime(observedAt),
+        oneHour: buildRankingRows(
+          currentRows
+            .filter((item) => item.precipitationOneHour > 0)
+            .map((item) => ({
+              name: item.name,
+              address: item.address,
+              value: item.precipitationOneHour,
+            })),
+          'mm',
+          'desc',
+        ),
+        today: buildRankingRows(
+          currentRows
+            .filter((item) => item.precipitationToday > 0)
+            .map((item) => ({
+              name: item.name,
+              address: item.address,
+              value: item.precipitationToday,
+            })),
+          'mm',
+          'desc',
+        ),
+      };
+    } catch (error) {
+      console.error('[API Fetch Error] 현재 강수 랭킹 실패', error);
+      throw new Error('강수량 랭킹 데이터를 불러오지 못했습니다.');
+    }
+  });
+
+export const fetchPrecipitationSinceYesterdayRankings = async () =>
+  withDataCache('precipitation-since-yesterday-rankings', TTL.awsMinute, async () => {
     try {
       const now = new Date();
       const yesterday = subtractDays(now, 1);
@@ -494,28 +552,6 @@ export const fetchPrecipitationRankings = async () => {
       return {
         observedAt,
         observedLabel: formatDisplayKoreanDateTime(observedAt),
-        oneHour: buildRankingRows(
-          currentRows
-            .filter((item) => item.precipitationOneHour > 0)
-            .map((item) => ({
-              name: item.name,
-              address: item.address,
-              value: item.precipitationOneHour,
-            })),
-          'mm',
-          'desc',
-        ),
-        today: buildRankingRows(
-          currentRows
-            .filter((item) => item.precipitationToday > 0)
-            .map((item) => ({
-              name: item.name,
-              address: item.address,
-              value: item.precipitationToday,
-            })),
-          'mm',
-          'desc',
-        ),
         sinceYesterday: buildRankingRows(
           [...allStationIds]
             .map((stationId) => {
@@ -538,11 +574,10 @@ export const fetchPrecipitationRankings = async () => {
         ),
       };
     } catch (error) {
-      console.error('[API Fetch Error] 강수 랭킹 실패', error);
-      throw new Error('강수량 랭킹 데이터를 불러오지 못했습니다.');
+      console.error('[API Fetch Error] 어제부터 누적 강수 랭킹 실패', error);
+      throw new Error('어제부터 누적 강수량 데이터를 불러오지 못했습니다.');
     }
   });
-};
 
 const normalizeReportText = (content) =>
   content

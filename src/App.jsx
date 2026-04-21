@@ -11,8 +11,10 @@ import {
   getWarningImageUrl,
   fetchWarningImageUrls,
   fetchSnowData,
-  fetchTemperatureRankings,
-  fetchPrecipitationRankings,
+  fetchTemperatureCurrentRankings,
+  fetchTemperatureTodayRankings,
+  fetchPrecipitationCurrentRankings,
+  fetchPrecipitationSinceYesterdayRankings,
 } from './api/weatherApi';
 import { REGIONS, SUB_MENUS } from './data/mockData';
 
@@ -141,9 +143,15 @@ function App() {
       setApiError(null);
 
       try {
-        const data = await fetchTemperatureRankings();
+        const data =
+          selectedSubMenu === 'today'
+            ? await fetchTemperatureTodayRankings()
+            : await fetchTemperatureCurrentRankings();
         if (isActive) {
-          setTemperatureApiData(data);
+          setTemperatureApiData((previous) => ({
+            ...previous,
+            ...data,
+          }));
           setLastUpdatedAt(new Date());
         }
       } catch (error) {
@@ -162,7 +170,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [refreshTrigger, selectedTab]);
+  }, [refreshTrigger, selectedSubMenu, selectedTab]);
 
   useEffect(() => {
     if (selectedTab !== 'precipitation') {
@@ -176,9 +184,15 @@ function App() {
       setApiError(null);
 
       try {
-        const data = await fetchPrecipitationRankings();
+        const data =
+          selectedSubMenu === 'since_yesterday'
+            ? await fetchPrecipitationSinceYesterdayRankings()
+            : await fetchPrecipitationCurrentRankings();
         if (isActive) {
-          setPrecipitationApiData(data);
+          setPrecipitationApiData((previous) => ({
+            ...previous,
+            ...data,
+          }));
           setLastUpdatedAt(new Date());
         }
       } catch (error) {
@@ -197,7 +211,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [refreshTrigger, selectedTab]);
+  }, [refreshTrigger, selectedSubMenu, selectedTab]);
 
   useEffect(() => {
     if (selectedTab !== 'snow') {
