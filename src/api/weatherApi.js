@@ -6,10 +6,12 @@ const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
+const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
 const DOC_ISSUANCE_GRACE_MINUTES = 5;
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
+const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const TEXT_CACHE = new Map();
 const TEXT_IN_FLIGHT = new Map();
 const DATA_CACHE = new Map();
@@ -370,6 +372,17 @@ const fetchLatestAwsMinuteObservations = async (stationMetadata, validator) => {
   return fetchAwsMinuteObservationsByTimes(stationMetadata, candidateTimes, validator);
 };
 
+const fetchLatestAwsTemperatureObservations = async (stationMetadata) => {
+  const now = new Date();
+  const candidateTimes = AWS_TEMPERATURE_LOOKBACK_STEPS.map((offsetMinutes) => subtractMinutes(now, offsetMinutes));
+
+  return fetchAwsMinuteObservationsByTimes(
+    stationMetadata,
+    candidateTimes,
+    hasValidAwsTemperatureObservation,
+  );
+};
+
 const parseAwsDailyObservations = (rawText, stationMetadata) =>
   rawText
     .split('\n')
@@ -396,10 +409,7 @@ export const fetchTemperatureCurrentRankings = async () =>
   withDataCache('temperature-current-rankings', TTL.awsMinute, async () => {
     try {
       const stationMetadata = await fetchAwsStationMetadata();
-      const { observedAt, rows: currentRows } = await fetchLatestAwsMinuteObservations(
-        stationMetadata,
-        hasValidAwsTemperatureObservation,
-      );
+      const { observedAt, rows: currentRows } = await fetchLatestAwsTemperatureObservations(stationMetadata);
 
       return {
         observedAt,
@@ -439,6 +449,7 @@ export const fetchTemperatureTodayRankings = async () =>
           help: 1,
         }, {
           ttlMs: TTL.awsDaily,
+          timeoutMs: SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
         }),
         fetchKmaText('api/typ01/url/sfc_aws_day.php', {
           tm2: formatKmaDay(now),
@@ -448,6 +459,7 @@ export const fetchTemperatureTodayRankings = async () =>
           help: 1,
         }, {
           ttlMs: TTL.awsDaily,
+          timeoutMs: SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
         }),
       ]);
 
