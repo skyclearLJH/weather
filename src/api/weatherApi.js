@@ -103,6 +103,19 @@ const buildKmaUrl = (path, params = {}) => {
   return `${KMA_PROXY_BASE}/${path}${query ? `?${query}` : ''}`;
 };
 
+const buildAppUrl = (path, params = {}) => {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.set(key, String(value));
+    }
+  });
+
+  const query = searchParams.toString();
+  return `${path}${query ? `?${query}` : ''}`;
+};
+
 const buildCacheKey = (path, params = {}) => `${path}?${new URLSearchParams(params).toString()}`;
 
 const getCachedValue = (cache, key) => {
@@ -881,6 +894,17 @@ export const getWarningImageUrl = (warningMode = 'current', trigger = 0) => {
     _ts: trigger,
   });
 };
+
+export const fetchWarningImageUrls = async () =>
+  withDataCache('warning-image-urls', TTL.warnings, async () => {
+    const response = await fetchWithRetry(buildAppUrl('/api/weather-warning'), {}, 1, 9000);
+    const payload = await response.json();
+
+    return {
+      current: payload.current || '',
+      preliminary: payload.preliminary || '',
+    };
+  });
 
 export const fetchSnowData = async (type = 'tot', customTm = null) => {
   const tm = customTm || formatKmaMinuteTime(new Date());

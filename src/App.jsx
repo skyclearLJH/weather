@@ -9,6 +9,7 @@ import {
   fetchWeatherDoc,
   fetchWeatherWarnings,
   getWarningImageUrl,
+  fetchWarningImageUrls,
   fetchSnowData,
   fetchTemperatureRankings,
   fetchPrecipitationRankings,
@@ -32,6 +33,7 @@ function App() {
   const [apiData, setApiData] = useState([]);
   const [docApiData, setDocApiData] = useState([]);
   const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] });
+  const [warningImageUrls, setWarningImageUrls] = useState({ current: '', preliminary: '' });
   const [snowApiData, setSnowApiData] = useState({ tot: [], day: [] });
   const [temperatureApiData, setTemperatureApiData] = useState({
     observedAt: '',
@@ -96,9 +98,13 @@ function App() {
             setDocApiData(data);
           }
         } else if (isWarning) {
-          const data = await fetchWeatherWarnings(selectedRegion);
+          const [data, imageUrls] = await Promise.all([
+            fetchWeatherWarnings(selectedRegion),
+            fetchWarningImageUrls(),
+          ]);
           if (isActive) {
             setWarningApiData(data);
+            setWarningImageUrls(imageUrls);
           }
         }
 
@@ -394,7 +400,10 @@ function App() {
         {selectedTab === 'warning' ? (
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
             <img
-              src={getWarningImageUrl(selectedSubMenu, refreshTrigger)}
+              src={
+                warningImageUrls[selectedSubMenu] ||
+                getWarningImageUrl(selectedSubMenu, refreshTrigger)
+              }
               alt="기상특보 상황도"
               className="mx-auto h-auto max-w-full rounded-2xl object-contain"
               style={{ maxHeight: '685px' }}
