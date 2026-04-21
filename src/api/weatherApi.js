@@ -6,6 +6,7 @@ const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
+const YESTERDAY_PRECIPITATION_LOOKBACK_MINUTES = [0, 1, 2, 4, 9, 14, 29, 59];
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
 const DOC_ISSUANCE_GRACE_MINUTES = 5;
@@ -341,11 +342,9 @@ const hasValidAwsTemperatureObservation = (rows) =>
 const hasValidAwsPrecipitationObservation = (rows) =>
   rows.some((item) => item.precipitationOneHour >= 0 || item.precipitationToday >= 0);
 
-const fetchLatestAwsMinuteObservations = async (stationMetadata, validator) => {
-  const now = new Date();
-
-  for (const offsetMinutes of AWS_MINUTE_LOOKBACK_STEPS) {
-    const observedAt = formatKmaMinuteTime(subtractMinutes(now, offsetMinutes));
+const fetchAwsMinuteObservationsByTimes = async (stationMetadata, candidateTimes, validator) => {
+  for (const candidateTime of candidateTimes) {
+    const observedAt = formatKmaMinuteTime(candidateTime);
     const rawText = await fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
       tm2: observedAt,
       stn: 0,
@@ -362,6 +361,28 @@ const fetchLatestAwsMinuteObservations = async (stationMetadata, validator) => {
   }
 
   throw new Error('유효한 AWS 분자료를 찾지 못했습니다.');
+};
+
+const fetchLatestAwsMinuteObservations = async (stationMetadata, validator) => {
+  const now = new Date();
+  const candidateTimes = AWS_MINUTE_LOOKBACK_STEPS.map((offsetMinutes) => subtractMinutes(now, offsetMinutes));
+
+  return fetchAwsMinuteObservationsByTimes(stationMetadata, candidateTimes, validator);
+};
+
+const fetchYesterdayAwsPrecipitationSnapshot = async (stationMetadata, baseDate) => {
+  const endOfDay = new Date(baseDate);
+  endOfDay.setHours(23, 59, 0, 0);
+
+  const candidateTimes = YESTERDAY_PRECIPITATION_LOOKBACK_MINUTES.map((offsetMinutes) =>
+    subtractMinutes(endOfDay, offsetMinutes),
+  );
+
+  return fetchAwsMinuteObservationsByTimes(
+    stationMetadata,
+    candidateTimes,
+    hasValidAwsPrecipitationObservation,
+  );
 };
 
 const parseAwsDailyObservations = (rawText, stationMetadata) =>
@@ -463,21 +484,13 @@ export const fetchPrecipitationRankings = async () => {
       const yesterday = subtractDays(now, 1);
       const stationMetadata = await fetchAwsStationMetadata();
 
-        const [{ observedAt, rows: currentRows }, yesterdayRaw] = await Promise.all([
+      const [{ observedAt, rows: currentRows }, yesterdayRaw] = await Promise.all([
         fetchLatestAwsMinuteObservations(stationMetadata, hasValidAwsPrecipitationObservation),
-        fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
-          tm2: `${formatKmaDay(yesterday)}2359`,
-          stn: 0,
-          disp: 0,
-          help: 1,
-        }, {
-          ttlMs: TTL.awsMinute,
-        }),
+        fetchYesterdayAwsPrecipitationSnapshot(stationMetadata, yesterday),
       ]);
 
-      const yesterdayRows = parseAwsMinuteObservations(yesterdayRaw, stationMetadata);
       const yesterdayMap = new Map(
-        yesterdayRows.map((item) => [item.stationId, item.precipitationToday]),
+        yesterdayRaw.rows.map((item) => [item.stationId, item.precipitationToday]),
       );
 
       return {
