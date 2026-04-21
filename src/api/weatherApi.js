@@ -7,6 +7,8 @@ const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
+const DOC_ISSUANCE_HOURS = [5, 11, 17];
+const DOC_ISSUANCE_GRACE_MINUTES = 5;
 const TEXT_CACHE = new Map();
 const TEXT_IN_FLIGHT = new Map();
 const DATA_CACHE = new Map();
@@ -634,6 +636,25 @@ const formatDetailLand = (value) =>
     )
     .trim();
 
+const buildForecastDocCandidates = (now) =>
+  [0, 1, 2]
+    .flatMap((dayOffset) => {
+      const baseDate = subtractDays(now, dayOffset);
+
+      return DOC_ISSUANCE_HOURS.map((hour) => {
+        const issuedAt = new Date(baseDate);
+        issuedAt.setHours(hour, 0, 0, 0);
+
+        return {
+          issuedAt,
+          availableAt: new Date(issuedAt.getTime() + DOC_ISSUANCE_GRACE_MINUTES * 60 * 1000),
+          endAt: new Date(issuedAt.getTime() + 60 * 60 * 1000),
+        };
+      });
+    })
+    .filter((candidate) => candidate.availableAt <= now)
+    .sort((left, right) => right.issuedAt.getTime() - left.issuedAt.getTime());
+
 export const fetchWeatherCommentary = async (regionId) => {
   return withDataCache(`commentary-${regionId}`, TTL.commentary, async () => {
     const now = new Date();
@@ -690,35 +711,54 @@ export const fetchWeatherCommentary = async (regionId) => {
 
 export const fetchWeatherDoc = async (regionId) => {
   return withDataCache(`forecast-doc-${regionId}`, TTL.doc, async () => {
-    try {
-      const now = new Date();
-      const stn = getStnByRegion(regionId);
+    const now = new Date();
+    const stn = getStnByRegion(regionId);
+    const fallbackKey = `forecast-doc-last-success-${regionId}`;
+    let lastError = null;
 
-      const rawText = await fetchKmaText('api/typ01/url/fct_afs_ds.php', {
-        tmfc1: formatKmaHourTime(subtractHours(now, 72)),
-        tmfc2: formatKmaHourTime(now),
-        stn,
-        disp: 0,
-        help: 1,
-      }, {
-        ttlMs: TTL.doc,
-      });
+    for (const candidate of buildForecastDocCandidates(now)) {
+      try {
+        const rawText = await fetchKmaText('api/typ01/url/fct_afs_ds.php', {
+          tmfc1: formatKmaHourTime(candidate.issuedAt),
+          tmfc2: formatKmaHourTime(candidate.endAt),
+          stn,
+          disp: 0,
+          help: 1,
+        }, {
+          ttlMs: TTL.doc,
+          cacheKey: `forecast-doc-${regionId}-${formatKmaHourTime(candidate.issuedAt)}`,
+          timeoutMs: 9000,
+        });
 
-      const { content, tmfc } = parseKmaReport(rawText, stn, 7);
+        const { content, tmfc } = parseKmaReport(rawText, stn, 7);
+        if (!tmfc && !content) {
+          continue;
+        }
 
-      return [
-        {
-          id: `forecast-doc-${regionId}-${tmfc || Date.now()}`,
-          title: `통보문 (${getIssuingOfficeName(stn)})`,
-          time: formatDisplayTime(tmfc),
-          content: content || '표출 가능한 통보문이 아직 없습니다.',
-          region: regionId === 'all' ? '전국' : REGIONS.find((item) => item.id === regionId)?.label ?? '',
-        },
-      ];
-    } catch (error) {
-      console.error('[API Fetch Error] 통보문 실패', error);
-      throw new Error('기상청 통보문 데이터를 불러오지 못했습니다.');
+        const payload = [
+          {
+            id: `forecast-doc-${regionId}-${tmfc || Date.now()}`,
+            title: `통보문 (${getIssuingOfficeName(stn)})`,
+            time: formatDisplayTime(tmfc),
+            content: content || '표출 가능한 통보문이 아직 없습니다.',
+            region: regionId === 'all' ? '전국' : REGIONS.find((item) => item.id === regionId)?.label ?? '',
+          },
+        ];
+
+        LAST_SUCCESS_DATA.set(fallbackKey, payload);
+        return payload;
+      } catch (error) {
+        lastError = error;
+      }
     }
+
+    const cachedFallback = LAST_SUCCESS_DATA.get(fallbackKey);
+    if (cachedFallback) {
+      return cachedFallback;
+    }
+
+    console.error('[API Fetch Error] 통보문 실패', lastError);
+    throw new Error('기상청 통보문 데이터를 불러오지 못했습니다.');
   });
 };
 
