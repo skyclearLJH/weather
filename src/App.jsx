@@ -343,8 +343,12 @@ function App() {
       }
 
       const filteredData = filterByRegion(precipitationData).slice(0, 10);
+      const fallbackData =
+        selectedSubMenu === 'since_yesterday' && filteredData.length === 0
+          ? precipitationData.slice(0, 10)
+          : filteredData;
 
-      return filteredData.length > 0 ? (
+      return fallbackData.length > 0 ? (
         <WeatherTable
           title="강수량 Top 10"
           subtitle={
@@ -352,7 +356,7 @@ function App() {
               ? `선택한 기준으로 가장 높은 강수 기록을 보여줍니다. ${precipitationApiData.observedLabel}`
               : '선택한 기준으로 가장 높은 강수 기록을 보여줍니다.'
           }
-          data={filteredData}
+          data={fallbackData}
         />
       ) : (
         renderEmptyState(EMPTY_STATE_MESSAGE.precipitation)
