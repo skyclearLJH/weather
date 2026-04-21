@@ -526,9 +526,7 @@ export const fetchPrecipitationSinceYesterdayRankings = async () =>
       const yesterday = subtractDays(now, 1);
       const stationMetadata = await fetchAwsStationMetadata();
 
-      const [{ observedAt, rows: currentRows }, yesterdayDailyRaw] = await Promise.all([
-        fetchLatestAwsMinuteObservations(stationMetadata, hasValidAwsPrecipitationObservation),
-        fetchKmaText('api/typ01/url/sfc_aws_day.php', {
+      const yesterdayDailyRaw = await fetchKmaText('api/typ01/url/sfc_aws_day.php', {
           tm2: formatKmaDay(yesterday),
           obs: 'rn_day',
           stn: 0,
@@ -536,8 +534,21 @@ export const fetchPrecipitationSinceYesterdayRankings = async () =>
           help: 1,
         }, {
           ttlMs: TTL.awsDaily,
-        }),
-      ]);
+        });
+
+      let observedAt = formatKmaMinuteTime(now);
+      let currentRows = [];
+
+      try {
+        const latestCurrent = await fetchLatestAwsMinuteObservations(
+          stationMetadata,
+          hasValidAwsPrecipitationObservation,
+        );
+        observedAt = latestCurrent.observedAt;
+        currentRows = latestCurrent.rows;
+      } catch (error) {
+        console.warn('[API Fetch Warning] 현재 강수 분자료를 찾지 못해 어제 일강수량만으로 표출합니다.', error);
+      }
 
       const yesterdayDailyRows = parseAwsDailyObservations(yesterdayDailyRaw, stationMetadata);
       const yesterdayMap = new Map(
