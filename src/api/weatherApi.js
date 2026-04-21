@@ -485,6 +485,11 @@ export const fetchPrecipitationRankings = async () => {
       const yesterdayMap = new Map(
         yesterdayDailyRows.map((item) => [item.stationId, Math.max(0, item.value)]),
       );
+      const currentMap = new Map(currentRows.map((item) => [item.stationId, item]));
+      const allStationIds = new Set([
+        ...currentRows.map((item) => item.stationId),
+        ...yesterdayDailyRows.map((item) => item.stationId),
+      ]);
 
       return {
         observedAt,
@@ -512,12 +517,21 @@ export const fetchPrecipitationRankings = async () => {
           'desc',
         ),
         sinceYesterday: buildRankingRows(
-          currentRows
-            .map((item) => ({
-              name: item.name,
-              address: item.address,
-              value: Math.max(0, item.precipitationToday) + Math.max(0, yesterdayMap.get(item.stationId) ?? 0),
-            }))
+          [...allStationIds]
+            .map((stationId) => {
+              const currentItem = currentMap.get(stationId);
+              const yesterdayItem = yesterdayDailyRows.find((item) => item.stationId === stationId);
+              const name = currentItem?.name ?? yesterdayItem?.name ?? stationId;
+              const address = currentItem?.address ?? yesterdayItem?.address ?? stationId;
+              const todayValue = Math.max(0, currentItem?.precipitationToday ?? Number.NaN);
+              const yesterdayValue = Math.max(0, yesterdayMap.get(stationId) ?? 0);
+
+              return {
+                name,
+                address,
+                value: (Number.isFinite(todayValue) ? todayValue : 0) + yesterdayValue,
+              };
+            })
             .filter((item) => item.value > 0),
           'mm',
           'desc',
