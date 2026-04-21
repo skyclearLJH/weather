@@ -9,6 +9,7 @@ const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
 const DOC_ISSUANCE_GRACE_MINUTES = 5;
+const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const TEXT_CACHE = new Map();
 const TEXT_IN_FLIGHT = new Map();
 const DATA_CACHE = new Map();
@@ -531,9 +532,10 @@ export const fetchPrecipitationSinceYesterdayRankings = async () =>
           obs: 'rn_day',
           stn: 0,
           disp: 0,
-          help: 1,
+          help: 0,
         }, {
           ttlMs: TTL.awsDaily,
+          timeoutMs: SLOW_DAILY_RAIN_TIMEOUT_MS,
         });
 
       let observedAt = formatKmaMinuteTime(now);
