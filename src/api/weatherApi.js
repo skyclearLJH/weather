@@ -6,7 +6,6 @@ const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
-const YESTERDAY_PRECIPITATION_LOOKBACK_MINUTES = [0, 1, 2, 4, 9, 14, 29, 59];
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
 const DOC_ISSUANCE_GRACE_MINUTES = 5;
@@ -370,21 +369,6 @@ const fetchLatestAwsMinuteObservations = async (stationMetadata, validator) => {
   return fetchAwsMinuteObservationsByTimes(stationMetadata, candidateTimes, validator);
 };
 
-const fetchYesterdayAwsPrecipitationSnapshot = async (stationMetadata, baseDate) => {
-  const endOfDay = new Date(baseDate);
-  endOfDay.setHours(23, 59, 0, 0);
-
-  const candidateTimes = YESTERDAY_PRECIPITATION_LOOKBACK_MINUTES.map((offsetMinutes) =>
-    subtractMinutes(endOfDay, offsetMinutes),
-  );
-
-  return fetchAwsMinuteObservationsByTimes(
-    stationMetadata,
-    candidateTimes,
-    hasValidAwsPrecipitationObservation,
-  );
-};
-
 const parseAwsDailyObservations = (rawText, stationMetadata) =>
   rawText
     .split('\n')
@@ -484,13 +468,22 @@ export const fetchPrecipitationRankings = async () => {
       const yesterday = subtractDays(now, 1);
       const stationMetadata = await fetchAwsStationMetadata();
 
-      const [{ observedAt, rows: currentRows }, yesterdayRaw] = await Promise.all([
+      const [{ observedAt, rows: currentRows }, yesterdayDailyRaw] = await Promise.all([
         fetchLatestAwsMinuteObservations(stationMetadata, hasValidAwsPrecipitationObservation),
-        fetchYesterdayAwsPrecipitationSnapshot(stationMetadata, yesterday),
+        fetchKmaText('api/typ01/url/sfc_aws_day.php', {
+          tm2: formatKmaDay(yesterday),
+          obs: 'rn_day',
+          stn: 0,
+          disp: 0,
+          help: 1,
+        }, {
+          ttlMs: TTL.awsDaily,
+        }),
       ]);
 
+      const yesterdayDailyRows = parseAwsDailyObservations(yesterdayDailyRaw, stationMetadata);
       const yesterdayMap = new Map(
-        yesterdayRaw.rows.map((item) => [item.stationId, item.precipitationToday]),
+        yesterdayDailyRows.map((item) => [item.stationId, Math.max(0, item.value)]),
       );
 
       return {
