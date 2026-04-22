@@ -20,15 +20,15 @@ const normalizeImageUrl = (value) => {
   return cleanPath.startsWith('http') ? cleanPath : `https://www.weather.go.kr${cleanPath}`;
 };
 
-const extractImageUrl = (html, marker) => {
-  const markerIndex = html.indexOf(marker);
-  if (markerIndex === -1) {
-    return '';
-  }
+const extractWarningMapUrls = (html) => {
+  const imageMatches = [...html.matchAll(/<img[^>]*data-map-mode="img"[^>]*src="([^"]+)"/gi)]
+    .map((match) => normalizeImageUrl(match[1]))
+    .filter(Boolean);
 
-  const imageChunk = html.slice(markerIndex, markerIndex + 1200);
-  const match = imageChunk.match(/<img[^>]*src="([^"]+)"/i);
-  return normalizeImageUrl(match?.[1] ?? '');
+  return {
+    current: imageMatches[0] ?? '',
+    preliminary: imageMatches[1] ?? '',
+  };
 };
 
 export async function onRequestOptions() {
@@ -52,9 +52,10 @@ export async function onRequestGet() {
     }
 
     const html = await response.text();
+    const mapUrls = extractWarningMapUrls(html);
     const payload = {
-      current: extractImageUrl(html, '기상특보'),
-      preliminary: extractImageUrl(html, '예비특보'),
+      current: mapUrls.current,
+      preliminary: mapUrls.preliminary,
       fetchedAt: new Date().toISOString(),
     };
 
