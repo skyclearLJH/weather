@@ -986,6 +986,24 @@ export const fetchWarningImageUrls = async () =>
     };
   });
 
+const fetchRankingsJson = async (kind) =>
+  withDataCache(`server-rankings-${kind}`, TTL.awsMinute, async () => {
+    const response = await fetchWithRetry(buildAppUrl('/api/rankings', { kind }), {}, 1, 35000);
+    return response.json();
+  });
+
+export const fetchServerTemperatureCurrentRankings = async () =>
+  fetchRankingsJson('temperature-current');
+
+export const fetchServerTemperatureTodayRankings = async () =>
+  fetchRankingsJson('temperature-today');
+
+export const fetchServerPrecipitationCurrentRankings = async () =>
+  fetchRankingsJson('precipitation-current');
+
+export const fetchServerPrecipitationSinceYesterdayRankings = async () =>
+  fetchRankingsJson('precipitation-since-yesterday');
+
 export const fetchSnowData = async (type = 'tot', customTm = null) => {
   const tm = customTm || formatKmaMinuteTime(new Date());
   const ttlMs = customTm ? TTL.snowHistory : TTL.snow;

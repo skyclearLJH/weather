@@ -11,10 +11,10 @@ import {
   getWarningImageUrl,
   fetchWarningImageUrls,
   fetchSnowData,
-  fetchTemperatureCurrentRankings,
-  fetchTemperatureTodayRankings,
-  fetchPrecipitationCurrentRankings,
-  fetchPrecipitationSinceYesterdayRankings,
+  fetchServerTemperatureCurrentRankings,
+  fetchServerTemperatureTodayRankings,
+  fetchServerPrecipitationCurrentRankings,
+  fetchServerPrecipitationSinceYesterdayRankings,
 } from './api/weatherApi';
 import { REGIONS, SUB_MENUS } from './data/mockData';
 
@@ -145,8 +145,8 @@ function App() {
       try {
         const data =
           selectedSubMenu === 'today'
-            ? await fetchTemperatureTodayRankings()
-            : await fetchTemperatureCurrentRankings();
+            ? await fetchServerTemperatureTodayRankings()
+            : await fetchServerTemperatureCurrentRankings();
         if (isActive) {
           setTemperatureApiData((previous) => ({
             ...previous,
@@ -186,8 +186,8 @@ function App() {
       try {
         const data =
           selectedSubMenu === 'since_yesterday'
-            ? await fetchPrecipitationSinceYesterdayRankings()
-            : await fetchPrecipitationCurrentRankings();
+            ? await fetchServerPrecipitationSinceYesterdayRankings()
+            : await fetchServerPrecipitationCurrentRankings();
         if (isActive) {
           setPrecipitationApiData((previous) => ({
             ...previous,
