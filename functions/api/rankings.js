@@ -9,7 +9,10 @@ const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const padZero = (value) => value.toString().padStart(2, '0');
+
+const getKstNow = () => new Date(Date.now() + KST_OFFSET_MS);
 
 const readAuthKey = (context) =>
   context.env?.KMA_AUTH_KEY ||
@@ -19,11 +22,11 @@ const readAuthKey = (context) =>
   '';
 
 const formatKmaMinuteTime = (date) => {
-  const year = date.getFullYear();
-  const month = padZero(date.getMonth() + 1);
-  const day = padZero(date.getDate());
-  const hour = padZero(date.getHours());
-  const minute = padZero(date.getMinutes());
+  const year = date.getUTCFullYear();
+  const month = padZero(date.getUTCMonth() + 1);
+  const day = padZero(date.getUTCDate());
+  const hour = padZero(date.getUTCHours());
+  const minute = padZero(date.getUTCMinutes());
   return `${year}${month}${day}${hour}${minute}`;
 };
 
@@ -197,13 +200,13 @@ const fetchAwsMinuteObservationsByTimes = async (context, stationMetadata, candi
 };
 
 const fetchLatestAwsTemperatureObservations = (context, stationMetadata) => {
-  const now = new Date();
+  const now = getKstNow();
   const candidateTimes = AWS_TEMPERATURE_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
   return fetchAwsMinuteObservationsByTimes(context, stationMetadata, candidateTimes, hasValidAwsTemperatureObservation);
 };
 
 const fetchLatestAwsPrecipitationObservations = (context, stationMetadata) => {
-  const now = new Date();
+  const now = getKstNow();
   const candidateTimes = AWS_MINUTE_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
   return fetchAwsMinuteObservationsByTimes(context, stationMetadata, candidateTimes, hasValidAwsPrecipitationObservation);
 };
@@ -212,7 +215,7 @@ const getAwsStationMetadata = async (context) => {
   const rawText = await fetchKmaText(
     context,
     'api/typ01/url/stn_inf.php',
-    { inf: 'AWS', stn: '', tm: formatStationInfoTime(new Date()), help: 1 },
+    { inf: 'AWS', stn: '', tm: formatStationInfoTime(getKstNow()), help: 1 },
     12000,
     86400,
   );
@@ -246,7 +249,7 @@ const buildTemperatureCurrent = async (context, stationMetadata) => {
 };
 
 const buildTemperatureToday = async (context, stationMetadata) => {
-  const now = new Date();
+  const now = getKstNow();
   const [minDailyRaw, maxDailyRaw] = await Promise.all([
     fetchKmaText(
       context,
@@ -319,7 +322,7 @@ const buildPrecipitationCurrent = async (context, stationMetadata) => {
 };
 
 const buildPrecipitationSinceYesterday = async (context, stationMetadata) => {
-  const now = new Date();
+  const now = getKstNow();
   const yesterday = subtractDays(now, 1);
   const yesterdayDailyRaw = await fetchKmaText(
     context,
