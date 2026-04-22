@@ -359,7 +359,7 @@ function App() {
     }
 
     if (selectedTab === 'snow') {
-      const filteredData = filterByRegion(snowData).slice(0, 10);
+      const filteredData = (testTime ? snowData : filterByRegion(snowData)).slice(0, 10);
 
       return (
         <section className="space-y-4">

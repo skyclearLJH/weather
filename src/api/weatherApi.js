@@ -405,6 +405,26 @@ const parseAwsDailyObservations = (rawText, stationMetadata) =>
       };
     });
 
+const parseSnowObservations = (rawText, stationMetadata) =>
+  rawText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.replace(/,?=$/, ''))
+    .map((line) => line.split(',').map((field) => field.trim()))
+    .filter((fields) => fields.length >= 7)
+    .map((fields) => {
+      const stationId = fields[1];
+      const metadata = stationMetadata.get(stationId) ?? { name: fields[2], address: fields[2] };
+      const snowValue = parseNumericValue(fields[6]);
+
+      return {
+        name: metadata.name,
+        address: metadata.address,
+        value: snowValue,
+      };
+    });
+
 export const fetchTemperatureCurrentRankings = async () =>
   withDataCache('temperature-current-rankings', TTL.awsMinute, async () => {
     try {
@@ -1035,23 +1055,7 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
         stationMetadata.set(stationId, { name: stationName, address });
       });
 
-      return dataRaw
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith('#'))
-        .map((line) => line.split(',').map((field) => field.trim()))
-        .filter((fields) => fields.length >= 7)
-        .map((fields) => {
-          const stationId = fields[1];
-          const snowValue = Number.parseFloat(fields[6].replace(/[^0-9.-]/g, ''));
-          const metadata = stationMetadata.get(stationId) ?? { name: fields[2], address: fields[2] };
-
-          return {
-            name: metadata.name,
-            address: metadata.address,
-            value: snowValue,
-          };
-        })
+      return parseSnowObservations(dataRaw, stationMetadata)
         .filter((item) => Number.isFinite(item.value) && item.value > 0)
         .sort((a, b) => b.value - a.value)
         .map((item, index) => ({
