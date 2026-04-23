@@ -9,7 +9,6 @@ const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
-const DOC_ISSUANCE_GRACE_MINUTES = 5;
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const TEXT_CACHE = new Map();
@@ -760,12 +759,11 @@ const buildForecastDocCandidates = (now) =>
 
         return {
           issuedAt,
-          availableAt: new Date(issuedAt.getTime() + DOC_ISSUANCE_GRACE_MINUTES * 60 * 1000),
           endAt: new Date(issuedAt.getTime() + 60 * 60 * 1000),
         };
       });
     })
-    .filter((candidate) => candidate.availableAt <= now)
+    .filter((candidate) => candidate.issuedAt <= now)
     .sort((left, right) => right.issuedAt.getTime() - left.issuedAt.getTime());
 
 export const fetchWeatherCommentary = async (regionId) => {
@@ -840,7 +838,7 @@ export const fetchWeatherDoc = async (regionId) => {
         }, {
           ttlMs: TTL.doc,
           cacheKey: `forecast-doc-${regionId}-${formatKmaHourTime(candidate.issuedAt)}`,
-          timeoutMs: 9000,
+          timeoutMs: 15000,
         });
 
         const { content, tmfc } = parseKmaReport(rawText, stn, 7);
@@ -863,6 +861,38 @@ export const fetchWeatherDoc = async (regionId) => {
       } catch (error) {
         lastError = error;
       }
+    }
+
+    try {
+      const rawText = await fetchKmaText('api/typ01/url/fct_afs_ds.php', {
+        tmfc1: formatKmaHourTime(subtractDays(now, 2)),
+        tmfc2: formatKmaHourTime(new Date(now.getTime() + 60 * 60 * 1000)),
+        stn,
+        disp: 0,
+        help: 1,
+      }, {
+        ttlMs: TTL.doc,
+        cacheKey: `forecast-doc-${regionId}-lookback`,
+        timeoutMs: 15000,
+      });
+
+      const { content, tmfc } = parseKmaReport(rawText, stn, 7);
+      if (tmfc || content) {
+        const payload = [
+          {
+            id: `forecast-doc-${regionId}-${tmfc || Date.now()}`,
+            title: `?듬낫臾?(${getIssuingOfficeName(stn)})`,
+            time: formatDisplayTime(tmfc),
+            content: content || '?쒖텧 媛?ν븳 ?듬낫臾몄씠 ?꾩쭅 ?놁뒿?덈떎.',
+            region: regionId === 'all' ? '?꾧뎅' : REGIONS.find((item) => item.id === regionId)?.label ?? '',
+          },
+        ];
+
+        LAST_SUCCESS_DATA.set(fallbackKey, payload);
+        return payload;
+      }
+    } catch (error) {
+      lastError = error;
     }
 
     const cachedFallback = LAST_SUCCESS_DATA.get(fallbackKey);
