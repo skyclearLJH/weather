@@ -1,0 +1,11 @@
+name = "weathernow-precompute"
+main = "workers/weather-precompute.js"
+compatibility_date = "2026-05-22"
+
+[triggers]
+crons = ["*/3 * * * *"]
+
+[[kv_namespaces]]
+binding = "WEATHER_CACHE"
+id = "REPLACE_WITH_PRODUCTION_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"

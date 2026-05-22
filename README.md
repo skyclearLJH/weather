@@ -13,6 +13,14 @@ KBS 재난미디어센터용 기상 정보 포털입니다. React, Vite, Tailwin
 - `npm run build`
 - `npm run lint`
 
+## Weather Cache
+
+Cloudflare KV 기반 사전 계산 캐시를 사용할 수 있습니다.
+
+- Worker 소스: `workers/weather-precompute.js`
+- Worker 설정 예시: `wrangler.weather-cache.example.toml`
+- 운영/복구 문서: `docs/weather-cache.md`
+
 ## Auto Push
 
 이 저장소는 `.githooks/post-commit` 훅을 사용합니다.

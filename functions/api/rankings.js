@@ -10,7 +10,15 @@ const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const PRECOMPUTED_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
 const padZero = (value) => value.toString().padStart(2, '0');
+
+export const RANKING_KINDS = [
+  'temperature-current',
+  'temperature-today',
+  'precipitation-current',
+  'precipitation-since-yesterday',
+];
 
 const getKstNow = () => new Date(Date.now() + KST_OFFSET_MS);
 
@@ -20,6 +28,59 @@ const readAuthKey = (context) =>
   process.env.KMA_AUTH_KEY ||
   process.env.VITE_KMA_AUTH_KEY ||
   '';
+
+const isPrecomputedCacheDisabled = (context) =>
+  ['1', 'true', 'yes', 'live', 'off', 'disabled'].includes(
+    String(context.env?.DISABLE_PRECOMPUTED_WEATHER ?? '').toLowerCase(),
+  );
+
+const getWeatherCache = (context) => context.env?.WEATHER_CACHE ?? null;
+
+export const getRankingCacheKey = (kind) => `rankings:${kind}`;
+
+const isFreshCacheRecord = (record) => {
+  if (!record?.generatedAt) {
+    return false;
+  }
+
+  const generatedAt = Date.parse(record.generatedAt);
+  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= PRECOMPUTED_CACHE_MAX_AGE_MS;
+};
+
+const readPrecomputedRankingRecord = async (context, kind) => {
+  const weatherCache = getWeatherCache(context);
+  if (!weatherCache || isPrecomputedCacheDisabled(context)) {
+    return null;
+  }
+
+  return weatherCache.get(getRankingCacheKey(kind), 'json');
+};
+
+export const writePrecomputedRanking = async (context, kind, payload) => {
+  const weatherCache = getWeatherCache(context);
+  if (!weatherCache || !payload) {
+    return;
+  }
+
+  await weatherCache.put(
+    getRankingCacheKey(kind),
+    JSON.stringify({
+      kind,
+      generatedAt: new Date().toISOString(),
+      payload,
+    }),
+  );
+};
+
+const makeJsonResponse = (payload, headers = {}) =>
+  new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'Cache-Control': 'public, max-age=30, s-maxage=60',
+      ...headers,
+    },
+  });
 
 const formatKmaMinuteTime = (date) => {
   const year = date.getUTCFullYear();
@@ -375,6 +436,28 @@ const buildPrecipitationSinceYesterday = async (context, stationMetadata) => {
   };
 };
 
+export const buildRankingPayload = async (context, kind) => {
+  const stationMetadata = await getAwsStationMetadata(context);
+
+  if (kind === 'temperature-current') {
+    return buildTemperatureCurrent(context, stationMetadata);
+  }
+
+  if (kind === 'temperature-today') {
+    return buildTemperatureToday(context, stationMetadata);
+  }
+
+  if (kind === 'precipitation-current') {
+    return buildPrecipitationCurrent(context, stationMetadata);
+  }
+
+  if (kind === 'precipitation-since-yesterday') {
+    return buildPrecipitationSinceYesterday(context, stationMetadata);
+  }
+
+  throw new Error('Invalid rankings kind.');
+};
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -383,35 +466,51 @@ export async function onRequestOptions() {
 }
 
 export async function onRequestGet(context) {
-  try {
-    const requestUrl = new URL(context.request.url);
-    const kind = requestUrl.searchParams.get('kind');
-    const stationMetadata = await getAwsStationMetadata(context);
-    let payload;
+  const requestUrl = new URL(context.request.url);
+  const kind = requestUrl.searchParams.get('kind');
+  let cachedRecord = null;
 
-    if (kind === 'temperature-current') {
-      payload = await buildTemperatureCurrent(context, stationMetadata);
-    } else if (kind === 'temperature-today') {
-      payload = await buildTemperatureToday(context, stationMetadata);
-    } else if (kind === 'precipitation-current') {
-      payload = await buildPrecipitationCurrent(context, stationMetadata);
-    } else if (kind === 'precipitation-since-yesterday') {
-      payload = await buildPrecipitationSinceYesterday(context, stationMetadata);
-    } else {
+  try {
+    if (!RANKING_KINDS.includes(kind)) {
       return new Response(JSON.stringify({ error: 'Invalid rankings kind.' }), {
         status: 400,
         headers: corsHeaders,
       });
     }
 
-    return new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        'Cache-Control': 'public, max-age=30, s-maxage=60',
-      },
+    try {
+      cachedRecord = await readPrecomputedRankingRecord(context, kind);
+    } catch {
+      cachedRecord = null;
+    }
+
+    if (isFreshCacheRecord(cachedRecord)) {
+      return makeJsonResponse(cachedRecord.payload, {
+        'X-Weather-Data-Source': 'kv',
+        'X-Weather-Cache-Generated-At': cachedRecord.generatedAt,
+      });
+    }
+
+    const payload = await buildRankingPayload(context, kind);
+    const writePromise = writePrecomputedRanking(context, kind, payload);
+    if (context.waitUntil) {
+      context.waitUntil(writePromise);
+    } else {
+      writePromise.catch(() => {});
+    }
+
+    return makeJsonResponse(payload, {
+      'X-Weather-Data-Source': 'live',
     });
   } catch (error) {
+    if (cachedRecord?.payload) {
+      return makeJsonResponse(cachedRecord.payload, {
+        'X-Weather-Data-Source': 'stale-kv',
+        'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',
+        Warning: '110 - "Serving stale weather ranking data"',
+      });
+    }
+
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: corsHeaders,
