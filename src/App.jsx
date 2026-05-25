@@ -64,6 +64,21 @@ function App() {
   };
 
   useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      Promise.allSettled([
+        fetchServerTemperatureCurrentRankings(),
+        fetchServerTemperatureTodayRankings(),
+        fetchServerPrecipitationCurrentRankings(),
+        fetchServerPrecipitationSinceYesterdayRankings(),
+      ]).catch(() => {});
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [refreshTrigger]);
+
+  useEffect(() => {
     if (SHOW_SUBMENU_TABS.has(selectedTab)) {
       setSelectedSubMenu(SUB_MENUS[selectedTab][0].id);
     }
