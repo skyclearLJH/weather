@@ -11,7 +11,8 @@ const AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30, 60, 12
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-const PRECOMPUTED_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+const PRECOMPUTED_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
+const PRECOMPUTED_STALE_REFRESH_WAIT_MS = 2500;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
 const KMA_TEXT_CACHE = new Map();
@@ -83,6 +84,8 @@ const isFreshCacheRecord = (record) => {
   const generatedAt = Date.parse(record.generatedAt);
   return Number.isFinite(generatedAt) && Date.now() - generatedAt <= PRECOMPUTED_CACHE_MAX_AGE_MS;
 };
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const readPrecomputedRankingRecord = async (context, kind) => {
   const weatherCache = getWeatherCache(context);
@@ -651,7 +654,21 @@ export async function onRequestGet(context) {
     }
 
     if (cachedRecord?.payload) {
-      schedulePrecomputedRankingRefresh(context, kind);
+      const refreshPromise = schedulePrecomputedRankingRefresh(context, kind);
+      if (refreshPromise) {
+        const refreshedPayload = await Promise.race([
+          refreshPromise.catch(() => null),
+          wait(PRECOMPUTED_STALE_REFRESH_WAIT_MS).then(() => null),
+        ]);
+
+        if (refreshedPayload) {
+          return makeJsonResponse(refreshedPayload, {
+            'X-Weather-Data-Source': 'refreshed-kv',
+            'X-Weather-Cache-Generated-At': new Date().toISOString(),
+          });
+        }
+      }
+
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',
