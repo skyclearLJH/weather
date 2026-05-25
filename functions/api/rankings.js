@@ -7,10 +7,12 @@ const corsHeaders = {
 
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
+const AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30, 60, 120, 180];
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const PRECOMPUTED_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
 const KMA_TEXT_CACHE = new Map();
 const KMA_TEXT_IN_FLIGHT = new Map();
@@ -37,7 +39,39 @@ const isPrecomputedCacheDisabled = (context) =>
     String(context.env?.DISABLE_PRECOMPUTED_WEATHER ?? '').toLowerCase(),
   );
 
-const getWeatherCache = (context) => context.env?.WEATHER_CACHE ?? null;
+const buildCacheApiRequest = (key) =>
+  new Request(`https://weathernow-cache.local/${encodeURIComponent(key)}`);
+
+const createCacheApiStore = () => {
+  if (typeof caches === 'undefined' || !caches.default) {
+    return null;
+  }
+
+  return {
+    async get(key, type) {
+      const response = await caches.default.match(buildCacheApiRequest(key));
+      if (!response) {
+        return null;
+      }
+
+      const value = await response.text();
+      return type === 'json' ? JSON.parse(value) : value;
+    },
+    async put(key, value) {
+      await caches.default.put(
+        buildCacheApiRequest(key),
+        new Response(value, {
+          headers: {
+            'Cache-Control': `public, max-age=${PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS}`,
+            'Content-Type': 'application/json; charset=utf-8',
+          },
+        }),
+      );
+    },
+  };
+};
+
+const getWeatherCache = (context) => context.env?.WEATHER_CACHE ?? createCacheApiStore();
 
 export const getRankingCacheKey = (kind) => `rankings:${kind}`;
 
@@ -322,6 +356,14 @@ const parseAwsDailyObservations = (rawText, stationMetadata) =>
       };
     });
 
+const hasDailyObservationRows = (rawText) =>
+  rawText
+    .split('\n')
+    .some((line) => {
+      const trimmed = line.trim();
+      return trimmed && !trimmed.startsWith('#') && !trimmed.includes('7777END');
+    });
+
 const hasValidAwsTemperatureObservation = (rows) => rows.some((item) => isFiniteObservation(item.temperature));
 const hasValidAwsPrecipitationObservation = (rows) =>
   rows.some((item) => item.precipitationOneHour >= 0 || item.precipitationToday >= 0);
@@ -394,26 +436,57 @@ const buildTemperatureCurrent = async (context, stationMetadata) => {
   };
 };
 
-const buildTemperatureToday = async (context, stationMetadata) => {
+const fetchDailyTemperatureRawByTimes = async (context, candidateTimes) => {
+  const seenDays = new Set();
+
+  for (const candidateTime of candidateTimes) {
+    const observedDay = formatKmaDay(candidateTime);
+    if (seenDays.has(observedDay)) {
+      continue;
+    }
+
+    seenDays.add(observedDay);
+
+    const [minDailyRaw, maxDailyRaw] = await Promise.all([
+      fetchKmaText(
+        context,
+        'api/typ01/url/sfc_aws_day.php',
+        { tm2: observedDay, obs: 'ta_min', stn: 0, disp: 0, help: 1 },
+        SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
+        300,
+      ),
+      fetchKmaText(
+        context,
+        'api/typ01/url/sfc_aws_day.php',
+        { tm2: observedDay, obs: 'ta_max', stn: 0, disp: 0, help: 1 },
+        SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
+        300,
+      ),
+    ]);
+
+    if (hasDailyObservationRows(minDailyRaw) || hasDailyObservationRows(maxDailyRaw)) {
+      return {
+        observedAt: formatKmaMinuteTime(candidateTime),
+        minDailyRaw,
+        maxDailyRaw,
+      };
+    }
+  }
+
+  throw new Error('No valid daily temperature observations were found.');
+};
+
+const buildTemperatureToday = async (context, stationMetadataPromise) => {
   const now = getKstNow();
-  const [minDailyRaw, maxDailyRaw] = await Promise.all([
-    fetchKmaText(
-      context,
-      'api/typ01/url/sfc_aws_day.php',
-      { tm2: formatKmaDay(now), obs: 'ta_min', stn: 0, disp: 0, help: 1 },
-      SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
-      300,
-    ),
-    fetchKmaText(
-      context,
-      'api/typ01/url/sfc_aws_day.php',
-      { tm2: formatKmaDay(now), obs: 'ta_max', stn: 0, disp: 0, help: 1 },
-      SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
-      300,
-    ),
+  const candidateTimes = AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
+  const [
+    stationMetadata,
+    { observedAt, minDailyRaw, maxDailyRaw },
+  ] = await Promise.all([
+    stationMetadataPromise,
+    fetchDailyTemperatureRawByTimes(context, candidateTimes),
   ]);
 
-  const observedAt = formatKmaMinuteTime(now);
   const dailyMinRows = parseAwsDailyObservations(minDailyRaw, stationMetadata);
   const dailyMaxRows = parseAwsDailyObservations(maxDailyRaw, stationMetadata);
 
@@ -522,21 +595,22 @@ const buildPrecipitationSinceYesterday = async (context, stationMetadata) => {
 };
 
 export const buildRankingPayload = async (context, kind) => {
-  const stationMetadata = await getAwsStationMetadata(context);
-
   if (kind === 'temperature-current') {
+    const stationMetadata = await getAwsStationMetadata(context);
     return buildTemperatureCurrent(context, stationMetadata);
   }
 
   if (kind === 'temperature-today') {
-    return buildTemperatureToday(context, stationMetadata);
+    return buildTemperatureToday(context, getAwsStationMetadata(context));
   }
 
   if (kind === 'precipitation-current') {
+    const stationMetadata = await getAwsStationMetadata(context);
     return buildPrecipitationCurrent(context, stationMetadata);
   }
 
   if (kind === 'precipitation-since-yesterday') {
+    const stationMetadata = await getAwsStationMetadata(context);
     return buildPrecipitationSinceYesterday(context, stationMetadata);
   }
 
