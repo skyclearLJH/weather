@@ -39,6 +39,42 @@ const readAuthKey = (context) =>
   process.env.VITE_KMA_AUTH_KEY ||
   '';
 
+const makeKmaRequest = (context, targetUrl) => {
+  const { request } = context;
+  const headers = new Headers();
+  const accept = request.headers.get('accept');
+  const contentType = request.headers.get('content-type');
+
+  if (accept) {
+    headers.set('accept', accept);
+  }
+
+  if (contentType) {
+    headers.set('content-type', contentType);
+  }
+
+  return new Request(targetUrl.toString(), {
+    method: request.method,
+    headers,
+    body: request.method === 'GET' || request.method === 'HEAD' ? null : request.body,
+    redirect: 'follow',
+  });
+};
+
+const fetchKma = (context, targetUrl, cacheTtl) => {
+  const request = makeKmaRequest(context, targetUrl);
+  const method = context.request.method;
+
+  return fetch(request, method === 'GET' || method === 'HEAD'
+    ? {
+        cf: {
+          cacheEverything: true,
+          cacheTtl,
+        },
+      }
+    : undefined);
+};
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -73,21 +109,13 @@ export async function onRequest(context) {
 
   try {
     const cacheTtl = getCacheTtl(targetUrl.pathname, targetUrl.searchParams);
-    const proxiedRequest = new Request(targetUrl.toString(), {
-      method: request.method,
-      headers: request.headers,
-      body: request.method === 'GET' || request.method === 'HEAD' ? null : request.body,
-      redirect: 'follow',
-    });
+    let response = await fetchKma(context, targetUrl, cacheTtl);
 
-    const response = await fetch(proxiedRequest, request.method === 'GET' || request.method === 'HEAD'
-      ? {
-          cf: {
-            cacheEverything: true,
-            cacheTtl,
-          },
-        }
-      : undefined);
+    if (response.status === 401 && authKey) {
+      targetUrl.searchParams.delete('authKey');
+      response = await fetchKma(context, targetUrl, cacheTtl);
+    }
+
     const nextHeaders = new Headers(response.headers);
 
     Object.entries(corsHeaders).forEach(([key, value]) => {

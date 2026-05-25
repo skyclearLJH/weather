@@ -11,6 +11,9 @@ const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const PRECOMPUTED_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
+const KMA_TEXT_CACHE = new Map();
+const KMA_TEXT_IN_FLIGHT = new Map();
 const padZero = (value) => value.toString().padStart(2, '0');
 
 export const RANKING_KINDS = [
@@ -70,6 +73,38 @@ export const writePrecomputedRanking = async (context, kind, payload) => {
       payload,
     }),
   );
+};
+
+const refreshPrecomputedRanking = async (context, kind) => {
+  const payload = await buildRankingPayload(context, kind);
+  await writePrecomputedRanking(context, kind, payload);
+  return payload;
+};
+
+const schedulePrecomputedRankingRefresh = (context, kind) => {
+  if (isPrecomputedCacheDisabled(context) || !getWeatherCache(context)) {
+    return null;
+  }
+
+  const cacheKey = getRankingCacheKey(kind);
+  if (PRECOMPUTED_REFRESH_IN_FLIGHT.has(cacheKey)) {
+    return PRECOMPUTED_REFRESH_IN_FLIGHT.get(cacheKey);
+  }
+
+  const refreshPromise = refreshPrecomputedRanking(context, kind)
+    .finally(() => {
+      PRECOMPUTED_REFRESH_IN_FLIGHT.delete(cacheKey);
+    });
+
+  PRECOMPUTED_REFRESH_IN_FLIGHT.set(cacheKey, refreshPromise);
+
+  if (context.waitUntil) {
+    context.waitUntil(refreshPromise);
+  } else {
+    refreshPromise.catch(() => {});
+  }
+
+  return refreshPromise;
 };
 
 const makeJsonResponse = (payload, headers = {}) =>
@@ -143,7 +178,35 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = 12000) => {
   }
 };
 
+const isUnauthorizedError = (error) => error?.message === 'HTTP Error Status: 401';
+
+const buildKmaTextCacheKey = (path, params) => `${path}?${new URLSearchParams(params).toString()}`;
+
+const getCachedKmaText = (cacheKey) => {
+  const cached = KMA_TEXT_CACHE.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    KMA_TEXT_CACHE.delete(cacheKey);
+    return null;
+  }
+
+  return cached.value;
+};
+
 const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cacheTtl = 60) => {
+  const cacheKey = buildKmaTextCacheKey(path, params);
+  const cachedText = getCachedKmaText(cacheKey);
+  if (cachedText !== null) {
+    return cachedText;
+  }
+
+  if (KMA_TEXT_IN_FLIGHT.has(cacheKey)) {
+    return KMA_TEXT_IN_FLIGHT.get(cacheKey);
+  }
+
   const url = new URL(`https://apihub.kma.go.kr/${path}`);
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') {
@@ -156,18 +219,40 @@ const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cache
     url.searchParams.set('authKey', authKey);
   }
 
-  const response = await fetchWithTimeout(
-    url.toString(),
-    {
-      cf: {
-        cacheEverything: true,
-        cacheTtl,
-      },
+  const requestOptions = {
+    cf: {
+      cacheEverything: true,
+      cacheTtl,
     },
-    timeoutMs,
-  );
-  const buffer = await response.arrayBuffer();
-  return new TextDecoder('euc-kr').decode(buffer);
+  };
+
+  const requestPromise = (async () => {
+    let response;
+    try {
+      response = await fetchWithTimeout(url.toString(), requestOptions, timeoutMs);
+    } catch (error) {
+      if (!authKey || !isUnauthorizedError(error)) {
+        throw error;
+      }
+
+      url.searchParams.delete('authKey');
+      response = await fetchWithTimeout(url.toString(), requestOptions, timeoutMs);
+    }
+
+    const buffer = await response.arrayBuffer();
+    const decoded = new TextDecoder('euc-kr').decode(buffer);
+    KMA_TEXT_CACHE.set(cacheKey, {
+      value: decoded,
+      expiresAt: Date.now() + cacheTtl * 1000,
+    });
+    return decoded;
+  })()
+    .finally(() => {
+      KMA_TEXT_IN_FLIGHT.delete(cacheKey);
+    });
+
+  KMA_TEXT_IN_FLIGHT.set(cacheKey, requestPromise);
+  return requestPromise;
 };
 
 const parseAwsStationMetadata = (rawText) => {
@@ -491,13 +576,16 @@ export async function onRequestGet(context) {
       });
     }
 
-    const payload = await buildRankingPayload(context, kind);
-    const writePromise = writePrecomputedRanking(context, kind, payload);
-    if (context.waitUntil) {
-      context.waitUntil(writePromise);
-    } else {
-      writePromise.catch(() => {});
+    if (cachedRecord?.payload) {
+      schedulePrecomputedRankingRefresh(context, kind);
+      return makeJsonResponse(cachedRecord.payload, {
+        'X-Weather-Data-Source': 'stale-kv',
+        'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',
+        Warning: '110 - "Refreshing weather ranking data in the background"',
+      });
     }
+
+    const payload = await refreshPrecomputedRanking(context, kind);
 
     return makeJsonResponse(payload, {
       'X-Weather-Data-Source': 'live',
