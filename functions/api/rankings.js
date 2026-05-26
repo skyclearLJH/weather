@@ -40,6 +40,11 @@ const isPrecomputedCacheDisabled = (context) =>
     String(context.env?.DISABLE_PRECOMPUTED_WEATHER ?? '').toLowerCase(),
   );
 
+const isManualRefreshRequest = (context) => {
+  const requestUrl = new URL(context.request.url);
+  return requestUrl.searchParams.has('_refresh');
+};
+
 const buildCacheApiRequest = (key) =>
   new Request(`https://weathernow-cache.local/${encodeURIComponent(key)}`);
 
@@ -235,13 +240,17 @@ const getCachedKmaText = (cacheKey) => {
 
 const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cacheTtl = 60) => {
   const cacheKey = buildKmaTextCacheKey(path, params);
-  const cachedText = getCachedKmaText(cacheKey);
-  if (cachedText !== null) {
-    return cachedText;
-  }
+  const forceRefresh = isManualRefreshRequest(context);
 
-  if (KMA_TEXT_IN_FLIGHT.has(cacheKey)) {
-    return KMA_TEXT_IN_FLIGHT.get(cacheKey);
+  if (!forceRefresh) {
+    const cachedText = getCachedKmaText(cacheKey);
+    if (cachedText !== null) {
+      return cachedText;
+    }
+
+    if (KMA_TEXT_IN_FLIGHT.has(cacheKey)) {
+      return KMA_TEXT_IN_FLIGHT.get(cacheKey);
+    }
   }
 
   const url = new URL(`https://apihub.kma.go.kr/${path}`);
@@ -256,12 +265,14 @@ const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cache
     url.searchParams.set('authKey', authKey);
   }
 
-  const requestOptions = {
-    cf: {
-      cacheEverything: true,
-      cacheTtl,
-    },
-  };
+  const requestOptions = forceRefresh
+    ? { cache: 'no-store' }
+    : {
+        cf: {
+          cacheEverything: true,
+          cacheTtl,
+        },
+      };
 
   const requestPromise = (async () => {
     let response;
@@ -288,7 +299,10 @@ const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cache
       KMA_TEXT_IN_FLIGHT.delete(cacheKey);
     });
 
-  KMA_TEXT_IN_FLIGHT.set(cacheKey, requestPromise);
+  if (!forceRefresh) {
+    KMA_TEXT_IN_FLIGHT.set(cacheKey, requestPromise);
+  }
+
   return requestPromise;
 };
 
@@ -630,6 +644,7 @@ export async function onRequestOptions() {
 export async function onRequestGet(context) {
   const requestUrl = new URL(context.request.url);
   const kind = requestUrl.searchParams.get('kind');
+  const forceRefresh = requestUrl.searchParams.has('_refresh');
   let cachedRecord = null;
 
   try {
@@ -646,14 +661,14 @@ export async function onRequestGet(context) {
       cachedRecord = null;
     }
 
-    if (isFreshCacheRecord(cachedRecord)) {
+    if (!forceRefresh && isFreshCacheRecord(cachedRecord)) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt,
       });
     }
 
-    if (cachedRecord?.payload) {
+    if (!forceRefresh && cachedRecord?.payload) {
       const refreshPromise = schedulePrecomputedRankingRefresh(context, kind);
       if (refreshPromise) {
         const refreshedPayload = await Promise.race([
@@ -679,7 +694,7 @@ export async function onRequestGet(context) {
     const payload = await refreshPrecomputedRanking(context, kind);
 
     return makeJsonResponse(payload, {
-      'X-Weather-Data-Source': 'live',
+      'X-Weather-Data-Source': forceRefresh ? 'manual-refresh' : 'live',
     });
   } catch (error) {
     if (cachedRecord?.payload) {

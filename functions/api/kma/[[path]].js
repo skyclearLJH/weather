@@ -61,16 +61,20 @@ const makeKmaRequest = (context, targetUrl) => {
   });
 };
 
-const fetchKma = (context, targetUrl, cacheTtl) => {
+const fetchKma = (context, targetUrl, cacheTtl, forceRefresh = false) => {
   const request = makeKmaRequest(context, targetUrl);
   const method = context.request.method;
 
   return fetch(request, method === 'GET' || method === 'HEAD'
     ? {
-        cf: {
-          cacheEverything: true,
-          cacheTtl,
-        },
+        ...(forceRefresh
+          ? { cache: 'no-store' }
+          : {
+              cf: {
+                cacheEverything: true,
+                cacheTtl,
+              },
+            }),
       }
     : undefined);
 };
@@ -97,7 +101,7 @@ export async function onRequest(context) {
   const targetUrl = new URL(`https://apihub.kma.go.kr/${pathSegments.join('/')}`);
 
   incomingUrl.searchParams.forEach((value, key) => {
-    if (key !== 'authKey') {
+    if (key !== 'authKey' && key !== '_refresh') {
       targetUrl.searchParams.set(key, value);
     }
   });
@@ -109,11 +113,12 @@ export async function onRequest(context) {
 
   try {
     const cacheTtl = getCacheTtl(targetUrl.pathname, targetUrl.searchParams);
-    let response = await fetchKma(context, targetUrl, cacheTtl);
+    const forceRefresh = incomingUrl.searchParams.has('_refresh');
+    let response = await fetchKma(context, targetUrl, cacheTtl, forceRefresh);
 
     if (response.status === 401 && authKey) {
       targetUrl.searchParams.delete('authKey');
-      response = await fetchKma(context, targetUrl, cacheTtl);
+      response = await fetchKma(context, targetUrl, cacheTtl, forceRefresh);
     }
 
     const nextHeaders = new Headers(response.headers);
@@ -123,7 +128,7 @@ export async function onRequest(context) {
     });
 
     if (request.method === 'GET' || request.method === 'HEAD') {
-      nextHeaders.set('Cache-Control', `public, max-age=30, s-maxage=${cacheTtl}`);
+      nextHeaders.set('Cache-Control', forceRefresh ? 'no-store' : `public, max-age=30, s-maxage=${cacheTtl}`);
     }
 
     return new Response(response.body, {

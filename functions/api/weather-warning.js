@@ -14,6 +14,11 @@ const isPrecomputedCacheDisabled = (context) =>
     String(context.env?.DISABLE_PRECOMPUTED_WEATHER ?? '').toLowerCase(),
   );
 
+const isManualRefreshRequest = (context) => {
+  const requestUrl = new URL(context.request.url);
+  return requestUrl.searchParams.has('_refresh');
+};
+
 const getWeatherCache = (context) => context.env?.WEATHER_CACHE ?? null;
 
 const isFreshCacheRecord = (record) => {
@@ -90,13 +95,18 @@ export async function onRequestOptions() {
   });
 }
 
-export async function buildWarningImagePayload() {
-  const response = await fetch(OFFICIAL_WARNING_URL, {
-    cf: {
-      cacheEverything: true,
-      cacheTtl: 60,
-    },
-  });
+export async function buildWarningImagePayload(options = {}) {
+  const response = await fetch(
+    OFFICIAL_WARNING_URL,
+    options.forceRefresh
+      ? { cache: 'no-store' }
+      : {
+          cf: {
+            cacheEverything: true,
+            cacheTtl: 60,
+          },
+        },
+  );
 
   if (!response.ok) {
     throw new Error(`HTTP Error Status: ${response.status}`);
@@ -112,6 +122,7 @@ export async function buildWarningImagePayload() {
 }
 
 export async function onRequestGet(context) {
+  const forceRefresh = isManualRefreshRequest(context);
   let cachedRecord = null;
 
   try {
@@ -121,14 +132,14 @@ export async function onRequestGet(context) {
       cachedRecord = null;
     }
 
-    if (isFreshCacheRecord(cachedRecord)) {
+    if (!forceRefresh && isFreshCacheRecord(cachedRecord)) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt,
       });
     }
 
-    const payload = await buildWarningImagePayload();
+    const payload = await buildWarningImagePayload({ forceRefresh });
     const writePromise = writePrecomputedWarningImages(context, payload);
     if (context.waitUntil) {
       context.waitUntil(writePromise);
@@ -137,7 +148,7 @@ export async function onRequestGet(context) {
     }
 
     return makeJsonResponse(payload, {
-      'X-Weather-Data-Source': 'live',
+      'X-Weather-Data-Source': forceRefresh ? 'manual-refresh' : 'live',
     });
   } catch (error) {
     if (cachedRecord?.payload) {

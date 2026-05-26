@@ -15,6 +15,7 @@ import {
   fetchServerTemperatureTodayRankings,
   fetchServerPrecipitationCurrentRankings,
   fetchServerPrecipitationSinceYesterdayRankings,
+  clearWeatherApiCaches,
 } from './api/weatherApi';
 import { REGIONS, SUB_MENUS } from './data/mockData';
 
@@ -59,17 +60,19 @@ function App() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState(DEFAULT_UPDATED_AT);
 
   const handleRefresh = () => {
+    clearWeatherApiCaches();
     setRefreshTrigger((previous) => previous + 1);
     setLastUpdatedAt(new Date());
   };
 
   useEffect(() => {
+    const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
     const timerId = window.setTimeout(() => {
       Promise.allSettled([
-        fetchServerTemperatureCurrentRankings(),
-        fetchServerTemperatureTodayRankings(),
-        fetchServerPrecipitationCurrentRankings(),
-        fetchServerPrecipitationSinceYesterdayRankings(),
+        fetchServerTemperatureCurrentRankings(refreshOptions),
+        fetchServerTemperatureTodayRankings(refreshOptions),
+        fetchServerPrecipitationCurrentRankings(refreshOptions),
+        fetchServerPrecipitationSinceYesterdayRankings(refreshOptions),
       ]).catch(() => {});
     }, 1200);
 
@@ -100,24 +103,25 @@ function App() {
     let isActive = true;
 
     const loadApiData = async () => {
+      const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
       setIsLoading(true);
       setApiError(null);
 
       try {
         if (isCommentary) {
-          const data = await fetchWeatherCommentary(selectedRegion);
+          const data = await fetchWeatherCommentary(selectedRegion, refreshOptions);
           if (isActive) {
             setApiData(data);
           }
         } else if (isDoc) {
-          const data = await fetchWeatherDoc(selectedRegion);
+          const data = await fetchWeatherDoc(selectedRegion, refreshOptions);
           if (isActive) {
             setDocApiData(data);
           }
         } else if (isWarning) {
           const [data, imageUrls] = await Promise.all([
-            fetchWeatherWarnings(selectedRegion),
-            fetchWarningImageUrls(),
+            fetchWeatherWarnings(selectedRegion, refreshOptions),
+            fetchWarningImageUrls(refreshOptions),
           ]);
           if (isActive) {
             setWarningApiData(data);
@@ -154,14 +158,15 @@ function App() {
     let isActive = true;
 
     const loadTemperatureData = async () => {
+      const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
       setIsLoading(true);
       setApiError(null);
 
       try {
         const data =
           selectedSubMenu === 'today'
-            ? await fetchServerTemperatureTodayRankings()
-            : await fetchServerTemperatureCurrentRankings();
+            ? await fetchServerTemperatureTodayRankings(refreshOptions)
+            : await fetchServerTemperatureCurrentRankings(refreshOptions);
         if (isActive) {
           setTemperatureApiData((previous) => ({
             ...previous,
@@ -195,14 +200,15 @@ function App() {
     let isActive = true;
 
     const loadPrecipitationData = async () => {
+      const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
       setIsLoading(true);
       setApiError(null);
 
       try {
         const data =
           selectedSubMenu === 'since_yesterday'
-            ? await fetchServerPrecipitationSinceYesterdayRankings()
-            : await fetchServerPrecipitationCurrentRankings();
+            ? await fetchServerPrecipitationSinceYesterdayRankings(refreshOptions)
+            : await fetchServerPrecipitationCurrentRankings(refreshOptions);
         if (isActive) {
           setPrecipitationApiData((previous) => ({
             ...previous,
@@ -236,13 +242,14 @@ function App() {
     let isActive = true;
 
     const loadSnowData = async () => {
+      const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
       setIsLoading(true);
       setApiError(null);
 
       try {
         const [totData, dayData] = await Promise.all([
-          fetchSnowData('tot', testTime),
-          fetchSnowData('day', testTime),
+          fetchSnowData('tot', testTime, refreshOptions),
+          fetchSnowData('day', testTime, refreshOptions),
         ]);
 
         if (isActive) {

@@ -147,6 +147,11 @@ const setCachedValue = (cache, key, value, ttlMs) => {
   return value;
 };
 
+export const clearWeatherApiCaches = () => {
+  TEXT_CACHE.clear();
+  DATA_CACHE.clear();
+};
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const fetchWithRetry = async (url, options = {}, retryCount = REQUEST_RETRY_COUNT, timeoutMs = REQUEST_TIMEOUT_MS) => {
@@ -179,10 +184,21 @@ const fetchWithRetry = async (url, options = {}, retryCount = REQUEST_RETRY_COUN
   throw new Error('Request failed.');
 };
 
+const withRefreshParam = (params = {}, refreshToken = '') => {
+  if (!refreshToken) {
+    return params;
+  }
+
+  return {
+    ...params,
+    _refresh: refreshToken,
+  };
+};
+
 const fetchKmaArrayBuffer = async (path, params = {}, options = {}) => {
   const response = await fetchWithRetry(
-    buildKmaUrl(path, params),
-    {},
+    buildKmaUrl(path, withRefreshParam(params, options.refreshToken)),
+    options.refreshToken ? { cache: 'no-store' } : {},
     options.retryCount ?? REQUEST_RETRY_COUNT,
     options.timeoutMs ?? REQUEST_TIMEOUT_MS,
   );
@@ -196,18 +212,21 @@ const fetchKmaText = async (path, params = {}, options = {}) => {
     cacheKey = buildCacheKey(path, params),
     retryCount = REQUEST_RETRY_COUNT,
     timeoutMs = REQUEST_TIMEOUT_MS,
+    refreshToken = '',
   } = options;
 
-  const cachedValue = getCachedValue(TEXT_CACHE, cacheKey);
-  if (cachedValue !== null) {
-    return cachedValue;
+  if (!refreshToken) {
+    const cachedValue = getCachedValue(TEXT_CACHE, cacheKey);
+    if (cachedValue !== null) {
+      return cachedValue;
+    }
+
+    if (TEXT_IN_FLIGHT.has(cacheKey)) {
+      return TEXT_IN_FLIGHT.get(cacheKey);
+    }
   }
 
-  if (TEXT_IN_FLIGHT.has(cacheKey)) {
-    return TEXT_IN_FLIGHT.get(cacheKey);
-  }
-
-  const requestPromise = fetchKmaArrayBuffer(path, params, { retryCount, timeoutMs })
+  const requestPromise = fetchKmaArrayBuffer(path, params, { retryCount, timeoutMs, refreshToken })
     .then((buffer) => {
       const decoded = new TextDecoder('euc-kr').decode(buffer);
       return setCachedValue(TEXT_CACHE, cacheKey, decoded, ttlMs);
@@ -222,23 +241,26 @@ const fetchKmaText = async (path, params = {}, options = {}) => {
 
 let awsStationMetadataPromise = null;
 
-const withDataCache = async (cacheKey, ttlMs, loader) => {
-  const cachedValue = getCachedValue(DATA_CACHE, cacheKey);
+const withDataCache = async (cacheKey, ttlMs, loader, options = {}) => {
+  const effectiveCacheKey = options.refreshToken
+    ? `${cacheKey}:refresh:${options.refreshToken}`
+    : cacheKey;
+  const cachedValue = getCachedValue(DATA_CACHE, effectiveCacheKey);
   if (cachedValue !== null) {
     return cachedValue;
   }
 
-  if (DATA_IN_FLIGHT.has(cacheKey)) {
-    return DATA_IN_FLIGHT.get(cacheKey);
+  if (DATA_IN_FLIGHT.has(effectiveCacheKey)) {
+    return DATA_IN_FLIGHT.get(effectiveCacheKey);
   }
 
   const requestPromise = loader()
-    .then((value) => setCachedValue(DATA_CACHE, cacheKey, value, ttlMs))
+    .then((value) => setCachedValue(DATA_CACHE, effectiveCacheKey, value, ttlMs))
     .finally(() => {
-      DATA_IN_FLIGHT.delete(cacheKey);
+      DATA_IN_FLIGHT.delete(effectiveCacheKey);
     });
 
-  DATA_IN_FLIGHT.set(cacheKey, requestPromise);
+  DATA_IN_FLIGHT.set(effectiveCacheKey, requestPromise);
   return requestPromise;
 };
 
@@ -766,7 +788,8 @@ const buildForecastDocCandidates = (now) =>
     .filter((candidate) => candidate.issuedAt <= now)
     .sort((left, right) => right.issuedAt.getTime() - left.issuedAt.getTime());
 
-export const fetchWeatherCommentary = async (regionId) => {
+export const fetchWeatherCommentary = async (regionId, options = {}) => {
+  const { refreshToken = '' } = options;
   return withDataCache(`commentary-${regionId}`, TTL.commentary, async () => {
     const now = new Date();
     const stn = getStnByRegion(regionId);
@@ -786,6 +809,7 @@ export const fetchWeatherCommentary = async (regionId) => {
           ttlMs: TTL.commentary,
           cacheKey: `commentary-${regionId}-${lookbackHours}h`,
           timeoutMs: 9000,
+          refreshToken,
         });
 
         const { content, tmfc } = parseKmaReport(rawText, stn, 9);
@@ -817,10 +841,11 @@ export const fetchWeatherCommentary = async (regionId) => {
 
     console.error('[API Fetch Error] 날씨해설 실패', lastError);
     throw new Error('기상청 날씨해설 데이터를 불러오지 못했습니다.');
-  });
+  }, { refreshToken });
 };
 
-export const fetchWeatherDoc = async (regionId) => {
+export const fetchWeatherDoc = async (regionId, options = {}) => {
+  const { refreshToken = '' } = options;
   return withDataCache(`forecast-doc-${regionId}`, TTL.doc, async () => {
     const now = new Date();
     const stn = getStnByRegion(regionId);
@@ -839,6 +864,7 @@ export const fetchWeatherDoc = async (regionId) => {
           ttlMs: TTL.doc,
           cacheKey: `forecast-doc-${regionId}-${formatKmaHourTime(candidate.issuedAt)}`,
           timeoutMs: 15000,
+          refreshToken,
         });
 
         const { content, tmfc } = parseKmaReport(rawText, stn, 7);
@@ -874,6 +900,7 @@ export const fetchWeatherDoc = async (regionId) => {
         ttlMs: TTL.doc,
         cacheKey: `forecast-doc-${regionId}-lookback`,
         timeoutMs: 15000,
+        refreshToken,
       });
 
       const { content, tmfc } = parseKmaReport(rawText, stn, 7);
@@ -902,10 +929,11 @@ export const fetchWeatherDoc = async (regionId) => {
 
     console.error('[API Fetch Error] 통보문 실패', lastError);
     throw new Error('기상청 통보문 데이터를 불러오지 못했습니다.');
-  });
+  }, { refreshToken });
 };
 
-export const fetchWeatherWarnings = async (regionId) => {
+export const fetchWeatherWarnings = async (regionId, options = {}) => {
+  const { refreshToken = '' } = options;
   try {
     const rawText = await fetchKmaText('api/typ01/url/wrn_now_data.php', {
       fe: 'f',
@@ -915,6 +943,7 @@ export const fetchWeatherWarnings = async (regionId) => {
     }, {
       ttlMs: TTL.warnings,
       cacheKey: 'weather-warnings-raw',
+      refreshToken,
     });
 
     const records = rawText
@@ -1025,44 +1054,59 @@ export const getWarningImageUrl = (warningMode = 'current', trigger = 0) => {
   });
 };
 
-export const fetchWarningImageUrls = async () =>
-  withDataCache('warning-image-urls', TTL.warnings, async () => {
-    const response = await fetchWithRetry(buildAppUrl('/api/weather-warning'), {}, 1, 9000);
+export const fetchWarningImageUrls = async (options = {}) => {
+  const { refreshToken = '' } = options;
+  return withDataCache('warning-image-urls', TTL.warnings, async () => {
+    const response = await fetchWithRetry(
+      buildAppUrl('/api/weather-warning', withRefreshParam({}, refreshToken)),
+      refreshToken ? { cache: 'no-store' } : {},
+      1,
+      9000,
+    );
     const payload = await response.json();
 
     return {
       current: payload.current || '',
       preliminary: payload.preliminary || '',
     };
-  });
+  }, { refreshToken });
+};
 
-const fetchRankingsJson = async (kind) =>
-  withDataCache(`server-rankings-${kind}`, TTL.awsMinute, async () => {
-    const response = await fetchWithRetry(buildAppUrl('/api/rankings', { kind }), {}, 1, 35000);
+const fetchRankingsJson = async (kind, options = {}) => {
+  const { refreshToken = '' } = options;
+  return withDataCache(`server-rankings-${kind}`, TTL.awsMinute, async () => {
+    const response = await fetchWithRetry(
+      buildAppUrl('/api/rankings', withRefreshParam({ kind }, refreshToken)),
+      refreshToken ? { cache: 'no-store' } : {},
+      1,
+      35000,
+    );
     return response.json();
-  });
+  }, { refreshToken });
+};
 
-export const fetchServerTemperatureCurrentRankings = async () =>
-  fetchRankingsJson('temperature-current');
+export const fetchServerTemperatureCurrentRankings = async (options = {}) =>
+  fetchRankingsJson('temperature-current', options);
 
-export const fetchServerTemperatureTodayRankings = async () =>
-  fetchRankingsJson('temperature-today');
+export const fetchServerTemperatureTodayRankings = async (options = {}) =>
+  fetchRankingsJson('temperature-today', options);
 
-export const fetchServerPrecipitationCurrentRankings = async () =>
-  fetchRankingsJson('precipitation-current');
+export const fetchServerPrecipitationCurrentRankings = async (options = {}) =>
+  fetchRankingsJson('precipitation-current', options);
 
-export const fetchServerPrecipitationSinceYesterdayRankings = async () =>
-  fetchRankingsJson('precipitation-since-yesterday');
+export const fetchServerPrecipitationSinceYesterdayRankings = async (options = {}) =>
+  fetchRankingsJson('precipitation-since-yesterday', options);
 
-export const fetchSnowData = async (type = 'tot', customTm = null) => {
+export const fetchSnowData = async (type = 'tot', customTm = null, options = {}) => {
+  const { refreshToken = '' } = options;
   const tm = customTm || formatKmaMinuteTime(new Date());
   const ttlMs = customTm ? TTL.snowHistory : TTL.snow;
 
   return withDataCache(`snow-${type}-${tm}`, ttlMs, async () => {
     try {
       const [dataRaw, stnRaw] = await Promise.all([
-        fetchKmaText('api/typ01/url/kma_snow1.php', { sd: type, tm, help: 0 }, { ttlMs }),
-        fetchKmaText('api/typ01/url/stn_snow.php', { stn: '', tm, mode: 0, help: 1 }, { ttlMs }),
+        fetchKmaText('api/typ01/url/kma_snow1.php', { sd: type, tm, help: 0 }, { ttlMs, refreshToken }),
+        fetchKmaText('api/typ01/url/stn_snow.php', { stn: '', tm, mode: 0, help: 1 }, { ttlMs, refreshToken }),
       ]);
 
       const stationMetadata = new Map();
@@ -1098,5 +1142,5 @@ export const fetchSnowData = async (type = 'tot', customTm = null) => {
       console.error('[API Fetch Error] 적설 실패', error);
       throw new Error('기상청 적설 데이터를 불러오지 못했습니다.');
     }
-  });
+  }, { refreshToken });
 };
