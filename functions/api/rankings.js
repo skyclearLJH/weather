@@ -8,11 +8,14 @@ const corsHeaders = {
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
 const AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30, 60, 120, 180];
+const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const PRECOMPUTED_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
+const PRECOMPUTED_CACHE_MAX_STALE_AGE_MS = 15 * 60 * 1000;
 const PRECOMPUTED_STALE_REFRESH_WAIT_MS = 2500;
+const CURRENT_RANKING_STALE_REFRESH_WAIT_MS = 15000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
 const KMA_TEXT_CACHE = new Map();
@@ -89,6 +92,20 @@ const isFreshCacheRecord = (record) => {
   const generatedAt = Date.parse(record.generatedAt);
   return Number.isFinite(generatedAt) && Date.now() - generatedAt <= PRECOMPUTED_CACHE_MAX_AGE_MS;
 };
+
+const isUsableStaleCacheRecord = (record) => {
+  if (!record?.payload || !record.generatedAt) {
+    return false;
+  }
+
+  const generatedAt = Date.parse(record.generatedAt);
+  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= PRECOMPUTED_CACHE_MAX_STALE_AGE_MS;
+};
+
+const getStaleRefreshWaitMs = (kind) =>
+  kind === 'temperature-current' || kind === 'precipitation-current'
+    ? CURRENT_RANKING_STALE_REFRESH_WAIT_MS
+    : PRECOMPUTED_STALE_REFRESH_WAIT_MS;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -386,19 +403,29 @@ const hasValidAwsPrecipitationObservation = (rows) =>
   rows.some((item) => item.precipitationOneHour >= 0 || item.precipitationToday >= 0);
 
 const fetchAwsMinuteObservationsByTimes = async (context, stationMetadata, candidateTimes, validator) => {
+  let lastError = null;
+
   for (const candidateTime of candidateTimes) {
     const observedAt = formatKmaMinuteTime(candidateTime);
-    const rawText = await fetchKmaText(
-      context,
-      'api/typ01/cgi-bin/url/nph-aws2_min',
-      { tm2: observedAt, stn: 0, disp: 0, help: 1 },
-      12000,
-      60,
-    );
-    const rows = parseAwsMinuteObservations(rawText, stationMetadata);
-    if (validator(rows)) {
-      return { observedAt, rows };
+    try {
+      const rawText = await fetchKmaText(
+        context,
+        'api/typ01/cgi-bin/url/nph-aws2_min',
+        { tm2: observedAt, stn: 0, disp: 0, help: 0 },
+        AWS_MINUTE_REQUEST_TIMEOUT_MS,
+        60,
+      );
+      const rows = parseAwsMinuteObservations(rawText, stationMetadata);
+      if (validator(rows)) {
+        return { observedAt, rows };
+      }
+    } catch (error) {
+      lastError = error;
     }
+  }
+
+  if (lastError) {
+    throw lastError;
   }
 
   throw new Error('유효한 AWS 분자료를 찾지 못했습니다.');
@@ -668,12 +695,12 @@ export async function onRequestGet(context) {
       });
     }
 
-    if (!forceRefresh && cachedRecord?.payload) {
+    if (!forceRefresh && isUsableStaleCacheRecord(cachedRecord)) {
       const refreshPromise = schedulePrecomputedRankingRefresh(context, kind);
       if (refreshPromise) {
         const refreshedPayload = await Promise.race([
           refreshPromise.catch(() => null),
-          wait(PRECOMPUTED_STALE_REFRESH_WAIT_MS).then(() => null),
+          wait(getStaleRefreshWaitMs(kind)).then(() => null),
         ]);
 
         if (refreshedPayload) {
@@ -697,7 +724,7 @@ export async function onRequestGet(context) {
       'X-Weather-Data-Source': forceRefresh ? 'manual-refresh' : 'live',
     });
   } catch (error) {
-    if (cachedRecord?.payload) {
+    if (isUsableStaleCacheRecord(cachedRecord)) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',

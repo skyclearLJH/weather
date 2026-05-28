@@ -7,6 +7,7 @@ const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
+const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
@@ -366,21 +367,32 @@ const hasValidAwsPrecipitationObservation = (rows) =>
   rows.some((item) => item.precipitationOneHour >= 0 || item.precipitationToday >= 0);
 
 const fetchAwsMinuteObservationsByTimes = async (stationMetadata, candidateTimes, validator) => {
+  let lastError = null;
+
   for (const candidateTime of candidateTimes) {
     const observedAt = formatKmaMinuteTime(candidateTime);
-    const rawText = await fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
-      tm2: observedAt,
-      stn: 0,
-      disp: 0,
-      help: 1,
-    }, {
-      ttlMs: TTL.awsMinute,
-    });
-    const rows = parseAwsMinuteObservations(rawText, stationMetadata);
+    try {
+      const rawText = await fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
+        tm2: observedAt,
+        stn: 0,
+        disp: 0,
+        help: 0,
+      }, {
+        ttlMs: TTL.awsMinute,
+        timeoutMs: AWS_MINUTE_REQUEST_TIMEOUT_MS,
+      });
+      const rows = parseAwsMinuteObservations(rawText, stationMetadata);
 
-    if (validator(rows)) {
-      return { observedAt, rows };
+      if (validator(rows)) {
+        return { observedAt, rows };
+      }
+    } catch (error) {
+      lastError = error;
     }
+  }
+
+  if (lastError) {
+    throw lastError;
   }
 
   throw new Error('유효한 AWS 분자료를 찾지 못했습니다.');
