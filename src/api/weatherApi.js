@@ -17,6 +17,7 @@ const TEXT_IN_FLIGHT = new Map();
 const DATA_CACHE = new Map();
 const DATA_IN_FLIGHT = new Map();
 const LAST_SUCCESS_DATA = new Map();
+const SNOW_DATA_CACHE_VERSION = 'v2';
 const TTL = {
   awsMinute: 60 * 1000,
   awsDaily: 5 * 60 * 1000,
@@ -442,14 +443,22 @@ const parseAwsDailyObservations = (rawText, stationMetadata) =>
       };
     });
 
+const parseSnowObservationFields = (line) => {
+  const normalizedLine = line.trim().replace(/,?=$/, '');
+  if (!normalizedLine || normalizedLine.startsWith('#')) {
+    return null;
+  }
+
+  return normalizedLine.includes(',')
+    ? normalizedLine.split(',').map((field) => field.trim())
+    : normalizedLine.split(/\s+/);
+};
+
 const parseSnowObservations = (rawText, stationMetadata) =>
   rawText
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'))
-    .map((line) => line.replace(/,?=$/, ''))
-    .map((line) => line.split(',').map((field) => field.trim()))
-    .filter((fields) => fields.length >= 7)
+    .map(parseSnowObservationFields)
+    .filter((fields) => fields?.length >= 7)
     .map((fields) => {
       const stationId = fields[1];
       const metadata = stationMetadata.get(stationId) ?? { name: fields[2], address: fields[2] };
@@ -461,6 +470,41 @@ const parseSnowObservations = (rawText, stationMetadata) =>
         value: snowValue,
       };
     });
+
+const parseSnowStationMetadata = (rawText) => {
+  const stationMetadata = new Map();
+
+  rawText.split('\n').forEach((line) => {
+    if (!line || line.trim().startsWith('#')) {
+      return;
+    }
+
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 9) {
+      return;
+    }
+
+    const stationId = fields[0];
+    const stationName = fields[6];
+    const legalCode = fields.find((field) => /^\d{10}$/.test(field)) ?? fields[8];
+    const address = KMA_SNOW_LAW_ADDRESS_MAP[legalCode] ?? stationName;
+
+    stationMetadata.set(stationId, { name: stationName, address });
+  });
+
+  return stationMetadata;
+};
+
+const buildSnowRankingRows = (rawText, stationMetadata) =>
+  parseSnowObservations(rawText, stationMetadata)
+    .filter((item) => Number.isFinite(item.value) && item.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .map((item, index) => ({
+      rank: index + 1,
+      name: item.name,
+      record: `${item.value.toFixed(1)}cm`,
+      address: item.address,
+    }));
 
 export const fetchTemperatureCurrentRankings = async () =>
   withDataCache('temperature-current-rankings', TTL.awsMinute, async () => {
@@ -1121,42 +1165,31 @@ export const fetchSnowData = async (type = 'tot', customTm = null, options = {})
   const tm = customTm || formatKmaMinuteTime(new Date());
   const ttlMs = customTm ? TTL.snowHistory : TTL.snow;
 
-  return withDataCache(`snow-${type}-${tm}`, ttlMs, async () => {
+  return withDataCache(`${SNOW_DATA_CACHE_VERSION}-snow-${type}-${tm}`, ttlMs, async () => {
     try {
-      const [dataRaw, stnRaw] = await Promise.all([
-        fetchKmaText('api/typ01/url/kma_snow1.php', { sd: type, tm, help: 0 }, { ttlMs, refreshToken }),
-        fetchKmaText('api/typ01/url/stn_snow.php', { stn: '', tm, mode: 0, help: 1 }, { ttlMs, refreshToken }),
-      ]);
+      const loadSnowRows = async (effectiveRefreshToken = refreshToken) => {
+        const [dataRaw, stnRaw] = await Promise.all([
+          fetchKmaText(
+            'api/typ01/url/kma_snow1.php',
+            { sd: type, tm, help: 0 },
+            { ttlMs, refreshToken: effectiveRefreshToken },
+          ),
+          fetchKmaText(
+            'api/typ01/url/stn_snow.php',
+            { stn: '', tm, mode: 0, help: 1 },
+            { ttlMs, refreshToken: effectiveRefreshToken },
+          ),
+        ]);
 
-      const stationMetadata = new Map();
+        return buildSnowRankingRows(dataRaw, parseSnowStationMetadata(stnRaw));
+      };
 
-      stnRaw.split('\n').forEach((line) => {
-        if (!line || line.trim().startsWith('#')) {
-          return;
-        }
+      const rows = await loadSnowRows();
+      if (customTm && rows.length === 0 && !refreshToken) {
+        return loadSnowRows(`snow-history-${type}-${tm}-${Date.now()}`);
+      }
 
-        const fields = line.trim().split(/\s+/);
-        if (fields.length < 9) {
-          return;
-        }
-
-        const stationId = fields[0];
-        const stationName = fields[6];
-        const legalCode = fields[8];
-        const address = KMA_SNOW_LAW_ADDRESS_MAP[legalCode] ?? stationName;
-
-        stationMetadata.set(stationId, { name: stationName, address });
-      });
-
-      return parseSnowObservations(dataRaw, stationMetadata)
-        .filter((item) => Number.isFinite(item.value) && item.value > 0)
-        .sort((a, b) => b.value - a.value)
-        .map((item, index) => ({
-          rank: index + 1,
-          name: item.name,
-          record: `${item.value.toFixed(1)}cm`,
-          address: item.address,
-        }));
+      return rows;
     } catch (error) {
       console.error('[API Fetch Error] 적설 실패', error);
       throw new Error('기상청 적설 데이터를 불러오지 못했습니다.');

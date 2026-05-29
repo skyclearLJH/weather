@@ -32,6 +32,7 @@ const SHOW_SUBMENU_TABS = new Set(['forecast', 'warning', 'precipitation', 'minT
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const OBSERVATION_TIME_OPTION_COUNT = 4;
 const LATEST_OBSERVATION_VALUE = 'latest';
+const SNOW_TEST_TIME = '202603021800';
 
 const padZero = (value) => value.toString().padStart(2, '0');
 
@@ -109,6 +110,7 @@ function App() {
   const [observationTimeMode, setObservationTimeMode] = useState(LATEST_OBSERVATION_VALUE);
   const [observationTimeBase, setObservationTimeBase] = useState(() => getKstNow());
   const [testTime, setTestTime] = useState(null);
+  const [snowTestRefreshKey, setSnowTestRefreshKey] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(DEFAULT_UPDATED_AT);
 
   const handleRefresh = () => {
@@ -116,6 +118,12 @@ function App() {
     setObservationTimeBase(getKstNow());
     setRefreshTrigger((previous) => previous + 1);
     setLastUpdatedAt(new Date());
+  };
+
+  const handleLoadSnowTestData = () => {
+    clearWeatherApiCaches();
+    setTestTime(SNOW_TEST_TIME);
+    setSnowTestRefreshKey((previous) => previous + 1);
   };
 
   useEffect(() => {
@@ -335,17 +343,31 @@ function App() {
 
     const loadSnowData = async () => {
       const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
+      const snowRefreshOptions = testTime
+        ? {
+            ...refreshOptions,
+            refreshToken: `snow-test-${testTime}-${refreshTrigger}-${snowTestRefreshKey}`,
+          }
+        : refreshOptions;
       setIsLoading(true);
       setApiError(null);
 
       try {
-        const [totData, dayData] = await Promise.all([
-          fetchSnowData('tot', testTime, refreshOptions),
-          fetchSnowData('day', testTime, refreshOptions),
+        const [totResult, dayResult] = await Promise.allSettled([
+          fetchSnowData('tot', testTime, snowRefreshOptions),
+          fetchSnowData('day', testTime, snowRefreshOptions),
         ]);
 
         if (isActive) {
+          const totData = totResult.status === 'fulfilled' ? totResult.value : [];
+          const dayData = dayResult.status === 'fulfilled' ? dayResult.value : [];
+
           setSnowApiData({ tot: totData, day: dayData });
+          if (totResult.status === 'rejected' && dayResult.status === 'rejected') {
+            setApiError(totResult.reason?.message || dayResult.reason?.message);
+          } else if (totResult.status === 'rejected' || dayResult.status === 'rejected') {
+            setApiError('일부 적설 데이터를 불러오지 못했습니다. 새로고침하면 다시 시도합니다.');
+          }
           setLastUpdatedAt(new Date());
         }
       } catch (error) {
@@ -364,7 +386,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [refreshTrigger, selectedTab, testTime]);
+  }, [refreshTrigger, selectedTab, snowTestRefreshKey, testTime]);
 
   const filterByRegion = (dataArray = []) => {
     if (selectedRegion === 'all') {
@@ -487,17 +509,24 @@ function App() {
             <div className="flex justify-end">
               <button
                 type="button"
-                onClick={() => setTestTime('202603021800')}
+                onClick={handleLoadSnowTestData}
                 className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
               >
                 테스트 데이터 불러오기 (2026.03.02 18:00)
               </button>
             </div>
           ) : (
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
               <div className="rounded-full border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700">
                 현재 테스트 시점: 2026년 3월 2일 18시
               </div>
+              <button
+                type="button"
+                onClick={handleLoadSnowTestData}
+                className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
+              >
+                테스트 데이터 다시 불러오기
+              </button>
             </div>
           )}
 
@@ -511,7 +540,7 @@ function App() {
               headerAction={renderObservationTimeControl()}
             />
           ) : (
-            renderEmptyState(EMPTY_STATE_MESSAGE.snow)
+            renderEmptyState(apiError || EMPTY_STATE_MESSAGE.snow)
           )}
         </section>
       );
