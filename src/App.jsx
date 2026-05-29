@@ -4,6 +4,7 @@ import Navigation from './components/Navigation';
 import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import SubMenu from './components/SubMenu';
+import ObservationTimeSelector from './components/ObservationTimeSelector';
 import {
   fetchWeatherCommentary,
   fetchWeatherDoc,
@@ -28,6 +29,61 @@ const EMPTY_STATE_MESSAGE = {
 };
 
 const SHOW_SUBMENU_TABS = new Set(['forecast', 'warning', 'precipitation', 'minTemp', 'maxTemp', 'snow']);
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const OBSERVATION_TIME_OPTION_COUNT = 4;
+const LATEST_OBSERVATION_VALUE = 'latest';
+
+const padZero = (value) => value.toString().padStart(2, '0');
+
+const getKstNow = () => new Date(Date.now() + KST_OFFSET_MS);
+
+const formatKmaMinuteTime = (date) => {
+  const year = date.getUTCFullYear();
+  const month = padZero(date.getUTCMonth() + 1);
+  const day = padZero(date.getUTCDate());
+  const hour = padZero(date.getUTCHours());
+  const minute = padZero(date.getUTCMinutes());
+  return `${year}${month}${day}${hour}${minute}`;
+};
+
+const formatObservationOptionLabel = (timestamp) => `${timestamp.slice(8, 10)}:${timestamp.slice(10, 12)}`;
+
+const floorToQuarterHour = (date) => {
+  const rounded = new Date(date);
+  rounded.setUTCMinutes(Math.floor(rounded.getUTCMinutes() / 15) * 15, 0, 0);
+  return rounded;
+};
+
+const buildObservationTimeOptions = (baseDate, selectedValue = LATEST_OBSERVATION_VALUE) => {
+  const roundedBase = floorToQuarterHour(baseDate);
+  const options = Array.from({ length: OBSERVATION_TIME_OPTION_COUNT }, (_, index) => {
+    const optionDate = new Date(roundedBase.getTime() - index * 15 * 60 * 1000);
+    const value = formatKmaMinuteTime(optionDate);
+    return {
+      value,
+      label: formatObservationOptionLabel(value),
+    };
+  });
+
+  if (
+    selectedValue &&
+    selectedValue !== LATEST_OBSERVATION_VALUE &&
+    !options.some((option) => option.value === selectedValue)
+  ) {
+    options.push({
+      value: selectedValue,
+      label: `${formatObservationOptionLabel(selectedValue)} 선택됨`,
+    });
+  }
+
+  return [
+    ...options,
+    {
+      value: LATEST_OBSERVATION_VALUE,
+      label: '최신',
+    },
+  ];
+};
 
 function App() {
   const [selectedRegion, setSelectedRegion] = useState('all');
@@ -56,14 +112,49 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [observationTimeMode, setObservationTimeMode] = useState(LATEST_OBSERVATION_VALUE);
+  const [observationTimeBase, setObservationTimeBase] = useState(() => getKstNow());
   const [testTime, setTestTime] = useState(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(DEFAULT_UPDATED_AT);
 
   const handleRefresh = () => {
     clearWeatherApiCaches();
+    setObservationTimeBase(getKstNow());
     setRefreshTrigger((previous) => previous + 1);
     setLastUpdatedAt(new Date());
   };
+
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      setObservationTimeBase(getKstNow());
+    }, 60 * 1000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, []);
+
+  const selectedObservationTime =
+    observationTimeMode === LATEST_OBSERVATION_VALUE ? '' : observationTimeMode;
+
+  const observationTimeOptions = useMemo(
+    () => buildObservationTimeOptions(observationTimeBase, observationTimeMode),
+    [observationTimeBase, observationTimeMode],
+  );
+
+  const isObservationTimeControlVisible =
+    selectedTab === 'precipitation' ||
+    ((selectedTab === 'minTemp' || selectedTab === 'maxTemp') && selectedSubMenu === 'current');
+
+  const renderObservationTimeControl = () =>
+    isObservationTimeControlVisible ? (
+      <ObservationTimeSelector
+        value={observationTimeMode}
+        options={observationTimeOptions}
+        onChange={(value) => setObservationTimeMode(value)}
+        disabled={isLoading}
+      />
+    ) : null;
 
   useEffect(() => {
     const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
@@ -159,6 +250,10 @@ function App() {
 
     const loadTemperatureData = async () => {
       const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
+      const currentRankingOptions =
+        selectedSubMenu === 'current' && selectedObservationTime
+          ? { ...refreshOptions, observedAt: selectedObservationTime }
+          : refreshOptions;
       setIsLoading(true);
       setApiError(null);
 
@@ -166,7 +261,7 @@ function App() {
         const data =
           selectedSubMenu === 'today'
             ? await fetchServerTemperatureTodayRankings(refreshOptions)
-            : await fetchServerTemperatureCurrentRankings(refreshOptions);
+            : await fetchServerTemperatureCurrentRankings(currentRankingOptions);
         if (isActive) {
           setTemperatureApiData((previous) => ({
             ...previous,
@@ -190,7 +285,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [refreshTrigger, selectedSubMenu, selectedTab]);
+  }, [refreshTrigger, selectedObservationTime, selectedSubMenu, selectedTab]);
 
   useEffect(() => {
     if (selectedTab !== 'precipitation') {
@@ -201,14 +296,17 @@ function App() {
 
     const loadPrecipitationData = async () => {
       const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
+      const rankingOptions = selectedObservationTime
+        ? { ...refreshOptions, observedAt: selectedObservationTime }
+        : refreshOptions;
       setIsLoading(true);
       setApiError(null);
 
       try {
         const data =
           selectedSubMenu === 'since_yesterday'
-            ? await fetchServerPrecipitationSinceYesterdayRankings(refreshOptions)
-            : await fetchServerPrecipitationCurrentRankings(refreshOptions);
+            ? await fetchServerPrecipitationSinceYesterdayRankings(rankingOptions)
+            : await fetchServerPrecipitationCurrentRankings(rankingOptions);
         if (isActive) {
           setPrecipitationApiData((previous) => ({
             ...previous,
@@ -232,7 +330,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [refreshTrigger, selectedSubMenu, selectedTab]);
+  }, [refreshTrigger, selectedObservationTime, selectedSubMenu, selectedTab]);
 
   useEffect(() => {
     if (selectedTab !== 'snow') {
@@ -304,16 +402,19 @@ function App() {
 
   const snowData = selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
 
-  const renderEmptyState = (message) => (
-    <div className="rounded-3xl border border-slate-200 bg-white px-6 py-12 text-center text-slate-500 shadow-sm">
-      {message}
-    </div>
+  const renderEmptyState = (message, headerAction = null) => (
+    <section className="space-y-3">
+      {headerAction ? <div className="flex justify-end">{headerAction}</div> : null}
+      <div className="rounded-3xl border border-slate-200 bg-white px-6 py-12 text-center text-slate-500 shadow-sm">
+        {message}
+      </div>
+    </section>
   );
 
   const renderContent = () => {
     if (selectedTab === 'minTemp') {
       if (isLoading) {
-        return renderEmptyState('최저기온 데이터를 불러오는 중입니다.');
+        return renderEmptyState('최저기온 데이터를 불러오는 중입니다.', renderObservationTimeControl());
       }
 
       const tableData =
@@ -329,15 +430,16 @@ function App() {
               : `${selectedSubMenu === 'today' ? '금일 최저기온' : '실시간 관측'} 기준입니다.`
           }
           data={filteredData}
+          headerAction={renderObservationTimeControl()}
         />
       ) : (
-        renderEmptyState(EMPTY_STATE_MESSAGE.default)
+        renderEmptyState(EMPTY_STATE_MESSAGE.default, renderObservationTimeControl())
       );
     }
 
     if (selectedTab === 'maxTemp') {
       if (isLoading) {
-        return renderEmptyState('최고기온 데이터를 불러오는 중입니다.');
+        return renderEmptyState('최고기온 데이터를 불러오는 중입니다.', renderObservationTimeControl());
       }
 
       const tableData =
@@ -353,15 +455,16 @@ function App() {
               : `${selectedSubMenu === 'today' ? '금일 최고기온' : '실시간 관측'} 기준입니다.`
           }
           data={filteredData}
+          headerAction={renderObservationTimeControl()}
         />
       ) : (
-        renderEmptyState(EMPTY_STATE_MESSAGE.default)
+        renderEmptyState(EMPTY_STATE_MESSAGE.default, renderObservationTimeControl())
       );
     }
 
     if (selectedTab === 'precipitation') {
       if (isLoading) {
-        return renderEmptyState('강수량 데이터를 불러오는 중입니다.');
+        return renderEmptyState('강수량 데이터를 불러오는 중입니다.', renderObservationTimeControl());
       }
 
       const filteredData = filterByRegion(precipitationData).slice(0, 10);
@@ -374,9 +477,10 @@ function App() {
               : '선택한 기준으로 가장 높은 강수 기록을 보여줍니다.'
           }
           data={filteredData}
+          headerAction={renderObservationTimeControl()}
         />
       ) : (
-        renderEmptyState(EMPTY_STATE_MESSAGE.precipitation)
+        renderEmptyState(EMPTY_STATE_MESSAGE.precipitation, renderObservationTimeControl())
       );
     }
 
@@ -410,6 +514,7 @@ function App() {
               title="적설량 Top 10"
               subtitle="현재 적설량과 오늘 신적설량을 탭으로 전환해 확인할 수 있습니다."
               data={filteredData}
+              headerAction={renderObservationTimeControl()}
             />
           ) : (
             renderEmptyState(EMPTY_STATE_MESSAGE.snow)

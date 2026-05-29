@@ -1109,10 +1109,13 @@ export const fetchWarningImageUrls = async (options = {}) => {
 };
 
 const fetchRankingsJson = async (kind, options = {}) => {
-  const { refreshToken = '' } = options;
-  return withDataCache(`server-rankings-${kind}`, TTL.awsMinute, async () => {
+  const { refreshToken = '', observedAt = '' } = options;
+  const params = observedAt ? { kind, tm: observedAt } : { kind };
+  const cacheKey = observedAt ? `server-rankings-${kind}-${observedAt}` : `server-rankings-${kind}`;
+
+  return withDataCache(cacheKey, TTL.awsMinute, async () => {
     const response = await fetchWithRetry(
-      buildAppUrl('/api/rankings', withRefreshParam({ kind }, refreshToken)),
+      buildAppUrl('/api/rankings', withRefreshParam(params, refreshToken)),
       refreshToken ? { cache: 'no-store' } : {},
       1,
       35000,

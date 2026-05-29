@@ -15,6 +15,8 @@ const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const PRECOMPUTED_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
 const PRECOMPUTED_CACHE_MAX_STALE_AGE_MS = 15 * 60 * 1000;
+const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
+const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
 const PRECOMPUTED_STALE_REFRESH_WAIT_MS = 2500;
 const CURRENT_RANKING_STALE_REFRESH_WAIT_MS = 15000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
@@ -83,24 +85,31 @@ const createCacheApiStore = () => {
 
 const getWeatherCache = (context) => context.env?.WEATHER_CACHE ?? createCacheApiStore();
 
-export const getRankingCacheKey = (kind) => `rankings:${kind}`;
+export const getRankingCacheKey = (kind, observedAt = '') =>
+  observedAt ? `rankings:${kind}:tm:${observedAt}` : `rankings:${kind}`;
 
-const isFreshCacheRecord = (record) => {
+const getFreshCacheMaxAgeMs = (observedAt = '') =>
+  observedAt ? SELECTED_TIME_CACHE_MAX_AGE_MS : PRECOMPUTED_CACHE_MAX_AGE_MS;
+
+const getStaleCacheMaxAgeMs = (observedAt = '') =>
+  observedAt ? SELECTED_TIME_CACHE_MAX_STALE_AGE_MS : PRECOMPUTED_CACHE_MAX_STALE_AGE_MS;
+
+const isFreshCacheRecord = (record, observedAt = '') => {
   if (!record?.generatedAt) {
     return false;
   }
 
   const generatedAt = Date.parse(record.generatedAt);
-  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= PRECOMPUTED_CACHE_MAX_AGE_MS;
+  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getFreshCacheMaxAgeMs(observedAt);
 };
 
-const isUsableStaleCacheRecord = (record) => {
+const isUsableStaleCacheRecord = (record, observedAt = '') => {
   if (!record?.payload || !record.generatedAt) {
     return false;
   }
 
   const generatedAt = Date.parse(record.generatedAt);
-  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= PRECOMPUTED_CACHE_MAX_STALE_AGE_MS;
+  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getStaleCacheMaxAgeMs(observedAt);
 };
 
 const getStaleRefreshWaitMs = (kind) =>
@@ -110,48 +119,49 @@ const getStaleRefreshWaitMs = (kind) =>
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const readPrecomputedRankingRecord = async (context, kind) => {
+const readPrecomputedRankingRecord = async (context, kind, observedAt = '') => {
   const weatherCache = getWeatherCache(context);
   if (!weatherCache || isPrecomputedCacheDisabled(context)) {
     return null;
   }
 
-  return weatherCache.get(getRankingCacheKey(kind), 'json');
+  return weatherCache.get(getRankingCacheKey(kind, observedAt), 'json');
 };
 
-export const writePrecomputedRanking = async (context, kind, payload) => {
+export const writePrecomputedRanking = async (context, kind, payload, observedAt = '') => {
   const weatherCache = getWeatherCache(context);
   if (!weatherCache || !payload) {
     return;
   }
 
   await weatherCache.put(
-    getRankingCacheKey(kind),
+    getRankingCacheKey(kind, observedAt),
     JSON.stringify({
       kind,
+      observedAt,
       generatedAt: new Date().toISOString(),
       payload,
     }),
   );
 };
 
-const refreshPrecomputedRanking = async (context, kind) => {
-  const payload = await buildRankingPayload(context, kind);
-  await writePrecomputedRanking(context, kind, payload);
+const refreshPrecomputedRanking = async (context, kind, observedAt = '') => {
+  const payload = await buildRankingPayload(context, kind, { observedAt });
+  await writePrecomputedRanking(context, kind, payload, observedAt);
   return payload;
 };
 
-const schedulePrecomputedRankingRefresh = (context, kind) => {
+const schedulePrecomputedRankingRefresh = (context, kind, observedAt = '') => {
   if (isPrecomputedCacheDisabled(context) || !getWeatherCache(context)) {
     return null;
   }
 
-  const cacheKey = getRankingCacheKey(kind);
+  const cacheKey = getRankingCacheKey(kind, observedAt);
   if (PRECOMPUTED_REFRESH_IN_FLIGHT.has(cacheKey)) {
     return PRECOMPUTED_REFRESH_IN_FLIGHT.get(cacheKey);
   }
 
-  const refreshPromise = refreshPrecomputedRanking(context, kind)
+  const refreshPromise = refreshPrecomputedRanking(context, kind, observedAt)
     .finally(() => {
       PRECOMPUTED_REFRESH_IN_FLIGHT.delete(cacheKey);
     });
@@ -190,6 +200,20 @@ const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
 const formatStationInfoTime = (date) => `${formatKmaMinuteTime(date).slice(0, 10)}00`;
 const subtractMinutes = (date, minutes) => new Date(date.getTime() - minutes * 60 * 1000);
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
+
+const parseKmaMinuteTime = (timestamp) => {
+  if (!/^\d{12}$/.test(timestamp ?? '')) {
+    return null;
+  }
+
+  const year = Number.parseInt(timestamp.slice(0, 4), 10);
+  const month = Number.parseInt(timestamp.slice(4, 6), 10) - 1;
+  const day = Number.parseInt(timestamp.slice(6, 8), 10);
+  const hour = Number.parseInt(timestamp.slice(8, 10), 10);
+  const minute = Number.parseInt(timestamp.slice(10, 12), 10);
+  const parsedDate = new Date(Date.UTC(year, month, day, hour, minute));
+  return formatKmaMinuteTime(parsedDate) === timestamp ? parsedDate : null;
+};
 
 const formatDisplayKoreanDateTime = (timestamp) => {
   if (!timestamp || timestamp.length < 12) {
@@ -456,6 +480,20 @@ const fetchAwsMinuteObservationsByTimes = async (context, stationMetadata, candi
   throw new Error('유효한 AWS 분자료를 찾지 못했습니다.');
 };
 
+const fetchAwsMinuteObservationsAtTime = async (context, stationMetadata, observedAt, validator) => {
+  const observedDate = parseKmaMinuteTime(observedAt);
+  if (!observedDate) {
+    throw new Error('Invalid AWS observation time.');
+  }
+
+  const result = await fetchAwsMinuteObservationCandidate(context, stationMetadata, observedDate, validator);
+  if (!result) {
+    throw new Error('선택한 시각의 유효한 AWS 분자료를 찾지 못했습니다.');
+  }
+
+  return result;
+};
+
 const fetchLatestAwsTemperatureObservations = (context, stationMetadata) => {
   const now = getKstNow();
   const candidateTimes = AWS_TEMPERATURE_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
@@ -479,8 +517,15 @@ const getAwsStationMetadata = async (context) => {
   return parseAwsStationMetadata(rawText);
 };
 
-const buildTemperatureCurrent = async (context, stationMetadata) => {
-  const { observedAt, rows } = await fetchLatestAwsTemperatureObservations(context, stationMetadata);
+const buildTemperatureCurrent = async (context, stationMetadata, requestedObservedAt = '') => {
+  const { observedAt, rows } = requestedObservedAt
+    ? await fetchAwsMinuteObservationsAtTime(
+        context,
+        stationMetadata,
+        requestedObservedAt,
+        hasValidAwsTemperatureObservation,
+      )
+    : await fetchLatestAwsTemperatureObservations(context, stationMetadata);
   return {
     observedAt,
     observedLabel: formatDisplayKoreanDateTime(observedAt),
@@ -583,8 +628,15 @@ const buildTemperatureToday = async (context, stationMetadataPromise) => {
   };
 };
 
-const buildPrecipitationCurrent = async (context, stationMetadata) => {
-  const { observedAt, rows } = await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
+const buildPrecipitationCurrent = async (context, stationMetadata, requestedObservedAt = '') => {
+  const { observedAt, rows } = requestedObservedAt
+    ? await fetchAwsMinuteObservationsAtTime(
+        context,
+        stationMetadata,
+        requestedObservedAt,
+        hasValidAwsPrecipitationObservation,
+      )
+    : await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
   return {
     observedAt,
     observedLabel: formatDisplayKoreanDateTime(observedAt),
@@ -609,9 +661,10 @@ const buildPrecipitationCurrent = async (context, stationMetadata) => {
   };
 };
 
-const buildPrecipitationSinceYesterday = async (context, stationMetadata) => {
-  const now = getKstNow();
-  const yesterday = subtractDays(now, 1);
+const buildPrecipitationSinceYesterday = async (context, stationMetadata, requestedObservedAt = '') => {
+  const requestedDate = requestedObservedAt ? parseKmaMinuteTime(requestedObservedAt) : null;
+  const baseDate = requestedDate ?? getKstNow();
+  const yesterday = subtractDays(baseDate, 1);
   const yesterdayDailyRaw = await fetchKmaText(
     context,
     'api/typ01/url/sfc_aws_day.php',
@@ -620,10 +673,17 @@ const buildPrecipitationSinceYesterday = async (context, stationMetadata) => {
     300,
   );
 
-  let observedAt = formatKmaMinuteTime(now);
+  let observedAt = requestedObservedAt || formatKmaMinuteTime(baseDate);
   let currentRows = [];
   try {
-    const latestCurrent = await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
+    const latestCurrent = requestedObservedAt
+      ? await fetchAwsMinuteObservationsAtTime(
+          context,
+          stationMetadata,
+          requestedObservedAt,
+          hasValidAwsPrecipitationObservation,
+        )
+      : await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
     observedAt = latestCurrent.observedAt;
     currentRows = latestCurrent.rows;
   } catch {
@@ -663,10 +723,12 @@ const buildPrecipitationSinceYesterday = async (context, stationMetadata) => {
   };
 };
 
-export const buildRankingPayload = async (context, kind) => {
+export const buildRankingPayload = async (context, kind, options = {}) => {
+  const { observedAt = '' } = options;
+
   if (kind === 'temperature-current') {
     const stationMetadata = await getAwsStationMetadata(context);
-    return buildTemperatureCurrent(context, stationMetadata);
+    return buildTemperatureCurrent(context, stationMetadata, observedAt);
   }
 
   if (kind === 'temperature-today') {
@@ -675,12 +737,12 @@ export const buildRankingPayload = async (context, kind) => {
 
   if (kind === 'precipitation-current') {
     const stationMetadata = await getAwsStationMetadata(context);
-    return buildPrecipitationCurrent(context, stationMetadata);
+    return buildPrecipitationCurrent(context, stationMetadata, observedAt);
   }
 
   if (kind === 'precipitation-since-yesterday') {
     const stationMetadata = await getAwsStationMetadata(context);
-    return buildPrecipitationSinceYesterday(context, stationMetadata);
+    return buildPrecipitationSinceYesterday(context, stationMetadata, observedAt);
   }
 
   throw new Error('Invalid rankings kind.');
@@ -696,6 +758,7 @@ export async function onRequestOptions() {
 export async function onRequestGet(context) {
   const requestUrl = new URL(context.request.url);
   const kind = requestUrl.searchParams.get('kind');
+  const requestedObservedAt = requestUrl.searchParams.get('tm') || '';
   const forceRefresh = requestUrl.searchParams.has('_refresh');
   let cachedRecord = null;
 
@@ -707,21 +770,28 @@ export async function onRequestGet(context) {
       });
     }
 
+    if (requestedObservedAt && !parseKmaMinuteTime(requestedObservedAt)) {
+      return new Response(JSON.stringify({ error: 'Invalid observation time.' }), {
+        status: 400,
+        headers: corsHeaders,
+      });
+    }
+
     try {
-      cachedRecord = await readPrecomputedRankingRecord(context, kind);
+      cachedRecord = await readPrecomputedRankingRecord(context, kind, requestedObservedAt);
     } catch {
       cachedRecord = null;
     }
 
-    if (!forceRefresh && isFreshCacheRecord(cachedRecord)) {
+    if (!forceRefresh && isFreshCacheRecord(cachedRecord, requestedObservedAt)) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt,
       });
     }
 
-    if (!forceRefresh && isUsableStaleCacheRecord(cachedRecord)) {
-      const refreshPromise = schedulePrecomputedRankingRefresh(context, kind);
+    if (!forceRefresh && isUsableStaleCacheRecord(cachedRecord, requestedObservedAt)) {
+      const refreshPromise = schedulePrecomputedRankingRefresh(context, kind, requestedObservedAt);
       if (refreshPromise) {
         const refreshedPayload = await Promise.race([
           refreshPromise.catch(() => null),
@@ -743,13 +813,13 @@ export async function onRequestGet(context) {
       });
     }
 
-    const payload = await refreshPrecomputedRanking(context, kind);
+    const payload = await refreshPrecomputedRanking(context, kind, requestedObservedAt);
 
     return makeJsonResponse(payload, {
       'X-Weather-Data-Source': forceRefresh ? 'manual-refresh' : 'live',
     });
   } catch (error) {
-    if (isUsableStaleCacheRecord(cachedRecord)) {
+    if (isUsableStaleCacheRecord(cachedRecord, requestedObservedAt)) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',

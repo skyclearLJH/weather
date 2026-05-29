@@ -5,12 +5,17 @@ const rankBadgeClassName = (rank) => {
   return 'bg-slate-100 text-slate-700';
 };
 
-const WeatherTable = ({ title, subtitle, data }) => {
+const WeatherTable = ({ title, subtitle, data, headerAction = null }) => {
   return (
     <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
-        <h2 className="text-lg font-bold tracking-tight text-slate-900">{title}</h2>
-        {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">{title}</h2>
+            {subtitle ? <div className="mt-1 text-sm text-slate-500">{subtitle}</div> : null}
+          </div>
+          {headerAction ? <div className="shrink-0">{headerAction}</div> : null}
+        </div>
       </div>
 
       <div className="hidden grid-cols-[88px_minmax(0,0.9fr)_120px_minmax(0,2.6fr)] gap-6 border-b border-slate-200 bg-slate-50 px-6 py-3 text-sm font-semibold text-slate-500 md:grid">
