@@ -5,7 +5,7 @@ import { KMA_PROXY_BASE } from '../utils/constants';
 const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
-const AWS_MINUTE_LOOKBACK_STEPS = [0, 1, 2, 3, 4, 5, 7, 10, 15];
+const AWS_PRECIPITATION_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [0, 1, 2, 3, 4, 5, 7, 10, 15, 20, 30];
 const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
 const AWS_MINUTE_BATCH_SIZE = 4;
@@ -424,7 +424,7 @@ const fetchAwsMinuteObservationsByTimes = async (stationMetadata, candidateTimes
 
 const fetchLatestAwsMinuteObservations = async (stationMetadata, validator) => {
   const now = new Date();
-  const candidateTimes = AWS_MINUTE_LOOKBACK_STEPS.map((offsetMinutes) => subtractMinutes(now, offsetMinutes));
+  const candidateTimes = AWS_PRECIPITATION_LOOKBACK_STEPS.map((offsetMinutes) => subtractMinutes(now, offsetMinutes));
 
   return fetchAwsMinuteObservationsByTimes(stationMetadata, candidateTimes, validator);
 };

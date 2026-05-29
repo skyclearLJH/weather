@@ -5,7 +5,7 @@ const corsHeaders = {
   'Content-Type': 'application/json; charset=utf-8',
 };
 
-const AWS_MINUTE_LOOKBACK_STEPS = [0, 1, 2, 3, 4, 5, 7, 10, 15];
+const AWS_PRECIPITATION_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [0, 1, 2, 3, 4, 5, 7, 10, 15, 20, 30];
 const AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30, 60, 120, 180];
 const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
@@ -502,7 +502,7 @@ const fetchLatestAwsTemperatureObservations = (context, stationMetadata) => {
 
 const fetchLatestAwsPrecipitationObservations = (context, stationMetadata) => {
   const now = getKstNow();
-  const candidateTimes = AWS_MINUTE_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
+  const candidateTimes = AWS_PRECIPITATION_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
   return fetchAwsMinuteObservationsByTimes(context, stationMetadata, candidateTimes, hasValidAwsPrecipitationObservation);
 };
 

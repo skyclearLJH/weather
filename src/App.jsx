@@ -76,13 +76,7 @@ const buildObservationTimeOptions = (baseDate, selectedValue = LATEST_OBSERVATIO
     });
   }
 
-  return [
-    ...options,
-    {
-      value: LATEST_OBSERVATION_VALUE,
-      label: '최신',
-    },
-  ];
+  return options;
 };
 
 function App() {
