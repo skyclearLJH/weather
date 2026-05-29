@@ -5,9 +5,10 @@ import { KMA_PROXY_BASE } from '../utils/constants';
 const padZero = (value) => value.toString().padStart(2, '0');
 const REQUEST_TIMEOUT_MS = 12000;
 const REQUEST_RETRY_COUNT = 1;
-const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
-const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
+const AWS_MINUTE_LOOKBACK_STEPS = [0, 1, 2, 3, 4, 5, 7, 10, 15];
+const AWS_TEMPERATURE_LOOKBACK_STEPS = [0, 1, 2, 3, 4, 5, 7, 10, 15, 20, 30];
 const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
+const AWS_MINUTE_BATCH_SIZE = 4;
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
@@ -366,28 +367,51 @@ const hasValidAwsTemperatureObservation = (rows) =>
 const hasValidAwsPrecipitationObservation = (rows) =>
   rows.some((item) => item.precipitationOneHour >= 0 || item.precipitationToday >= 0);
 
+const fetchAwsMinuteObservationCandidate = async (stationMetadata, candidateTime, validator) => {
+  const observedAt = formatKmaMinuteTime(candidateTime);
+  const rawText = await fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
+    tm2: observedAt,
+    stn: 0,
+    disp: 0,
+    help: 0,
+  }, {
+    ttlMs: TTL.awsMinute,
+    timeoutMs: AWS_MINUTE_REQUEST_TIMEOUT_MS,
+  });
+  const rows = parseAwsMinuteObservations(rawText, stationMetadata);
+  return validator(rows) ? { observedAt, rows } : null;
+};
+
 const fetchAwsMinuteObservationsByTimes = async (stationMetadata, candidateTimes, validator) => {
   let lastError = null;
 
-  for (const candidateTime of candidateTimes) {
-    const observedAt = formatKmaMinuteTime(candidateTime);
-    try {
-      const rawText = await fetchKmaText('api/typ01/cgi-bin/url/nph-aws2_min', {
-        tm2: observedAt,
-        stn: 0,
-        disp: 0,
-        help: 0,
-      }, {
-        ttlMs: TTL.awsMinute,
-        timeoutMs: AWS_MINUTE_REQUEST_TIMEOUT_MS,
-      });
-      const rows = parseAwsMinuteObservations(rawText, stationMetadata);
+  for (let startIndex = 0; startIndex < candidateTimes.length; startIndex += AWS_MINUTE_BATCH_SIZE) {
+    const batch = candidateTimes.slice(startIndex, startIndex + AWS_MINUTE_BATCH_SIZE);
+    const candidates = await Promise.all(
+      batch.map(async (candidateTime, batchIndex) => {
+        try {
+          const result = await fetchAwsMinuteObservationCandidate(stationMetadata, candidateTime, validator);
+          if (!result) {
+            return null;
+          }
 
-      if (validator(rows)) {
-        return { observedAt, rows };
-      }
-    } catch (error) {
-      lastError = error;
+          return {
+            order: startIndex + batchIndex,
+            result,
+          };
+        } catch (error) {
+          lastError = error;
+          return null;
+        }
+      }),
+    );
+
+    const latestValid = candidates
+      .filter(Boolean)
+      .sort((left, right) => left.order - right.order)[0];
+
+    if (latestValid) {
+      return latestValid.result;
     }
   }
 
