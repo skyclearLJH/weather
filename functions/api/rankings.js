@@ -5,11 +5,10 @@ const corsHeaders = {
   'Content-Type': 'application/json; charset=utf-8',
 };
 
-const AWS_PRECIPITATION_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
-const AWS_TEMPERATURE_LOOKBACK_STEPS = [0, 1, 2, 3, 4, 5, 7, 10, 15, 20, 30];
+const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
+const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
 const AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30, 60, 120, 180];
 const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
-const AWS_MINUTE_BATCH_SIZE = 4;
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -443,33 +442,14 @@ const fetchAwsMinuteObservationCandidate = async (context, stationMetadata, cand
 const fetchAwsMinuteObservationsByTimes = async (context, stationMetadata, candidateTimes, validator) => {
   let lastError = null;
 
-  for (let startIndex = 0; startIndex < candidateTimes.length; startIndex += AWS_MINUTE_BATCH_SIZE) {
-    const batch = candidateTimes.slice(startIndex, startIndex + AWS_MINUTE_BATCH_SIZE);
-    const candidates = await Promise.all(
-      batch.map(async (candidateTime, batchIndex) => {
-        try {
-          const result = await fetchAwsMinuteObservationCandidate(context, stationMetadata, candidateTime, validator);
-          if (!result) {
-            return null;
-          }
-
-          return {
-            order: startIndex + batchIndex,
-            result,
-          };
-        } catch (error) {
-          lastError = error;
-          return null;
-        }
-      }),
-    );
-
-    const latestValid = candidates
-      .filter(Boolean)
-      .sort((left, right) => left.order - right.order)[0];
-
-    if (latestValid) {
-      return latestValid.result;
+  for (const candidateTime of candidateTimes) {
+    try {
+      const result = await fetchAwsMinuteObservationCandidate(context, stationMetadata, candidateTime, validator);
+      if (result) {
+        return result;
+      }
+    } catch (error) {
+      lastError = error;
     }
   }
 
@@ -502,7 +482,7 @@ const fetchLatestAwsTemperatureObservations = (context, stationMetadata) => {
 
 const fetchLatestAwsPrecipitationObservations = (context, stationMetadata) => {
   const now = getKstNow();
-  const candidateTimes = AWS_PRECIPITATION_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
+  const candidateTimes = AWS_MINUTE_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
   return fetchAwsMinuteObservationsByTimes(context, stationMetadata, candidateTimes, hasValidAwsPrecipitationObservation);
 };
 
