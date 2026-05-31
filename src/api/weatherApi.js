@@ -848,7 +848,7 @@ const buildForecastDocCandidates = (now) =>
     .filter((candidate) => candidate.issuedAt <= now)
     .sort((left, right) => right.issuedAt.getTime() - left.issuedAt.getTime());
 
-export const fetchWeatherCommentary = async (regionId, options = {}) => {
+const fetchWeatherCommentaryFromApiHub = async (regionId, options = {}) => {
   const { refreshToken = '' } = options;
   return withDataCache(`commentary-${regionId}`, TTL.commentary, async () => {
     const now = new Date();
@@ -902,6 +902,35 @@ export const fetchWeatherCommentary = async (regionId, options = {}) => {
     console.error('[API Fetch Error] 날씨해설 실패', lastError);
     throw new Error('기상청 날씨해설 데이터를 불러오지 못했습니다.');
   }, { refreshToken });
+};
+
+const fetchOfficialWeatherCommentary = async (regionId, options = {}) => {
+  const { refreshToken = '' } = options;
+
+  return withDataCache(`official-commentary-${regionId}`, TTL.commentary, async () => {
+    const response = await fetchWithRetry(
+      buildAppUrl('/api/weather-commentary', withRefreshParam({ region: regionId }, refreshToken)),
+      refreshToken ? { cache: 'no-store' } : {},
+      0,
+      8000,
+    );
+    const payload = await response.json();
+
+    if (!Array.isArray(payload) || !payload[0]?.content) {
+      throw new Error('Official weather commentary payload is empty.');
+    }
+
+    return payload;
+  }, { refreshToken });
+};
+
+export const fetchWeatherCommentary = async (regionId, options = {}) => {
+  try {
+    return await fetchOfficialWeatherCommentary(regionId, options);
+  } catch (error) {
+    console.warn('[API Fetch Warning] Official commentary failed. Falling back to API Hub.', error);
+    return fetchWeatherCommentaryFromApiHub(regionId, options);
+  }
 };
 
 export const fetchWeatherDoc = async (regionId, options = {}) => {
