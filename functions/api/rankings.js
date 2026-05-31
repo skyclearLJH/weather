@@ -7,7 +7,6 @@ const corsHeaders = {
 
 const AWS_MINUTE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15];
 const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
-const AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30, 60, 120, 180];
 const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
@@ -19,6 +18,7 @@ const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
 const PRECOMPUTED_STALE_REFRESH_WAIT_MS = 2500;
 const CURRENT_RANKING_STALE_REFRESH_WAIT_MS = 15000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
+const RANKING_CACHE_VERSION = 'v2';
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
 const KMA_TEXT_CACHE = new Map();
 const KMA_TEXT_IN_FLIGHT = new Map();
@@ -85,7 +85,9 @@ const createCacheApiStore = () => {
 const getWeatherCache = (context) => context.env?.WEATHER_CACHE ?? createCacheApiStore();
 
 export const getRankingCacheKey = (kind, observedAt = '') =>
-  observedAt ? `rankings:${kind}:tm:${observedAt}` : `rankings:${kind}`;
+  observedAt
+    ? `rankings:${RANKING_CACHE_VERSION}:${kind}:tm:${observedAt}`
+    : `rankings:${RANKING_CACHE_VERSION}:${kind}`;
 
 const getFreshCacheMaxAgeMs = (observedAt = '') =>
   observedAt ? SELECTED_TIME_CACHE_MAX_AGE_MS : PRECOMPUTED_CACHE_MAX_AGE_MS;
@@ -530,63 +532,41 @@ const buildTemperatureCurrent = async (context, stationMetadata, requestedObserv
   };
 };
 
-const fetchDailyTemperatureRawByTimes = async (context, candidateTimes) => {
-  const seenDays = new Set();
-
-  for (const candidateTime of candidateTimes) {
-    const observedDay = formatKmaDay(candidateTime);
-    if (seenDays.has(observedDay)) {
-      continue;
-    }
-
-    seenDays.add(observedDay);
-
-    const [minDailyRaw, maxDailyRaw] = await Promise.all([
-      fetchKmaText(
-        context,
-        'api/typ01/url/sfc_aws_day.php',
-        { tm2: observedDay, obs: 'ta_min', stn: 0, disp: 0, help: 1 },
-        SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
-        300,
-      ),
-      fetchKmaText(
-        context,
-        'api/typ01/url/sfc_aws_day.php',
-        { tm2: observedDay, obs: 'ta_max', stn: 0, disp: 0, help: 1 },
-        SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
-        300,
-      ),
-    ]);
-
-    if (hasDailyObservationRows(minDailyRaw) || hasDailyObservationRows(maxDailyRaw)) {
-      return {
-        observedAt: formatKmaMinuteTime(candidateTime),
-        minDailyRaw,
-        maxDailyRaw,
-      };
-    }
-  }
-
-  throw new Error('No valid daily temperature observations were found.');
-};
-
 const buildTemperatureToday = async (context, stationMetadataPromise) => {
   const now = getKstNow();
-  const candidateTimes = AWS_DAILY_TEMPERATURE_LOOKBACK_STEPS.map((offset) => subtractMinutes(now, offset));
+  const observedDay = formatKmaDay(now);
   const [
     stationMetadata,
-    { observedAt, minDailyRaw, maxDailyRaw },
+    minDailyRaw,
+    maxDailyRaw,
   ] = await Promise.all([
     stationMetadataPromise,
-    fetchDailyTemperatureRawByTimes(context, candidateTimes),
+    fetchKmaText(
+      context,
+      'api/typ01/url/sfc_aws_day.php',
+      { tm2: observedDay, obs: 'ta_min', stn: 0, disp: 0, help: 1 },
+      SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
+      300,
+    ),
+    fetchKmaText(
+      context,
+      'api/typ01/url/sfc_aws_day.php',
+      { tm2: observedDay, obs: 'ta_max', stn: 0, disp: 0, help: 1 },
+      SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
+      300,
+    ),
   ]);
+
+  if (!hasDailyObservationRows(minDailyRaw) && !hasDailyObservationRows(maxDailyRaw)) {
+    throw new Error('No valid daily temperature observations were found.');
+  }
 
   const dailyMinRows = parseAwsDailyObservations(minDailyRaw, stationMetadata);
   const dailyMaxRows = parseAwsDailyObservations(maxDailyRaw, stationMetadata);
 
   return {
-    observedAt,
-    observedLabel: formatDisplayKoreanDateTime(observedAt),
+    observedAt: formatKmaMinuteTime(now),
+    observedLabel: formatDisplayKoreanDateTime(formatKmaMinuteTime(now)),
     minToday: buildRankingRows(
       dailyMinRows.filter((item) => isFiniteObservation(item.value)).map((item) => ({
         name: item.name,
