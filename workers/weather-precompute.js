@@ -18,6 +18,7 @@ import {
 
 const WARNING_IMAGE_CACHE_KEY = 'warning-images';
 const FORECAST_REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000;
+const FORECAST_PRECOMPUTE_CONCURRENCY = 3;
 
 const makeContext = (env, request = new Request('https://weathernow.local/cron')) => ({
   env,
@@ -59,29 +60,46 @@ const shouldRefreshForecastRecord = (record) => {
   return !Number.isFinite(generatedAt) || Date.now() - generatedAt >= FORECAST_REFRESH_MIN_INTERVAL_MS;
 };
 
-const refreshForecasts = async (context) => {
+const runWithConcurrency = async (items, limit, worker) => {
   const results = [];
+  let nextIndex = 0;
 
-  for (const kind of FORECAST_KINDS) {
-    for (const regionId of FORECAST_REGION_IDS) {
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex]);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+};
+
+const refreshForecasts = async (context) => {
+  const items = FORECAST_KINDS.flatMap((kind) =>
+    FORECAST_REGION_IDS.map((regionId) => ({ kind, regionId })),
+  );
+
+  return runWithConcurrency(
+    items,
+    FORECAST_PRECOMPUTE_CONCURRENCY,
+    async ({ kind, regionId }) => {
       try {
         const cacheKey = getForecastCacheKey(kind, regionId);
         const existingRecord = await context.env.WEATHER_CACHE.get(cacheKey, 'json');
         if (!shouldRefreshForecastRecord(existingRecord)) {
-          results.push({ kind: cacheKey, ok: true, skipped: true, generatedAt: existingRecord.generatedAt });
-          continue;
+          return { kind: cacheKey, ok: true, skipped: true, generatedAt: existingRecord.generatedAt };
         }
 
         const payload = await buildForecastPayload(context, kind, regionId);
         await writePrecomputedForecast(context, kind, regionId, payload);
-        results.push({ kind: cacheKey, ok: true, tmfc: payload?.[0]?.tmfc ?? '' });
+        return { kind: cacheKey, ok: true, tmfc: payload?.[0]?.tmfc ?? '' };
       } catch (error) {
-        results.push({ kind: `forecast:${kind}:${regionId}`, ok: false, error: error.message });
+        return { kind: `forecast:${kind}:${regionId}`, ok: false, error: error.message };
       }
-    }
-  }
-
-  return results;
+    },
+  );
 };
 
 const refreshWeatherCache = async (env, request) => {
@@ -90,13 +108,13 @@ const refreshWeatherCache = async (env, request) => {
   }
 
   const context = makeContext(env, request);
+  const forecastResults = await refreshForecasts(context);
   const rankingResults = await refreshRankings(context);
   const warningResult = await refreshWarningImages(context);
-  const forecastResults = await refreshForecasts(context);
 
   return {
     generatedAt: new Date().toISOString(),
-    results: [...rankingResults, warningResult, ...forecastResults],
+    results: [...forecastResults, ...rankingResults, warningResult],
   };
 };
 

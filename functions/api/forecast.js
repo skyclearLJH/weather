@@ -7,8 +7,7 @@ const corsHeaders = {
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const FORECAST_CACHE_MAX_STALE_AGE_MS = 36 * 60 * 60 * 1000;
-const FORECAST_RECHECK_INTERVAL_MS = 2 * 60 * 1000;
-const FORECAST_STALE_REFRESH_WAIT_MS = 2500;
+const FORECAST_RECHECK_INTERVAL_MS = 10 * 60 * 1000;
 const FORECAST_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const FORECAST_REFRESH_IN_FLIGHT = new Map();
 const KMA_TEXT_CACHE = new Map();
@@ -48,14 +47,14 @@ const OFFICE_NAMES = {
 };
 
 const DOC_RELEASES = [
-  { hour: 5, minute: 0 },
-  { hour: 11, minute: 0 },
-  { hour: 17, minute: 0 },
+  { hour: 5, minute: 0, readyHour: 5, readyMinute: 10 },
+  { hour: 11, minute: 0, readyHour: 11, readyMinute: 10 },
+  { hour: 17, minute: 0, readyHour: 17, readyMinute: 10 },
 ];
 
 const COMMENTARY_RELEASES = [
-  { hour: 4, minute: 20 },
-  { hour: 16, minute: 20 },
+  { hour: 4, minute: 20, readyHour: 4, readyMinute: 50 },
+  { hour: 16, minute: 20, readyHour: 16, readyMinute: 50 },
 ];
 
 const COMMENTARY_WINDOWS = [
@@ -185,12 +184,19 @@ const getExpectedLatestTmfc = (kind, now = getKstNow()) => {
   const candidates = [0, 1, 2]
     .flatMap((dayOffset) => {
       const baseDate = subtractDays(now, dayOffset);
-      return releases.map((release) => cloneAtKstTime(baseDate, release.hour, release.minute));
+      return releases.map((release) => ({
+        tmfcAt: cloneAtKstTime(baseDate, release.hour, release.minute),
+        readyAt: cloneAtKstTime(
+          baseDate,
+          release.readyHour ?? release.hour,
+          release.readyMinute ?? release.minute,
+        ),
+      }));
     })
-    .filter((releaseAt) => releaseAt <= now)
-    .sort((left, right) => right.getTime() - left.getTime());
+    .filter((candidate) => candidate.readyAt <= now)
+    .sort((left, right) => right.tmfcAt.getTime() - left.tmfcAt.getTime());
 
-  return candidates.length > 0 ? formatKmaMinuteTime(candidates[0]) : '';
+  return candidates.length > 0 ? formatKmaMinuteTime(candidates[0].tmfcAt) : '';
 };
 
 const shouldTryLiveRefresh = (record, kind) => {
@@ -228,8 +234,6 @@ const readPrecomputedForecastRecord = async (context, kind, regionId) => {
 
   return weatherCache.get(getForecastCacheKey(kind, regionId), 'json');
 };
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const makeJsonResponse = (payload, headers = {}) =>
   new Response(JSON.stringify(payload), {
@@ -479,7 +483,7 @@ const fetchWeatherDocLive = async (context, regionId) => {
           tmfc2: formatKmaHourTime(candidate.endAt),
           stn,
           disp: 0,
-          help: 1,
+          help: 0,
         },
         9000,
         180,
@@ -502,7 +506,7 @@ const fetchWeatherDocLive = async (context, regionId) => {
         tmfc2: formatKmaHourTime(new Date(now.getTime() + 60 * 60 * 1000)),
         stn,
         disp: 0,
-        help: 1,
+        help: 0,
       },
       12000,
       180,
@@ -534,7 +538,7 @@ const fetchWeatherCommentaryLive = async (context, regionId) => {
           stn,
           subcd: 12,
           disp: 0,
-          help: 1,
+          help: 0,
         },
         9000,
         180,
@@ -559,7 +563,7 @@ const fetchWeatherCommentaryLive = async (context, regionId) => {
           stn,
           subcd: 12,
           disp: 0,
-          help: 1,
+          help: 0,
         },
         9000,
         180,
@@ -665,21 +669,7 @@ export async function onRequestGet(context) {
     }
 
     if (!forceRefresh && isUsableForecastRecord(cachedRecord)) {
-      const refreshPromise = schedulePrecomputedForecastRefresh(context, kind, regionId);
-      if (refreshPromise) {
-        const refreshedPayload = await Promise.race([
-          refreshPromise.catch(() => null),
-          wait(FORECAST_STALE_REFRESH_WAIT_MS).then(() => null),
-        ]);
-
-        if (refreshedPayload) {
-          return makeJsonResponse(refreshedPayload, {
-            'X-Weather-Data-Source': 'refreshed-kv',
-            'X-Weather-Cache-Generated-At': new Date().toISOString(),
-          });
-        }
-      }
-
+      schedulePrecomputedForecastRefresh(context, kind, regionId);
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',
