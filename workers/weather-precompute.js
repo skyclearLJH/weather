@@ -8,8 +8,16 @@ import {
   buildWarningImagePayload,
   writePrecomputedWarningImages,
 } from '../functions/api/weather-warning.js';
+import {
+  FORECAST_KINDS,
+  FORECAST_REGION_IDS,
+  buildForecastPayload,
+  getForecastCacheKey,
+  writePrecomputedForecast,
+} from '../functions/api/forecast.js';
 
 const WARNING_IMAGE_CACHE_KEY = 'warning-images';
+const FORECAST_REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000;
 
 const makeContext = (env, request = new Request('https://weathernow.local/cron')) => ({
   env,
@@ -42,6 +50,40 @@ const refreshWarningImages = async (context) => {
   }
 };
 
+const shouldRefreshForecastRecord = (record) => {
+  if (!record?.generatedAt) {
+    return true;
+  }
+
+  const generatedAt = Date.parse(record.generatedAt);
+  return !Number.isFinite(generatedAt) || Date.now() - generatedAt >= FORECAST_REFRESH_MIN_INTERVAL_MS;
+};
+
+const refreshForecasts = async (context) => {
+  const results = [];
+
+  for (const kind of FORECAST_KINDS) {
+    for (const regionId of FORECAST_REGION_IDS) {
+      try {
+        const cacheKey = getForecastCacheKey(kind, regionId);
+        const existingRecord = await context.env.WEATHER_CACHE.get(cacheKey, 'json');
+        if (!shouldRefreshForecastRecord(existingRecord)) {
+          results.push({ kind: cacheKey, ok: true, skipped: true, generatedAt: existingRecord.generatedAt });
+          continue;
+        }
+
+        const payload = await buildForecastPayload(context, kind, regionId);
+        await writePrecomputedForecast(context, kind, regionId, payload);
+        results.push({ kind: cacheKey, ok: true, tmfc: payload?.[0]?.tmfc ?? '' });
+      } catch (error) {
+        results.push({ kind: `forecast:${kind}:${regionId}`, ok: false, error: error.message });
+      }
+    }
+  }
+
+  return results;
+};
+
 const refreshWeatherCache = async (env, request) => {
   if (!env.WEATHER_CACHE) {
     throw new Error('WEATHER_CACHE KV binding is required.');
@@ -50,10 +92,11 @@ const refreshWeatherCache = async (env, request) => {
   const context = makeContext(env, request);
   const rankingResults = await refreshRankings(context);
   const warningResult = await refreshWarningImages(context);
+  const forecastResults = await refreshForecasts(context);
 
   return {
     generatedAt: new Date().toISOString(),
-    results: [...rankingResults, warningResult],
+    results: [...rankingResults, warningResult, ...forecastResults],
   };
 };
 
@@ -65,6 +108,9 @@ const readStatus = async (env) => {
   const keys = [
     ...RANKING_KINDS.map((kind) => getRankingCacheKey(kind)),
     WARNING_IMAGE_CACHE_KEY,
+    ...FORECAST_KINDS.flatMap((kind) =>
+      FORECAST_REGION_IDS.map((regionId) => getForecastCacheKey(kind, regionId)),
+    ),
   ];
   const records = await Promise.all(
     keys.map(async (key) => {
