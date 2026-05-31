@@ -14,6 +14,9 @@ const KMA_TEXT_CACHE = new Map();
 const KMA_TEXT_IN_FLIGHT = new Map();
 
 const padZero = (value) => value.toString().padStart(2, '0');
+const OFFICIAL_WEATHER_REPORT_URL = 'https://www.weather.go.kr/w/special-report/list.do';
+const SHORT_TERM_LABEL = '\uB2E8\uAE30';
+const ULTRA_SHORT_TERM_LABEL = '\uCD08\uB2E8\uAE30';
 
 export const FORECAST_KINDS = ['doc', 'commentary'];
 
@@ -351,6 +354,52 @@ const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cache
   return requestPromise;
 };
 
+const fetchOfficialPageText = async (context, params = {}, timeoutMs = 7000, cacheTtl = 180) => {
+  const url = new URL(OFFICIAL_WEATHER_REPORT_URL);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  const cacheKey = `official:${url.pathname}?${url.searchParams.toString()}`;
+  const forceRefresh = isManualRefreshRequest(context);
+
+  if (!forceRefresh) {
+    const cachedText = getCachedKmaText(cacheKey);
+    if (cachedText !== null) {
+      return cachedText;
+    }
+
+    if (KMA_TEXT_IN_FLIGHT.has(cacheKey)) {
+      return KMA_TEXT_IN_FLIGHT.get(cacheKey);
+    }
+  }
+
+  const requestPromise = fetchWithTimeout(
+    url.toString(),
+    forceRefresh ? { cache: 'no-store' } : {},
+    timeoutMs,
+  )
+    .then((response) => response.text())
+    .then((html) => {
+      KMA_TEXT_CACHE.set(cacheKey, {
+        value: html,
+        expiresAt: Date.now() + cacheTtl * 1000,
+      });
+      return html;
+    })
+    .finally(() => {
+      KMA_TEXT_IN_FLIGHT.delete(cacheKey);
+    });
+
+  if (!forceRefresh) {
+    KMA_TEXT_IN_FLIGHT.set(cacheKey, requestPromise);
+  }
+
+  return requestPromise;
+};
+
 const normalizeReportText = (content) =>
   content
     .replace(/#/g, '\n\n')
@@ -362,6 +411,64 @@ const normalizeReportText = (content) =>
     .replace(/7777END/g, '')
     .replace(/[=\s]+$/g, '')
     .trim();
+
+const decodeHtmlEntities = (value) =>
+  value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#40;/g, '(')
+    .replace(/&#41;/g, ')')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"');
+
+const stripHtml = (value) =>
+  decodeHtmlEntities(
+    value
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+      .replace(/<[^>]*>/g, ''),
+  )
+    .replace(/\t+/g, ' ')
+    .replace(/[ \u00a0]+\n/g, '\n')
+    .replace(/\n[ \u00a0]+/g, '\n')
+    .replace(/[ \u00a0]{2,}/g, ' ')
+    .trim();
+
+const parseOfficialCommentaryOptions = (html) =>
+  [...html.matchAll(/<option\s+value=["']([^"']+)["'][^>]*>([\s\S]*?)<\/option>/gi)]
+    .map((match) => ({
+      value: decodeHtmlEntities(match[1]).trim(),
+      label: stripHtml(match[2]).replace(/\s+/g, ' '),
+    }))
+    .filter((option) => option.value.startsWith('cmt:'));
+
+const findOfficialShortTermCommentaryOption = (html) => {
+  const options = parseOfficialCommentaryOptions(html);
+  return (
+    options.find((option) =>
+      option.label.includes(SHORT_TERM_LABEL) &&
+      !option.label.includes(ULTRA_SHORT_TERM_LABEL)
+    ) ?? options[0] ?? null
+  );
+};
+
+const extractOfficialReportContent = (html) => {
+  const contentMatch = html.match(/<div class=["']cmp-view-content["']>([\s\S]*?)<div class=["']cmp-stack["']>/i);
+  if (!contentMatch) {
+    return '';
+  }
+
+  return normalizeReportText(
+    stripHtml(
+      contentMatch[1]
+        .replace(/<figure[\s\S]*?<\/figure>/gi, '')
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, ''),
+    ),
+  );
+};
 
 const parseKmaReport = (rawData, targetStn, titleFieldIndex) => {
   if (!rawData) {
@@ -468,6 +575,29 @@ const buildCommentaryCandidates = (now) =>
     .filter((candidate) => candidate.releaseAt <= now)
     .sort((left, right) => right.releaseAt.getTime() - left.releaseAt.getTime());
 
+const fetchWeatherCommentaryFromOfficialPage = async (context, regionId) => {
+  const { stn } = getReportMeta(regionId);
+  const listHtml = await fetchOfficialPageText(context, { stn, kind: 'cmt' }, 7000, 180);
+  const option = findOfficialShortTermCommentaryOption(listHtml);
+  if (!option) {
+    throw new Error('Official weather commentary option was not found.');
+  }
+
+  const [, tmfc = ''] = option.value.split(':');
+  const detailHtml = await fetchOfficialPageText(
+    context,
+    { stn, kind: 'cmt', reportId: option.value },
+    7000,
+    180,
+  );
+  const content = extractOfficialReportContent(detailHtml);
+  if (!tmfc && !content) {
+    throw new Error('Official weather commentary content was not found.');
+  }
+
+  return buildReportCard('commentary', regionId, content, normalizeTmfcForCompare(tmfc));
+};
+
 const fetchWeatherDocLive = async (context, regionId) => {
   const now = getKstNow();
   const { stn } = getReportMeta(regionId);
@@ -526,6 +656,12 @@ const fetchWeatherCommentaryLive = async (context, regionId) => {
   const now = getKstNow();
   const { stn } = getReportMeta(regionId);
   let lastError = null;
+
+  try {
+    return await fetchWeatherCommentaryFromOfficialPage(context, regionId);
+  } catch (error) {
+    lastError = error;
+  }
 
   for (const candidate of buildCommentaryCandidates(now)) {
     try {
