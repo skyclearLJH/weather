@@ -17,6 +17,10 @@ import {
   onRequestOptions as commentaryOptions,
 } from './functions/api/weather-commentary.js';
 import {
+  onRequestGet as forecastDocGet,
+  onRequestOptions as forecastDocOptions,
+} from './functions/api/forecast-doc.js';
+import {
   onRequest as kmaProxyRequest,
   onRequestOptions as kmaProxyOptions,
 } from './functions/api/kma/[[path]].js';
@@ -115,6 +119,14 @@ const localFunctionsPlugin = (env) => ({
           const response = req.method === 'OPTIONS'
             ? await commentaryOptions(context)
             : await commentaryGet(context);
+          await sendFunctionResponse(response, res);
+          return;
+        }
+
+        if (requestUrl.pathname === '/api/forecast-doc') {
+          const response = req.method === 'OPTIONS'
+            ? await forecastDocOptions(context)
+            : await forecastDocGet(context);
           await sendFunctionResponse(response, res);
           return;
         }

@@ -10,6 +10,7 @@ const AWS_TEMPERATURE_LOOKBACK_STEPS = [3, 4, 5, 7, 10, 15, 20, 30];
 const AWS_MINUTE_REQUEST_TIMEOUT_MS = 6000;
 const COMMENTARY_LOOKBACK_HOURS = [12, 24, 48, 72];
 const DOC_ISSUANCE_HOURS = [5, 11, 17];
+const FORECAST_DOC_API_HUB_GRACE_MS = 3000;
 const SLOW_DAILY_RAIN_TIMEOUT_MS = 30000;
 const SLOW_DAILY_TEMPERATURE_TIMEOUT_MS = 20000;
 const TEXT_CACHE = new Map();
@@ -155,6 +156,22 @@ export const clearWeatherApiCaches = () => {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withSoftTimeout = (promise, timeoutMs, message = 'Operation timed out.') =>
+  new Promise((resolve, reject) => {
+    const timerId = setTimeout(() => reject(new Error(message)), timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timerId);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timerId);
+        reject(error);
+      },
+    );
+  });
 
 const fetchWithRetry = async (url, options = {}, retryCount = REQUEST_RETRY_COUNT, timeoutMs = REQUEST_TIMEOUT_MS) => {
   for (let attempt = 0; attempt <= retryCount; attempt += 1) {
@@ -933,7 +950,7 @@ export const fetchWeatherCommentary = async (regionId, options = {}) => {
   }
 };
 
-export const fetchWeatherDoc = async (regionId, options = {}) => {
+const fetchWeatherDocFromApiHub = async (regionId, options = {}) => {
   const { refreshToken = '' } = options;
   return withDataCache(`forecast-doc-${regionId}`, TTL.doc, async () => {
     const now = new Date();
@@ -1019,6 +1036,47 @@ export const fetchWeatherDoc = async (regionId, options = {}) => {
     console.error('[API Fetch Error] 통보문 실패', lastError);
     throw new Error('기상청 통보문 데이터를 불러오지 못했습니다.');
   }, { refreshToken });
+};
+
+const fetchOfficialForecastDoc = async (regionId, options = {}) => {
+  const { refreshToken = '' } = options;
+
+  return withDataCache(`official-forecast-doc-${regionId}`, TTL.doc, async () => {
+    const response = await fetchWithRetry(
+      buildAppUrl('/api/forecast-doc', withRefreshParam({ region: regionId }, refreshToken)),
+      refreshToken ? { cache: 'no-store' } : {},
+      0,
+      8000,
+    );
+    const payload = await response.json();
+
+    if (!Array.isArray(payload) || !payload[0]?.content) {
+      throw new Error('Official forecast notice payload is empty.');
+    }
+
+    return payload;
+  }, { refreshToken });
+};
+
+export const fetchWeatherDoc = async (regionId, options = {}) => {
+  const apiHubPromise = fetchWeatherDocFromApiHub(regionId, options);
+
+  try {
+    return await withSoftTimeout(
+      apiHubPromise,
+      FORECAST_DOC_API_HUB_GRACE_MS,
+      'API Hub forecast notice was delayed.',
+    );
+  } catch (apiHubError) {
+    try {
+      return await fetchOfficialForecastDoc(regionId, options);
+    } catch (officialError) {
+      console.warn('[API Fetch Warning] Official forecast notice failed. Waiting for API Hub.', officialError);
+      return apiHubPromise.catch(() => {
+        throw apiHubError;
+      });
+    }
+  }
 };
 
 export const fetchWeatherWarnings = async (regionId, options = {}) => {
