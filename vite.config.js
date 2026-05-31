@@ -13,10 +13,6 @@ import {
   onRequestOptions as warningImagesOptions,
 } from './functions/api/weather-warning.js';
 import {
-  onRequestGet as forecastGet,
-  onRequestOptions as forecastOptions,
-} from './functions/api/forecast.js';
-import {
   onRequest as kmaProxyRequest,
   onRequestOptions as kmaProxyOptions,
 } from './functions/api/kma/[[path]].js';
@@ -107,14 +103,6 @@ const localFunctionsPlugin = (env) => ({
           const response = req.method === 'OPTIONS'
             ? await warningImagesOptions(context)
             : await warningImagesGet(context);
-          await sendFunctionResponse(response, res);
-          return;
-        }
-
-        if (requestUrl.pathname === '/api/forecast') {
-          const response = req.method === 'OPTIONS'
-            ? await forecastOptions(context)
-            : await forecastGet(context);
           await sendFunctionResponse(response, res);
           return;
         }

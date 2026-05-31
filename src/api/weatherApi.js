@@ -848,21 +848,7 @@ const buildForecastDocCandidates = (now) =>
     .filter((candidate) => candidate.issuedAt <= now)
     .sort((left, right) => right.issuedAt.getTime() - left.issuedAt.getTime());
 
-const fetchForecastReportFromServer = async (kind, regionId, options = {}, ttlMs = TTL.doc) => {
-  const { refreshToken = '' } = options;
-  return withDataCache(`server-forecast-${kind}-${regionId}`, ttlMs, async () => {
-    const response = await fetchWithRetry(
-      buildAppUrl('/api/forecast', withRefreshParam({ kind, region: regionId }, refreshToken)),
-      refreshToken ? { cache: 'no-store' } : {},
-      1,
-      7000,
-    );
-
-    return response.json();
-  }, { refreshToken });
-};
-
-const fetchWeatherCommentaryDirect = async (regionId, options = {}) => {
+export const fetchWeatherCommentary = async (regionId, options = {}) => {
   const { refreshToken = '' } = options;
   return withDataCache(`commentary-${regionId}`, TTL.commentary, async () => {
     const now = new Date();
@@ -918,7 +904,7 @@ const fetchWeatherCommentaryDirect = async (regionId, options = {}) => {
   }, { refreshToken });
 };
 
-const fetchWeatherDocDirect = async (regionId, options = {}) => {
+export const fetchWeatherDoc = async (regionId, options = {}) => {
   const { refreshToken = '' } = options;
   return withDataCache(`forecast-doc-${regionId}`, TTL.doc, async () => {
     const now = new Date();
@@ -1004,24 +990,6 @@ const fetchWeatherDocDirect = async (regionId, options = {}) => {
     console.error('[API Fetch Error] 통보문 실패', lastError);
     throw new Error('기상청 통보문 데이터를 불러오지 못했습니다.');
   }, { refreshToken });
-};
-
-export const fetchWeatherCommentary = async (regionId, options = {}) => {
-  try {
-    return await fetchForecastReportFromServer('commentary', regionId, options, TTL.commentary);
-  } catch (error) {
-    console.warn('[API Fetch Warning] 서버 캐시 날씨해설 조회 실패, 직접 조회로 전환합니다.', error);
-    return fetchWeatherCommentaryDirect(regionId, options);
-  }
-};
-
-export const fetchWeatherDoc = async (regionId, options = {}) => {
-  try {
-    return await fetchForecastReportFromServer('doc', regionId, options, TTL.doc);
-  } catch (error) {
-    console.warn('[API Fetch Warning] 서버 캐시 통보문 조회 실패, 직접 조회로 전환합니다.', error);
-    return fetchWeatherDocDirect(regionId, options);
-  }
 };
 
 export const fetchWeatherWarnings = async (regionId, options = {}) => {
