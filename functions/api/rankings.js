@@ -15,6 +15,7 @@ const PRECOMPUTED_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
 const PRECOMPUTED_CACHE_MAX_STALE_AGE_MS = 15 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
+const CURRENT_CACHE_MAX_OBSERVED_AGE_MS = 8 * 60 * 1000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const RANKING_CACHE_VERSION = 'v2';
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
@@ -109,6 +110,27 @@ const isUsableStaleCacheRecord = (record, observedAt = '') => {
 
   const generatedAt = Date.parse(record.generatedAt);
   return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getStaleCacheMaxAgeMs(observedAt);
+};
+
+const isLatestCurrentRanking = (kind, observedAt = '') =>
+  !observedAt && (kind === 'temperature-current' || kind === 'precipitation-current');
+
+const getObservedAgeMs = (timestamp = '') => {
+  const observedDate = parseKmaMinuteTime(timestamp);
+  if (!observedDate) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return getKstNow().getTime() - observedDate.getTime();
+};
+
+const isCacheFastReturnAllowed = (record, kind, observedAt = '') => {
+  if (!isLatestCurrentRanking(kind, observedAt)) {
+    return true;
+  }
+
+  const observedAgeMs = getObservedAgeMs(record?.payload?.observedAt);
+  return observedAgeMs >= 0 && observedAgeMs <= CURRENT_CACHE_MAX_OBSERVED_AGE_MS;
 };
 
 const readPrecomputedRankingRecord = async (context, kind, observedAt = '') => {
@@ -734,14 +756,22 @@ export async function onRequestGet(context) {
       cachedRecord = null;
     }
 
-    if (!forceRefresh && isFreshCacheRecord(cachedRecord, requestedObservedAt)) {
+    if (
+      !forceRefresh &&
+      isFreshCacheRecord(cachedRecord, requestedObservedAt) &&
+      isCacheFastReturnAllowed(cachedRecord, kind, requestedObservedAt)
+    ) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt,
       });
     }
 
-    if (!forceRefresh && isUsableStaleCacheRecord(cachedRecord, requestedObservedAt)) {
+    if (
+      !forceRefresh &&
+      isUsableStaleCacheRecord(cachedRecord, requestedObservedAt) &&
+      isCacheFastReturnAllowed(cachedRecord, kind, requestedObservedAt)
+    ) {
       schedulePrecomputedRankingRefresh(context, kind, requestedObservedAt);
 
       return makeJsonResponse(cachedRecord.payload, {
