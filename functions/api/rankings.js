@@ -15,8 +15,6 @@ const PRECOMPUTED_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
 const PRECOMPUTED_CACHE_MAX_STALE_AGE_MS = 15 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
-const PRECOMPUTED_STALE_REFRESH_WAIT_MS = 2500;
-const CURRENT_RANKING_STALE_REFRESH_WAIT_MS = 15000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const RANKING_CACHE_VERSION = 'v2';
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
@@ -112,13 +110,6 @@ const isUsableStaleCacheRecord = (record, observedAt = '') => {
   const generatedAt = Date.parse(record.generatedAt);
   return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getStaleCacheMaxAgeMs(observedAt);
 };
-
-const getStaleRefreshWaitMs = (kind) =>
-  kind === 'temperature-current' || kind === 'precipitation-current'
-    ? CURRENT_RANKING_STALE_REFRESH_WAIT_MS
-    : PRECOMPUTED_STALE_REFRESH_WAIT_MS;
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const readPrecomputedRankingRecord = async (context, kind, observedAt = '') => {
   const weatherCache = getWeatherCache(context);
@@ -751,20 +742,7 @@ export async function onRequestGet(context) {
     }
 
     if (!forceRefresh && isUsableStaleCacheRecord(cachedRecord, requestedObservedAt)) {
-      const refreshPromise = schedulePrecomputedRankingRefresh(context, kind, requestedObservedAt);
-      if (refreshPromise) {
-        const refreshedPayload = await Promise.race([
-          refreshPromise.catch(() => null),
-          wait(getStaleRefreshWaitMs(kind)).then(() => null),
-        ]);
-
-        if (refreshedPayload) {
-          return makeJsonResponse(refreshedPayload, {
-            'X-Weather-Data-Source': 'refreshed-kv',
-            'X-Weather-Cache-Generated-At': new Date().toISOString(),
-          });
-        }
-      }
+      schedulePrecomputedRankingRefresh(context, kind, requestedObservedAt);
 
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
