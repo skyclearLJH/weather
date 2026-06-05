@@ -33,6 +33,8 @@ const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const OBSERVATION_TIME_OPTION_COUNT = 4;
 const LATEST_OBSERVATION_VALUE = 'latest';
 const SNOW_TEST_TIME = '202603021800';
+const RANKING_COLLAPSED_LIMIT = 10;
+const RANKING_EXPANDED_LIMIT = 30;
 
 const padZero = (value) => value.toString().padStart(2, '0');
 
@@ -112,6 +114,7 @@ function App() {
   const [testTime, setTestTime] = useState(null);
   const [snowTestRefreshKey, setSnowTestRefreshKey] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(DEFAULT_UPDATED_AT);
+  const [isRankingExpanded, setIsRankingExpanded] = useState(false);
 
   const handleRefresh = () => {
     clearWeatherApiCaches();
@@ -183,6 +186,10 @@ function App() {
       setTestTime(null);
     }
   }, [selectedTab]);
+
+  useEffect(() => {
+    setIsRankingExpanded(false);
+  }, [observationTimeMode, selectedRegion, selectedSubMenu, selectedTab, testTime]);
 
   useEffect(() => {
     const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
@@ -417,6 +424,14 @@ function App() {
   }, [precipitationApiData, selectedSubMenu]);
 
   const snowData = selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
+  const rankingLimit = isRankingExpanded ? RANKING_EXPANDED_LIMIT : RANKING_COLLAPSED_LIMIT;
+  const getVisibleRankings = (dataArray = []) => dataArray.slice(0, rankingLimit);
+  const getRankingExpandProps = (dataArray = []) => ({
+    totalCount: dataArray.length,
+    canExpand: dataArray.length > RANKING_COLLAPSED_LIMIT,
+    isExpanded: isRankingExpanded,
+    onToggleExpanded: () => setIsRankingExpanded((previous) => !previous),
+  });
 
   const renderEmptyState = (message, headerAction = null) => (
     <section className="space-y-3">
@@ -435,7 +450,8 @@ function App() {
 
       const tableData =
         selectedSubMenu === 'today' ? temperatureApiData.minToday : temperatureApiData.minCurrent;
-      const filteredData = filterByRegion(tableData).slice(0, 10);
+      const fullData = filterByRegion(tableData);
+      const filteredData = getVisibleRankings(fullData);
 
       return filteredData.length > 0 ? (
         <WeatherTable
@@ -447,6 +463,7 @@ function App() {
           }
           data={filteredData}
           headerAction={renderObservationTimeControl()}
+          {...getRankingExpandProps(fullData)}
         />
       ) : (
         renderEmptyState(EMPTY_STATE_MESSAGE.default, renderObservationTimeControl())
@@ -460,7 +477,8 @@ function App() {
 
       const tableData =
         selectedSubMenu === 'today' ? temperatureApiData.maxToday : temperatureApiData.maxCurrent;
-      const filteredData = filterByRegion(tableData).slice(0, 10);
+      const fullData = filterByRegion(tableData);
+      const filteredData = getVisibleRankings(fullData);
 
       return filteredData.length > 0 ? (
         <WeatherTable
@@ -472,6 +490,7 @@ function App() {
           }
           data={filteredData}
           headerAction={renderObservationTimeControl()}
+          {...getRankingExpandProps(fullData)}
         />
       ) : (
         renderEmptyState(EMPTY_STATE_MESSAGE.default, renderObservationTimeControl())
@@ -483,7 +502,8 @@ function App() {
         return renderEmptyState('강수량 데이터를 불러오는 중입니다.', renderObservationTimeControl());
       }
 
-      const filteredData = filterByRegion(precipitationData).slice(0, 10);
+      const fullData = filterByRegion(precipitationData);
+      const filteredData = getVisibleRankings(fullData);
       return filteredData.length > 0 ? (
         <WeatherTable
           title="강수량 Top 10"
@@ -494,6 +514,7 @@ function App() {
           }
           data={filteredData}
           headerAction={renderObservationTimeControl()}
+          {...getRankingExpandProps(fullData)}
         />
       ) : (
         renderEmptyState(EMPTY_STATE_MESSAGE.precipitation, renderObservationTimeControl())
@@ -501,7 +522,8 @@ function App() {
     }
 
     if (selectedTab === 'snow') {
-      const filteredData = (testTime ? snowData : filterByRegion(snowData)).slice(0, 10);
+      const fullData = testTime ? snowData : filterByRegion(snowData);
+      const filteredData = getVisibleRankings(fullData);
 
       return (
         <section className="space-y-4">
@@ -538,6 +560,7 @@ function App() {
               subtitle="현재 적설량과 오늘 신적설량을 탭으로 전환해 확인할 수 있습니다."
               data={filteredData}
               headerAction={renderObservationTimeControl()}
+              {...getRankingExpandProps(fullData)}
             />
           ) : (
             renderEmptyState(apiError || EMPTY_STATE_MESSAGE.snow)

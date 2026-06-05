@@ -5,13 +5,28 @@ const rankBadgeClassName = (rank) => {
   return 'bg-slate-100 text-slate-700';
 };
 
-const WeatherTable = ({ title, subtitle, data, headerAction = null }) => {
+const WeatherTable = ({
+  title,
+  subtitle,
+  data,
+  headerAction = null,
+  totalCount = data.length,
+  canExpand = false,
+  isExpanded = false,
+  onToggleExpanded = null,
+}) => {
+  const expandLabel = isExpanded
+    ? `10\uC704\uB9CC \uBCF4\uAE30`
+    : `${Math.min(totalCount, 30)}\uC704\uAE4C\uC9C0 \uBCF4\uAE30`;
+  const visibleTopCount = isExpanded ? Math.min(totalCount, 30) : 10;
+  const displayTitle = canExpand ? title.replace(/Top\s*\d+/, `Top ${visibleTopCount}`) : title;
+
   return (
     <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <h2 className="text-lg font-bold tracking-tight text-slate-900">{title}</h2>
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">{displayTitle}</h2>
             {subtitle ? <div className="mt-1 text-sm text-slate-500">{subtitle}</div> : null}
           </div>
           {headerAction ? <div className="shrink-0">{headerAction}</div> : null}
@@ -58,6 +73,18 @@ const WeatherTable = ({ title, subtitle, data, headerAction = null }) => {
           );
         })}
       </ul>
+
+      {canExpand ? (
+        <div className="border-t border-slate-100 bg-slate-50/70 px-5 py-4 text-center">
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            className="inline-flex items-center justify-center rounded-full border border-blue-200 bg-white px-5 py-2 text-sm font-bold text-[#0033a0] shadow-sm transition hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-200"
+          >
+            {expandLabel}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 };
