@@ -13,7 +13,12 @@ export const REGIONS = [
   { id: 'daejeon', label: '대전총국', keywords: ['대전', '세종', '충청남도', '충남'] },
   { id: 'cheongju', label: '청주총국', keywords: ['충청북도', '충북'] },
   { id: 'jeonju', label: '전주총국', keywords: ['전북특별자치도', '전북', '전라북도'] },
-  { id: 'gwangju', label: '광주총국', keywords: ['광주', '전라남도', '전남', '흑산도', '홍도'] },
+  {
+    id: 'gwangju',
+    label: '광주총국',
+    keywords: ['광주', '전라남도', '전남', '흑산도', '홍도'],
+    excludeKeywords: ['경기도 광주시', '경기도 광주', '경기 광주시', '경기 광주'],
+  },
   { id: 'jeju', label: '제주총국', keywords: ['제주'] },
   { id: 'chuncheon', label: '춘천총국', keywords: ['강원'] },
   { id: 'daegu', label: '대구총국', keywords: ['대구', '경상북도', '경북', '울릉도', '독도'] },

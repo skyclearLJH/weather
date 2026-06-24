@@ -407,6 +407,11 @@ function App() {
 
     const filtered = dataArray.filter((item) => {
       const searchText = `${item.address ?? ''} ${item.region ?? ''}`.trim();
+      const isExcluded = targetRegion.excludeKeywords?.some((keyword) => searchText.includes(keyword));
+      if (isExcluded) {
+        return false;
+      }
+
       return targetRegion.keywords.some((keyword) => searchText.includes(keyword));
     });
 
