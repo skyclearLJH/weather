@@ -4,24 +4,13 @@ const normalizeForecastDocContent = (content = '') =>
   content
     .replace(/\r/g, '')
     .replace(/\u00a0/g, ' ')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n+/g, ' ')
-    .replace(/\s*(?=\u25CB\s*\()/g, '\n\n')
-    .replace(/\s*(?=\u203B)/g, '\n\n')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/[ \t]*(\u25CB\s*\()/g, '\n$1')
+    .replace(/[ \t]*(\u203B)/g, '\n$1')
+    .replace(/\n{2,}/g, '\n')
     .trim();
-
-const renderForecastDocContent = (content) => {
-  const paragraphs = normalizeForecastDocContent(content).split(/\n{2,}/).filter(Boolean);
-
-  return (
-    <div className="space-y-3">
-      {paragraphs.map((paragraph, index) => (
-        <p key={`${paragraph.slice(0, 24)}-${index}`}>{paragraph}</p>
-      ))}
-    </div>
-  );
-};
 
 const ForecastCard = ({ data, type, variant = type, isLoading, error }) => {
   const Icon = type === 'warning' ? AlertTriangle : Info;
@@ -93,14 +82,14 @@ const ForecastCard = ({ data, type, variant = type, isLoading, error }) => {
             </div>
 
             <div
-              className="mt-4 overflow-visible break-words text-sm leading-relaxed text-slate-700 sm:text-base"
+              className="mt-4 overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
               style={{
-                whiteSpace: variant === 'doc' ? 'normal' : 'pre-wrap',
+                whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
                 lineHeight: '1.6',
               }}
             >
-              {variant === 'doc' ? renderForecastDocContent(item.content) : item.content}
+              {variant === 'doc' ? normalizeForecastDocContent(item.content) : item.content}
             </div>
           </div>
         </div>
