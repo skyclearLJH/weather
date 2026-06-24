@@ -7,9 +7,11 @@ const normalizeForecastDocContent = (content = '') =>
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{2,}/g, '\n')
-    .replace(/[ \t]*(\u25CB\s*\()/g, '\n$1')
-    .replace(/[ \t]*(\u203B)/g, '\n$1')
-    .replace(/\n{2,}/g, '\n')
+    .replace(/[ \t]*(\u25A1)/g, '\n\n$1')
+    .replace(/[ \t]*(\u25CB\s*\()/g, '\n\n$1')
+    .replace(/[ \t]*(\*\s+)/g, '\n\n$1')
+    .replace(/(?:\n)?[ \t]*(\u203B)/g, '\n$1')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 
 const ForecastCard = ({ data, type, variant = type, isLoading, error }) => {
