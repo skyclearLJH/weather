@@ -605,6 +605,7 @@ function App() {
         <ForecastCard
           data={cardData}
           type={selectedTab}
+          variant={selectedTab === 'forecast' ? selectedSubMenu : selectedTab}
           isLoading={isActiveApiCall && isLoading}
           error={isActiveApiCall ? apiError : null}
         />

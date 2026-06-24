@@ -1,6 +1,29 @@
 import { AlertTriangle, Info } from 'lucide-react';
 
-const ForecastCard = ({ data, type, isLoading, error }) => {
+const normalizeForecastDocContent = (content = '') =>
+  content
+    .replace(/\r/g, '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n+/g, ' ')
+    .replace(/\s*(?=\u25CB\s*\()/g, '\n\n')
+    .replace(/\s*(?=\u203B)/g, '\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+const renderForecastDocContent = (content) => {
+  const paragraphs = normalizeForecastDocContent(content).split(/\n{2,}/).filter(Boolean);
+
+  return (
+    <div className="space-y-3">
+      {paragraphs.map((paragraph, index) => (
+        <p key={`${paragraph.slice(0, 24)}-${index}`}>{paragraph}</p>
+      ))}
+    </div>
+  );
+};
+
+const ForecastCard = ({ data, type, variant = type, isLoading, error }) => {
   const Icon = type === 'warning' ? AlertTriangle : Info;
   const iconColor = type === 'warning' ? 'text-red-500' : 'text-blue-500';
   const bgColor = type === 'warning' ? 'bg-red-50' : 'bg-blue-50';
@@ -70,14 +93,14 @@ const ForecastCard = ({ data, type, isLoading, error }) => {
             </div>
 
             <div
-              className="mt-4 overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
+              className="mt-4 overflow-visible break-words text-sm leading-relaxed text-slate-700 sm:text-base"
               style={{
-                whiteSpace: 'pre-wrap',
+                whiteSpace: variant === 'doc' ? 'normal' : 'pre-wrap',
                 wordBreak: 'break-word',
                 lineHeight: '1.6',
               }}
             >
-              {item.content}
+              {variant === 'doc' ? renderForecastDocContent(item.content) : item.content}
             </div>
           </div>
         </div>
