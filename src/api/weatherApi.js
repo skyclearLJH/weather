@@ -18,6 +18,25 @@ const DATA_CACHE = new Map();
 const DATA_IN_FLIGHT = new Map();
 const LAST_SUCCESS_DATA = new Map();
 const SNOW_DATA_CACHE_VERSION = 'v2';
+const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
+  '128',
+  '139',
+  '142',
+  '153',
+  '158',
+  '161',
+  '229',
+  '334',
+  '336',
+  '403',
+  '439',
+  '457',
+  '458',
+  '460',
+  '477',
+  '485',
+  '510',
+]);
 const TTL = {
   awsMinute: 60 * 1000,
   awsDaily: 5 * 60 * 1000,
@@ -267,6 +286,8 @@ const withDataCache = async (cacheKey, ttlMs, loader, options = {}) => {
 };
 
 const isFiniteObservation = (value) => Number.isFinite(value) && value > -50;
+const isHeatWarningSupportedStation = (stationId) =>
+  !HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS.has(String(stationId));
 
 const parseNumericValue = (value) => {
   const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ''));
@@ -524,8 +545,12 @@ export const fetchTemperatureCurrentRankings = async () =>
         ),
         maxCurrent: buildRankingRows(
           currentRows
-            .filter((item) => isFiniteObservation(item.temperature))
-            .map((item) => ({ name: item.name, address: item.address, value: item.temperature })),
+            .filter((item) => isFiniteObservation(item.temperature) && isHeatWarningSupportedStation(item.stationId))
+            .map((item) => ({
+              name: item.name,
+              address: item.address,
+              value: item.temperature,
+            })),
           '°C',
           'desc',
         ),
@@ -580,8 +605,12 @@ export const fetchTemperatureTodayRankings = async () =>
         ),
         maxToday: buildRankingRows(
           dailyMaxRows
-            .filter((item) => isFiniteObservation(item.value))
-            .map((item) => ({ name: item.name, address: item.address, value: item.value })),
+            .filter((item) => isFiniteObservation(item.value) && isHeatWarningSupportedStation(item.stationId))
+            .map((item) => ({
+              name: item.name,
+              address: item.address,
+              value: item.value,
+            })),
           '°C',
           'desc',
         ),

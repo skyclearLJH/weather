@@ -17,7 +17,26 @@ const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
 const CURRENT_CACHE_MAX_OBSERVED_AGE_MS = 8 * 60 * 1000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
-const RANKING_CACHE_VERSION = 'v2';
+const RANKING_CACHE_VERSION = 'v3';
+const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
+  '128',
+  '139',
+  '142',
+  '153',
+  '158',
+  '161',
+  '229',
+  '334',
+  '336',
+  '403',
+  '439',
+  '457',
+  '458',
+  '460',
+  '477',
+  '485',
+  '510',
+]);
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
 const KMA_TEXT_CACHE = new Map();
 const KMA_TEXT_IN_FLIGHT = new Map();
@@ -248,6 +267,8 @@ const parseNumericValue = (value) => {
 };
 
 const isFiniteObservation = (value) => Number.isFinite(value) && value > -50;
+const isHeatWarningSupportedStation = (stationId) =>
+  !HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS.has(String(stationId));
 
 const buildRankingRows = (items, unit, sortDirection = 'desc') =>
   [...items]
@@ -534,11 +555,13 @@ const buildTemperatureCurrent = async (context, stationMetadata, requestedObserv
       'asc',
     ),
     maxCurrent: buildRankingRows(
-      rows.filter((item) => isFiniteObservation(item.temperature)).map((item) => ({
-        name: item.name,
-        address: item.address,
-        value: item.temperature,
-      })),
+      rows
+        .filter((item) => isFiniteObservation(item.temperature) && isHeatWarningSupportedStation(item.stationId))
+        .map((item) => ({
+          name: item.name,
+          address: item.address,
+          value: item.temperature,
+        })),
       '°C',
       'desc',
     ),
@@ -590,11 +613,13 @@ const buildTemperatureToday = async (context, stationMetadataPromise) => {
       'asc',
     ),
     maxToday: buildRankingRows(
-      dailyMaxRows.filter((item) => isFiniteObservation(item.value)).map((item) => ({
-        name: item.name,
-        address: item.address,
-        value: item.value,
-      })),
+      dailyMaxRows
+        .filter((item) => isFiniteObservation(item.value) && isHeatWarningSupportedStation(item.stationId))
+        .map((item) => ({
+          name: item.name,
+          address: item.address,
+          value: item.value,
+        })),
       '°C',
       'desc',
     ),
