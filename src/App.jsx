@@ -14,6 +14,7 @@ import {
   fetchSnowData,
   fetchServerTemperatureCurrentRankings,
   fetchServerTemperatureTodayRankings,
+  fetchServerTemperatureTropicalNightRankings,
   fetchServerPrecipitationCurrentRankings,
   fetchServerPrecipitationSinceYesterdayRankings,
   clearWeatherApiCaches,
@@ -98,6 +99,10 @@ function App() {
     maxCurrent: [],
     minToday: [],
     maxToday: [],
+    tropicalNight: [],
+    tropicalNightNote: '',
+    tropicalNightStatus: '',
+    tropicalNightWindow: null,
   });
   const [precipitationApiData, setPrecipitationApiData] = useState({
     observedAt: '',
@@ -267,10 +272,15 @@ function App() {
       setApiError(null);
 
       try {
-        const data =
-          selectedSubMenu === 'today'
-            ? await fetchServerTemperatureTodayRankings(refreshOptions)
-            : await fetchServerTemperatureCurrentRankings(currentRankingOptions);
+        let data;
+        if (selectedSubMenu === 'today') {
+          data = await fetchServerTemperatureTodayRankings(refreshOptions);
+        } else if (selectedSubMenu === 'tropical_night') {
+          data = await fetchServerTemperatureTropicalNightRankings(refreshOptions);
+        } else {
+          data = await fetchServerTemperatureCurrentRankings(currentRankingOptions);
+        }
+
         if (isActive) {
           setTemperatureApiData((previous) => ({
             ...previous,
@@ -453,25 +463,36 @@ function App() {
         return renderEmptyState('최저기온 데이터를 불러오는 중입니다.', renderObservationTimeControl());
       }
 
+      const isTropicalNightMenu = selectedSubMenu === 'tropical_night';
       const tableData =
-        selectedSubMenu === 'today' ? temperatureApiData.minToday : temperatureApiData.minCurrent;
+        selectedSubMenu === 'today'
+          ? temperatureApiData.minToday
+          : isTropicalNightMenu
+            ? temperatureApiData.tropicalNight
+            : temperatureApiData.minCurrent;
       const fullData = filterByRegion(tableData);
       const filteredData = getVisibleRankings(fullData);
+      const subtitle = isTropicalNightMenu
+        ? temperatureApiData.tropicalNightNote || 'ASOS 기준 열대야 기록을 확인합니다.'
+        : temperatureApiData.observedLabel
+          ? `${selectedSubMenu === 'today' ? '금일 최저기온' : '실시간 관측'} 기준입니다. ${temperatureApiData.observedLabel}`
+          : `${selectedSubMenu === 'today' ? '금일 최저기온' : '실시간 관측'} 기준입니다.`;
 
       return filteredData.length > 0 ? (
         <WeatherTable
-          title="최저기온 Top 10"
-          subtitle={
-            temperatureApiData.observedLabel
-              ? `${selectedSubMenu === 'today' ? '금일 최저기온' : '실시간 관측'} 기준입니다. ${temperatureApiData.observedLabel}`
-              : `${selectedSubMenu === 'today' ? '금일 최저기온' : '실시간 관측'} 기준입니다.`
-          }
+          title={isTropicalNightMenu ? '열대야 Top 10' : '최저기온 Top 10'}
+          subtitle={subtitle}
           data={filteredData}
           headerAction={renderObservationTimeControl()}
           {...getRankingExpandProps(fullData)}
         />
       ) : (
-        renderEmptyState(EMPTY_STATE_MESSAGE.default, renderObservationTimeControl())
+        renderEmptyState(
+          isTropicalNightMenu
+            ? '해당 기간 열대야 기준을 충족한 지점이 없습니다.'
+            : EMPTY_STATE_MESSAGE.default,
+          renderObservationTimeControl(),
+        )
       );
     }
 

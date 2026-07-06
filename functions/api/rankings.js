@@ -17,7 +17,15 @@ const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
 const CURRENT_CACHE_MAX_OBSERVED_AGE_MS = 8 * 60 * 1000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
-const RANKING_CACHE_VERSION = 'v3';
+const RANKING_CACHE_VERSION = 'v4';
+const TROPICAL_NIGHT_THRESHOLD_C = 25;
+const TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES = 10;
+const TROPICAL_NIGHT_CURRENT_LAG_MINUTES = 3;
+const TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES = 5;
+const TROPICAL_NIGHT_FETCH_BATCH_SIZE = 12;
+const TROPICAL_NIGHT_MIN_SAMPLE_COVERAGE_RATIO = 0.8;
+const TROPICAL_NIGHT_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+const TROPICAL_NIGHT_CACHE_MAX_STALE_AGE_MS = 60 * 60 * 1000;
 const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
   '128',
   '139',
@@ -45,6 +53,7 @@ const padZero = (value) => value.toString().padStart(2, '0');
 export const RANKING_KINDS = [
   'temperature-current',
   'temperature-today',
+  'temperature-tropical-night',
   'precipitation-current',
   'precipitation-since-yesterday',
 ];
@@ -107,28 +116,38 @@ export const getRankingCacheKey = (kind, observedAt = '') =>
     ? `rankings:${RANKING_CACHE_VERSION}:${kind}:tm:${observedAt}`
     : `rankings:${RANKING_CACHE_VERSION}:${kind}`;
 
-const getFreshCacheMaxAgeMs = (observedAt = '') =>
-  observedAt ? SELECTED_TIME_CACHE_MAX_AGE_MS : PRECOMPUTED_CACHE_MAX_AGE_MS;
+const getFreshCacheMaxAgeMs = (observedAt = '', kind = '') => {
+  if (kind === 'temperature-tropical-night') {
+    return TROPICAL_NIGHT_CACHE_MAX_AGE_MS;
+  }
 
-const getStaleCacheMaxAgeMs = (observedAt = '') =>
-  observedAt ? SELECTED_TIME_CACHE_MAX_STALE_AGE_MS : PRECOMPUTED_CACHE_MAX_STALE_AGE_MS;
+  return observedAt ? SELECTED_TIME_CACHE_MAX_AGE_MS : PRECOMPUTED_CACHE_MAX_AGE_MS;
+};
 
-const isFreshCacheRecord = (record, observedAt = '') => {
+const getStaleCacheMaxAgeMs = (observedAt = '', kind = '') => {
+  if (kind === 'temperature-tropical-night') {
+    return TROPICAL_NIGHT_CACHE_MAX_STALE_AGE_MS;
+  }
+
+  return observedAt ? SELECTED_TIME_CACHE_MAX_STALE_AGE_MS : PRECOMPUTED_CACHE_MAX_STALE_AGE_MS;
+};
+
+const isFreshCacheRecord = (record, observedAt = '', kind = '') => {
   if (!record?.generatedAt) {
     return false;
   }
 
   const generatedAt = Date.parse(record.generatedAt);
-  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getFreshCacheMaxAgeMs(observedAt);
+  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getFreshCacheMaxAgeMs(observedAt, kind);
 };
 
-const isUsableStaleCacheRecord = (record, observedAt = '') => {
+const isUsableStaleCacheRecord = (record, observedAt = '', kind = '') => {
   if (!record?.payload || !record.generatedAt) {
     return false;
   }
 
   const generatedAt = Date.parse(record.generatedAt);
-  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getStaleCacheMaxAgeMs(observedAt);
+  return Number.isFinite(generatedAt) && Date.now() - generatedAt <= getStaleCacheMaxAgeMs(observedAt, kind);
 };
 
 const isLatestCurrentRanking = (kind, observedAt = '') =>
@@ -231,8 +250,21 @@ const formatKmaMinuteTime = (date) => {
 
 const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
 const formatStationInfoTime = (date) => `${formatKmaMinuteTime(date).slice(0, 10)}00`;
+const addMinutes = (date, minutes) => new Date(date.getTime() + minutes * 60 * 1000);
 const subtractMinutes = (date, minutes) => new Date(date.getTime() - minutes * 60 * 1000);
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
+
+const getKstDayStart = (date) => {
+  const dayStart = new Date(date);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  return dayStart;
+};
+
+const setKstTime = (date, hour, minute = 0) => {
+  const result = new Date(date);
+  result.setUTCHours(hour, minute, 0, 0);
+  return result;
+};
 
 const parseKmaMinuteTime = (timestamp) => {
   if (!/^\d{12}$/.test(timestamp ?? '')) {
@@ -260,6 +292,17 @@ const formatDisplayKoreanDateTime = (timestamp) => {
   const minute = timestamp.slice(10, 12);
   return `${year}년 ${month}월 ${day}일 ${hour}시 ${minute}분 현재`;
 };
+
+const formatDisplayKoreanWindowMinute = (date) => {
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
+  const hour = padZero(date.getUTCHours());
+  const minute = padZero(date.getUTCMinutes());
+  return `${month}월 ${day}일 ${hour}시 ${minute}분`;
+};
+
+const buildTropicalNightWindowLabel = (start, end) =>
+  `${formatDisplayKoreanWindowMinute(start)} ~ ${formatDisplayKoreanWindowMinute(end)}`;
 
 const parseNumericValue = (value) => {
   const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ''));
@@ -383,6 +426,18 @@ const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cache
   return requestPromise;
 };
 
+const mapInBatches = async (items, batchSize, mapper) => {
+  const results = [];
+
+  for (let index = 0; index < items.length; index += batchSize) {
+    const batch = items.slice(index, index + batchSize);
+    const batchResults = await Promise.all(batch.map(mapper));
+    results.push(...batchResults);
+  }
+
+  return results;
+};
+
 const parseAwsStationMetadata = (rawText) => {
   const stationMetadata = new Map();
 
@@ -403,6 +458,32 @@ const parseAwsStationMetadata = (rawText) => {
     stationMetadata.set(stationId, {
       name: stationName,
       address: lawAddress || stationName,
+    });
+  });
+
+  return stationMetadata;
+};
+
+const parseSfcStationMetadata = (rawText) => {
+  const stationMetadata = new Map();
+
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const fields = trimmed.split(/\s+/);
+    if (fields.length < 16) {
+      return;
+    }
+
+    const stationId = fields[0];
+    const stationName = fields[10] || fields[9] || stationId;
+    const address = fields.slice(15).join(' ').replace(/^\d+\s+/, '').trim();
+    stationMetadata.set(stationId, {
+      name: stationName,
+      address: address || stationName,
     });
   });
 
@@ -531,6 +612,167 @@ const getAwsStationMetadata = async (context) => {
     86400,
   );
   return parseAwsStationMetadata(rawText);
+};
+
+const getSfcStationMetadata = async (context) => {
+  const rawText = await fetchKmaText(
+    context,
+    'api/typ01/url/stn_inf.php',
+    { inf: 'SFC', stn: '', tm: formatStationInfoTime(getKstNow()), help: 1 },
+    12000,
+    86400,
+  );
+  return parseSfcStationMetadata(rawText);
+};
+
+const buildTropicalNightWindow = (now = getKstNow()) => {
+  const todayStart = getKstDayStart(now);
+  const officialEnd = setKstTime(todayStart, 9, 0);
+  const currentMinuteOfDay = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const confirmationMinute = 9 * 60 + TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES;
+  const isProvisional = currentMinuteOfDay < confirmationMinute;
+  const start = setKstTime(subtractDays(todayStart, 1), 18, 1);
+  const latestUsableEnd = subtractMinutes(now, TROPICAL_NIGHT_CURRENT_LAG_MINUTES);
+  const provisionalEnd =
+    latestUsableEnd.getTime() < officialEnd.getTime() ? latestUsableEnd : officialEnd;
+  const end = isProvisional ? provisionalEnd : officialEnd;
+
+  return {
+    start,
+    end: end.getTime() >= start.getTime() ? end : start,
+    status: isProvisional ? 'provisional' : 'confirmed',
+  };
+};
+
+const ceilToSampleBoundary = (date) => {
+  const dayStart = getKstDayStart(date);
+  const minuteOfDay = date.getUTCHours() * 60 + date.getUTCMinutes();
+  const roundedMinute =
+    Math.ceil(minuteOfDay / TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES) *
+    TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES;
+  return addMinutes(dayStart, roundedMinute);
+};
+
+const buildTropicalNightSampleTimestamps = (start, end) => {
+  const sampleMap = new Map();
+  const addSample = (date) => {
+    if (date.getTime() >= start.getTime() && date.getTime() <= end.getTime()) {
+      sampleMap.set(formatKmaMinuteTime(date), date);
+    }
+  };
+
+  addSample(start);
+
+  for (
+    let cursor = ceilToSampleBoundary(start);
+    cursor.getTime() <= end.getTime();
+    cursor = addMinutes(cursor, TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES)
+  ) {
+    addSample(cursor);
+  }
+
+  addSample(end);
+
+  return [...sampleMap.keys()].sort();
+};
+
+const fetchSfcMinuteTemperaturesAtTime = async (context, stationMetadata, observedAt) => {
+  const rawText = await fetchKmaText(
+    context,
+    'api/typ01/cgi-bin/url/nph-aws2_min',
+    { tm2: observedAt, stn: 0, disp: 0, help: 0 },
+    AWS_MINUTE_REQUEST_TIMEOUT_MS,
+    60 * 60,
+  );
+
+  return parseAwsMinuteObservations(rawText, stationMetadata).filter((item) =>
+    stationMetadata.has(item.stationId) && isFiniteObservation(item.temperature),
+  );
+};
+
+const buildTropicalNightNote = ({ start, end, status }) => {
+  const windowLabel = buildTropicalNightWindowLabel(start, end);
+
+  if (status === 'provisional') {
+    return `ASOS 기준 열대야 진행 상황입니다. ${windowLabel}까지 25°C 이상 유지 중인 지점이며, 최종 기록은 09시 이후 확인하세요.`;
+  }
+
+  return `ASOS 기준 확정 열대야 기록입니다. ${windowLabel} 최저기온이 25°C 이상인 지점입니다.`;
+};
+
+const buildTemperatureTropicalNight = async (context) => {
+  const stationMetadata = await getSfcStationMetadata(context);
+  const windowInfo = buildTropicalNightWindow();
+  const sampleTimestamps = buildTropicalNightSampleTimestamps(windowInfo.start, windowInfo.end);
+  const samples = await mapInBatches(
+    sampleTimestamps,
+    TROPICAL_NIGHT_FETCH_BATCH_SIZE,
+    async (observedAt) => {
+      try {
+        return {
+          observedAt,
+          rows: await fetchSfcMinuteTemperaturesAtTime(context, stationMetadata, observedAt),
+        };
+      } catch {
+        return {
+          observedAt,
+          rows: [],
+        };
+      }
+    },
+  );
+  const validSamples = samples.filter((sample) => sample.rows.length > 0);
+
+  if (validSamples.length === 0) {
+    throw new Error('No valid ASOS minute temperature observations were found.');
+  }
+
+  const minimaByStation = new Map();
+
+  validSamples.forEach((sample) => {
+    sample.rows.forEach((row) => {
+      const previous = minimaByStation.get(row.stationId);
+      const sampleCount = (previous?.sampleCount ?? 0) + 1;
+
+      if (!previous || row.temperature < previous.value) {
+        minimaByStation.set(row.stationId, {
+          stationId: row.stationId,
+          name: row.name,
+          address: row.address,
+          value: row.temperature,
+          sampleCount,
+        });
+        return;
+      }
+
+      minimaByStation.set(row.stationId, {
+        ...previous,
+        sampleCount,
+      });
+    });
+  });
+
+  const minimumSampleCount = Math.max(
+    1,
+    Math.floor(validSamples.length * TROPICAL_NIGHT_MIN_SAMPLE_COVERAGE_RATIO),
+  );
+  const candidates = [...minimaByStation.values()].filter(
+    (item) => item.value >= TROPICAL_NIGHT_THRESHOLD_C && item.sampleCount >= minimumSampleCount,
+  );
+  const note = buildTropicalNightNote(windowInfo);
+
+  return {
+    observedAt: formatKmaMinuteTime(windowInfo.end),
+    observedLabel: formatDisplayKoreanDateTime(formatKmaMinuteTime(windowInfo.end)),
+    tropicalNight: buildRankingRows(candidates, '°C', 'desc'),
+    tropicalNightNote: note,
+    tropicalNightStatus: windowInfo.status,
+    tropicalNightWindow: {
+      start: formatKmaMinuteTime(windowInfo.start),
+      end: formatKmaMinuteTime(windowInfo.end),
+    },
+    tropicalNightSampleCount: validSamples.length,
+  };
 };
 
 const buildTemperatureCurrent = async (context, stationMetadata, requestedObservedAt = '') => {
@@ -733,6 +975,10 @@ export const buildRankingPayload = async (context, kind, options = {}) => {
     return buildTemperatureToday(context, getAwsStationMetadata(context));
   }
 
+  if (kind === 'temperature-tropical-night') {
+    return buildTemperatureTropicalNight(context);
+  }
+
   if (kind === 'precipitation-current') {
     const stationMetadata = await getAwsStationMetadata(context);
     return buildPrecipitationCurrent(context, stationMetadata, observedAt);
@@ -783,7 +1029,7 @@ export async function onRequestGet(context) {
 
     if (
       !forceRefresh &&
-      isFreshCacheRecord(cachedRecord, requestedObservedAt) &&
+      isFreshCacheRecord(cachedRecord, requestedObservedAt, kind) &&
       isCacheFastReturnAllowed(cachedRecord, kind, requestedObservedAt)
     ) {
       return makeJsonResponse(cachedRecord.payload, {
@@ -794,7 +1040,7 @@ export async function onRequestGet(context) {
 
     if (
       !forceRefresh &&
-      isUsableStaleCacheRecord(cachedRecord, requestedObservedAt) &&
+      isUsableStaleCacheRecord(cachedRecord, requestedObservedAt, kind) &&
       isCacheFastReturnAllowed(cachedRecord, kind, requestedObservedAt)
     ) {
       schedulePrecomputedRankingRefresh(context, kind, requestedObservedAt);
@@ -812,7 +1058,7 @@ export async function onRequestGet(context) {
       'X-Weather-Data-Source': forceRefresh ? 'manual-refresh' : 'live',
     });
   } catch (error) {
-    if (isUsableStaleCacheRecord(cachedRecord, requestedObservedAt)) {
+    if (isUsableStaleCacheRecord(cachedRecord, requestedObservedAt, kind)) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',

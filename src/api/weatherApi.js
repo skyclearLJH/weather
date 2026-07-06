@@ -1244,6 +1244,9 @@ export const fetchServerTemperatureCurrentRankings = async (options = {}) =>
 export const fetchServerTemperatureTodayRankings = async (options = {}) =>
   fetchRankingsJson('temperature-today', options);
 
+export const fetchServerTemperatureTropicalNightRankings = async (options = {}) =>
+  fetchRankingsJson('temperature-tropical-night', options);
+
 export const fetchServerPrecipitationCurrentRankings = async (options = {}) =>
   fetchRankingsJson('precipitation-current', options);
 

@@ -43,6 +43,7 @@ export const SUB_MENUS = {
   minTemp: [
     { id: 'current', label: '현재' },
     { id: 'today', label: '오늘' },
+    { id: 'tropical_night', label: '열대야' },
   ],
   maxTemp: [
     { id: 'current', label: '현재' },
