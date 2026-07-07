@@ -17,15 +17,11 @@ const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
 const CURRENT_CACHE_MAX_OBSERVED_AGE_MS = 8 * 60 * 1000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
-const RANKING_CACHE_VERSION = 'v4';
+const RANKING_CACHE_VERSION = 'v5';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
-const TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES = 10;
-const TROPICAL_NIGHT_CURRENT_LAG_MINUTES = 3;
 const TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES = 5;
-const TROPICAL_NIGHT_FETCH_BATCH_SIZE = 12;
-const TROPICAL_NIGHT_MIN_SAMPLE_COVERAGE_RATIO = 0.8;
-const TROPICAL_NIGHT_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
-const TROPICAL_NIGHT_CACHE_MAX_STALE_AGE_MS = 60 * 60 * 1000;
+const TROPICAL_NIGHT_CACHE_MAX_AGE_MS = 60 * 1000;
+const TROPICAL_NIGHT_CACHE_MAX_STALE_AGE_MS = 5 * 60 * 1000;
 const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
   '128',
   '139',
@@ -250,7 +246,6 @@ const formatKmaMinuteTime = (date) => {
 
 const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
 const formatStationInfoTime = (date) => `${formatKmaMinuteTime(date).slice(0, 10)}00`;
-const addMinutes = (date, minutes) => new Date(date.getTime() + minutes * 60 * 1000);
 const subtractMinutes = (date, minutes) => new Date(date.getTime() - minutes * 60 * 1000);
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -424,18 +419,6 @@ const fetchKmaText = async (context, path, params = {}, timeoutMs = 12000, cache
   }
 
   return requestPromise;
-};
-
-const mapInBatches = async (items, batchSize, mapper) => {
-  const results = [];
-
-  for (let index = 0; index < items.length; index += batchSize) {
-    const batch = items.slice(index, index + batchSize);
-    const batchResults = await Promise.all(batch.map(mapper));
-    results.push(...batchResults);
-  }
-
-  return results;
 };
 
 const parseAwsStationMetadata = (rawText) => {
@@ -632,10 +615,7 @@ const buildTropicalNightWindow = (now = getKstNow()) => {
   const confirmationMinute = 9 * 60 + TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES;
   const isProvisional = currentMinuteOfDay < confirmationMinute;
   const start = setKstTime(subtractDays(todayStart, 1), 18, 1);
-  const latestUsableEnd = subtractMinutes(now, TROPICAL_NIGHT_CURRENT_LAG_MINUTES);
-  const provisionalEnd =
-    latestUsableEnd.getTime() < officialEnd.getTime() ? latestUsableEnd : officialEnd;
-  const end = isProvisional ? provisionalEnd : officialEnd;
+  const end = isProvisional ? now : officialEnd;
 
   return {
     start,
@@ -644,120 +624,37 @@ const buildTropicalNightWindow = (now = getKstNow()) => {
   };
 };
 
-const ceilToSampleBoundary = (date) => {
-  const dayStart = getKstDayStart(date);
-  const minuteOfDay = date.getUTCHours() * 60 + date.getUTCMinutes();
-  const roundedMinute =
-    Math.ceil(minuteOfDay / TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES) *
-    TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES;
-  return addMinutes(dayStart, roundedMinute);
-};
-
-const buildTropicalNightSampleTimestamps = (start, end) => {
-  const sampleMap = new Map();
-  const addSample = (date) => {
-    if (date.getTime() >= start.getTime() && date.getTime() <= end.getTime()) {
-      sampleMap.set(formatKmaMinuteTime(date), date);
-    }
-  };
-
-  addSample(start);
-
-  for (
-    let cursor = ceilToSampleBoundary(start);
-    cursor.getTime() <= end.getTime();
-    cursor = addMinutes(cursor, TROPICAL_NIGHT_SAMPLE_INTERVAL_MINUTES)
-  ) {
-    addSample(cursor);
-  }
-
-  addSample(end);
-
-  return [...sampleMap.keys()].sort();
-};
-
-const fetchSfcMinuteTemperaturesAtTime = async (context, stationMetadata, observedAt) => {
-  const rawText = await fetchKmaText(
-    context,
-    'api/typ01/cgi-bin/url/nph-aws2_min',
-    { tm2: observedAt, stn: 0, disp: 0, help: 0 },
-    AWS_MINUTE_REQUEST_TIMEOUT_MS,
-    60 * 60,
-  );
-
-  return parseAwsMinuteObservations(rawText, stationMetadata).filter((item) =>
-    stationMetadata.has(item.stationId) && isFiniteObservation(item.temperature),
-  );
-};
-
 const buildTropicalNightNote = ({ start, end, status }) => {
   const windowLabel = buildTropicalNightWindowLabel(start, end);
 
   if (status === 'provisional') {
-    return `ASOS 기준 열대야 진행 상황입니다. ${windowLabel}까지 25°C 이상 유지 중인 지점이며, 최종 기록은 09시 이후 확인하세요.`;
+    return `ASOS 일 최저기온 기준 열대야 진행 상황입니다. ${windowLabel}까지 25°C 이상 유지 중인 지점이며, 최종 기록은 09시 이후 확인하세요.`;
   }
 
-  return `ASOS 기준 확정 열대야 기록입니다. ${windowLabel} 최저기온이 25°C 이상인 지점입니다.`;
+  return `ASOS 일 최저기온 기준 확정 열대야 기록입니다. ${windowLabel} 최저기온이 25°C 이상인 지점입니다.`;
 };
 
 const buildTemperatureTropicalNight = async (context) => {
   const stationMetadata = await getSfcStationMetadata(context);
   const windowInfo = buildTropicalNightWindow();
-  const sampleTimestamps = buildTropicalNightSampleTimestamps(windowInfo.start, windowInfo.end);
-  const samples = await mapInBatches(
-    sampleTimestamps,
-    TROPICAL_NIGHT_FETCH_BATCH_SIZE,
-    async (observedAt) => {
-      try {
-        return {
-          observedAt,
-          rows: await fetchSfcMinuteTemperaturesAtTime(context, stationMetadata, observedAt),
-        };
-      } catch {
-        return {
-          observedAt,
-          rows: [],
-        };
-      }
-    },
+  const observedDay = formatKmaDay(windowInfo.end);
+  const dailyMinRaw = await fetchKmaText(
+    context,
+    'api/typ01/url/sfc_aws_day.php',
+    { tm2: observedDay, obs: 'ta_min', stn: 0, disp: 0, help: 0 },
+    SLOW_DAILY_TEMPERATURE_TIMEOUT_MS,
+    windowInfo.status === 'provisional' ? 60 : 10 * 60,
   );
-  const validSamples = samples.filter((sample) => sample.rows.length > 0);
+  const dailyMinRows = parseAwsDailyObservations(dailyMinRaw, stationMetadata).filter((item) =>
+    stationMetadata.has(item.stationId),
+  );
 
-  if (validSamples.length === 0) {
-    throw new Error('No valid ASOS minute temperature observations were found.');
+  if (dailyMinRows.length === 0) {
+    throw new Error('No valid ASOS daily minimum temperature observations were found.');
   }
 
-  const minimaByStation = new Map();
-
-  validSamples.forEach((sample) => {
-    sample.rows.forEach((row) => {
-      const previous = minimaByStation.get(row.stationId);
-      const sampleCount = (previous?.sampleCount ?? 0) + 1;
-
-      if (!previous || row.temperature < previous.value) {
-        minimaByStation.set(row.stationId, {
-          stationId: row.stationId,
-          name: row.name,
-          address: row.address,
-          value: row.temperature,
-          sampleCount,
-        });
-        return;
-      }
-
-      minimaByStation.set(row.stationId, {
-        ...previous,
-        sampleCount,
-      });
-    });
-  });
-
-  const minimumSampleCount = Math.max(
-    1,
-    Math.floor(validSamples.length * TROPICAL_NIGHT_MIN_SAMPLE_COVERAGE_RATIO),
-  );
-  const candidates = [...minimaByStation.values()].filter(
-    (item) => item.value >= TROPICAL_NIGHT_THRESHOLD_C && item.sampleCount >= minimumSampleCount,
+  const candidates = dailyMinRows.filter(
+    (item) => isFiniteObservation(item.value) && item.value >= TROPICAL_NIGHT_THRESHOLD_C,
   );
   const note = buildTropicalNightNote(windowInfo);
 
@@ -771,7 +668,8 @@ const buildTemperatureTropicalNight = async (context) => {
       start: formatKmaMinuteTime(windowInfo.start),
       end: formatKmaMinuteTime(windowInfo.end),
     },
-    tropicalNightSampleCount: validSamples.length,
+    tropicalNightSource: 'sfc_aws_day:ta_min',
+    tropicalNightStationCount: dailyMinRows.length,
   };
 };
 

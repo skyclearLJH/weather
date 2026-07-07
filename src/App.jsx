@@ -36,6 +36,7 @@ const LATEST_OBSERVATION_VALUE = 'latest';
 const SNOW_TEST_TIME = '202603021800';
 const RANKING_COLLAPSED_LIMIT = 10;
 const RANKING_EXPANDED_LIMIT = 30;
+const TROPICAL_NIGHT_AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 const padZero = (value) => value.toString().padStart(2, '0');
 
@@ -151,6 +152,13 @@ function App() {
     () => buildObservationTimeOptions(observationTimeBase, observationTimeMode),
     [observationTimeBase, observationTimeMode],
   );
+  const tropicalNightAutoRefreshBucket = useMemo(() => {
+    if (selectedTab !== 'minTemp' || selectedSubMenu !== 'tropical_night') {
+      return 0;
+    }
+
+    return Math.floor(observationTimeBase.getTime() / TROPICAL_NIGHT_AUTO_REFRESH_INTERVAL_MS);
+  }, [observationTimeBase, selectedSubMenu, selectedTab]);
 
   const isObservationTimeControlVisible =
     selectedTab === 'precipitation' ||
@@ -304,7 +312,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [refreshTrigger, selectedObservationTime, selectedSubMenu, selectedTab]);
+  }, [refreshTrigger, selectedObservationTime, selectedSubMenu, selectedTab, tropicalNightAutoRefreshBucket]);
 
   useEffect(() => {
     if (selectedTab !== 'precipitation') {
@@ -488,9 +496,10 @@ function App() {
         />
       ) : (
         renderEmptyState(
-          isTropicalNightMenu
-            ? '해당 기간 열대야 기준을 충족한 지점이 없습니다.'
-            : EMPTY_STATE_MESSAGE.default,
+          apiError ||
+            (isTropicalNightMenu
+              ? '해당 기간 열대야 기준을 충족한 지점이 없습니다.'
+              : EMPTY_STATE_MESSAGE.default),
           renderObservationTimeControl(),
         )
       );

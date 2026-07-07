@@ -1226,8 +1226,9 @@ const fetchRankingsJson = async (kind, options = {}) => {
   const { refreshToken = '', observedAt = '' } = options;
   const params = observedAt ? { kind, tm: observedAt } : { kind };
   const cacheKey = observedAt ? `server-rankings-${kind}-${observedAt}` : `server-rankings-${kind}`;
+  const ttlMs = kind === 'temperature-tropical-night' ? 30 * 1000 : TTL.awsMinute;
 
-  return withDataCache(cacheKey, TTL.awsMinute, async () => {
+  return withDataCache(cacheKey, ttlMs, async () => {
     const response = await fetchWithRetry(
       buildAppUrl('/api/rankings', withRefreshParam(params, refreshToken)),
       refreshToken ? { cache: 'no-store' } : {},
