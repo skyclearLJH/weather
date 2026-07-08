@@ -1364,9 +1364,16 @@ export const fetchWarningImageUrls = async (options = {}) => {
 };
 
 const fetchRankingsJson = async (kind, options = {}) => {
-  const { refreshToken = '', observedAt = '' } = options;
-  const params = observedAt ? { kind, tm: observedAt } : { kind };
-  const cacheKey = observedAt ? `server-rankings-${kind}-${observedAt}` : `server-rankings-${kind}`;
+  const { refreshToken = '', observedAt = '', period = '' } = options;
+  const params = { kind };
+  if (observedAt) {
+    params.tm = observedAt;
+  }
+  if (period) {
+    params.period = period;
+  }
+  const cacheKeyParts = ['server-rankings', kind, observedAt, period].filter(Boolean);
+  const cacheKey = cacheKeyParts.join('-');
   const ttlMs = kind === 'temperature-tropical-night' ? 30 * 1000 : TTL.awsMinute;
 
   return withDataCache(cacheKey, ttlMs, async () => {
@@ -1391,6 +1398,9 @@ export const fetchServerTemperatureTropicalNightRankings = async (options = {}) 
 
 export const fetchServerPrecipitationCurrentRankings = async (options = {}) =>
   fetchRankingsJson('precipitation-current', options);
+
+export const fetchServerPrecipitationMaxOneHourRankings = async (options = {}) =>
+  fetchRankingsJson('precipitation-max-one-hour', options);
 
 export const fetchServerPrecipitationSinceYesterdayRankings = async (options = {}) =>
   fetchRankingsJson('precipitation-since-yesterday', options);

@@ -36,7 +36,8 @@ export const SUB_MENUS = {
     { id: 'preliminary', label: '예비특보' },
   ],
   precipitation: [
-    { id: '1h', label: '1시간' },
+    { id: '1h', label: '60분 강수량' },
+    { id: 'max_60m', label: '최대 60분 강수량' },
     { id: 'today', label: '오늘 누적' },
     { id: 'since_yesterday', label: '어제부터 누적' },
   ],

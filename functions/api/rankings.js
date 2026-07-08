@@ -17,7 +17,10 @@ const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
 const CURRENT_CACHE_MAX_OBSERVED_AGE_MS = 8 * 60 * 1000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
-const RANKING_CACHE_VERSION = 'v5';
+const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_AGE_MS = 60 * 1000;
+const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+const PRECIPITATION_MAX_ONE_HOUR_AGGREGATE_TTL_SECONDS = 3 * 24 * 60 * 60;
+const RANKING_CACHE_VERSION = 'v6';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
 const TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES = 5;
 const TROPICAL_NIGHT_CACHE_MAX_AGE_MS = 60 * 1000;
@@ -44,6 +47,7 @@ const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
 const PRECOMPUTED_REFRESH_IN_FLIGHT = new Map();
 const KMA_TEXT_CACHE = new Map();
 const KMA_TEXT_IN_FLIGHT = new Map();
+const PRECIPITATION_MAX_ONE_HOUR_MEMORY_CACHE = new Map();
 const padZero = (value) => value.toString().padStart(2, '0');
 
 export const RANKING_KINDS = [
@@ -51,6 +55,7 @@ export const RANKING_KINDS = [
   'temperature-today',
   'temperature-tropical-night',
   'precipitation-current',
+  'precipitation-max-one-hour',
   'precipitation-since-yesterday',
 ];
 
@@ -91,12 +96,13 @@ const createCacheApiStore = () => {
       const value = await response.text();
       return type === 'json' ? JSON.parse(value) : value;
     },
-    async put(key, value) {
+    async put(key, value, options = {}) {
+      const maxAgeSeconds = options.expirationTtl ?? PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS;
       await caches.default.put(
         buildCacheApiRequest(key),
         new Response(value, {
           headers: {
-            'Cache-Control': `public, max-age=${PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS}`,
+            'Cache-Control': `public, max-age=${maxAgeSeconds}`,
             'Content-Type': 'application/json; charset=utf-8',
           },
         }),
@@ -117,12 +123,20 @@ const getFreshCacheMaxAgeMs = (observedAt = '', kind = '') => {
     return TROPICAL_NIGHT_CACHE_MAX_AGE_MS;
   }
 
+  if (kind === 'precipitation-max-one-hour') {
+    return PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_AGE_MS;
+  }
+
   return observedAt ? SELECTED_TIME_CACHE_MAX_AGE_MS : PRECOMPUTED_CACHE_MAX_AGE_MS;
 };
 
 const getStaleCacheMaxAgeMs = (observedAt = '', kind = '') => {
   if (kind === 'temperature-tropical-night') {
     return TROPICAL_NIGHT_CACHE_MAX_STALE_AGE_MS;
+  }
+
+  if (kind === 'precipitation-max-one-hour') {
+    return PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_STALE_AGE_MS;
   }
 
   return observedAt ? SELECTED_TIME_CACHE_MAX_STALE_AGE_MS : PRECOMPUTED_CACHE_MAX_STALE_AGE_MS;
@@ -193,13 +207,16 @@ export const writePrecomputedRanking = async (context, kind, payload, observedAt
   );
 };
 
-const refreshPrecomputedRanking = async (context, kind, observedAt = '') => {
-  const payload = await buildRankingPayload(context, kind, { observedAt });
+const refreshPrecomputedRanking = async (context, kind, observedAt = '', options = {}) => {
+  const payload = await buildRankingPayload(context, kind, {
+    ...options,
+    observedAt: options.observedAt ?? (/^\d{12}$/.test(observedAt) ? observedAt : ''),
+  });
   await writePrecomputedRanking(context, kind, payload, observedAt);
   return payload;
 };
 
-const schedulePrecomputedRankingRefresh = (context, kind, observedAt = '') => {
+const schedulePrecomputedRankingRefresh = (context, kind, observedAt = '', options = {}) => {
   if (isPrecomputedCacheDisabled(context) || !getWeatherCache(context)) {
     return null;
   }
@@ -209,7 +226,7 @@ const schedulePrecomputedRankingRefresh = (context, kind, observedAt = '') => {
     return PRECOMPUTED_REFRESH_IN_FLIGHT.get(cacheKey);
   }
 
-  const refreshPromise = refreshPrecomputedRanking(context, kind, observedAt)
+  const refreshPromise = refreshPrecomputedRanking(context, kind, observedAt, options)
     .finally(() => {
       PRECOMPUTED_REFRESH_IN_FLIGHT.delete(cacheKey);
     });
@@ -317,6 +334,96 @@ const buildRankingRows = (items, unit, sortDirection = 'desc') =>
       record: `${item.value.toFixed(1)}${unit}`,
       address: item.address,
     }));
+
+const getPrecipitationMaxOneHourAggregateKey = (day) =>
+  `precipitation-max-one-hour:${RANKING_CACHE_VERSION}:${day}`;
+
+const readPrecipitationMaxOneHourAggregate = async (context, day) => {
+  const key = getPrecipitationMaxOneHourAggregateKey(day);
+  const weatherCache = getWeatherCache(context);
+
+  try {
+    if (weatherCache && !isPrecomputedCacheDisabled(context)) {
+      return weatherCache.get(key, 'json');
+    }
+  } catch {
+    return null;
+  }
+
+  const cached = PRECIPITATION_MAX_ONE_HOUR_MEMORY_CACHE.get(key);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    PRECIPITATION_MAX_ONE_HOUR_MEMORY_CACHE.delete(key);
+    return null;
+  }
+
+  return cached.value;
+};
+
+const writePrecipitationMaxOneHourAggregate = async (context, day, aggregate) => {
+  const key = getPrecipitationMaxOneHourAggregateKey(day);
+  const weatherCache = getWeatherCache(context);
+
+  if (weatherCache && !isPrecomputedCacheDisabled(context)) {
+    await weatherCache.put(key, JSON.stringify(aggregate), {
+      expirationTtl: PRECIPITATION_MAX_ONE_HOUR_AGGREGATE_TTL_SECONDS,
+    });
+    return;
+  }
+
+  PRECIPITATION_MAX_ONE_HOUR_MEMORY_CACHE.set(key, {
+    value: aggregate,
+    expiresAt: Date.now() + PRECIPITATION_MAX_ONE_HOUR_AGGREGATE_TTL_SECONDS * 1000,
+  });
+};
+
+const updatePrecipitationMaxOneHourAggregate = async (context, observedAt, rows = []) => {
+  if (!observedAt || rows.length === 0) {
+    return null;
+  }
+
+  const day = observedAt.slice(0, 8);
+  const previous = await readPrecipitationMaxOneHourAggregate(context, day);
+  const stations = { ...(previous?.stations ?? {}) };
+  let hasChanged = !previous || observedAt > (previous?.observedAt ?? '');
+
+  rows.forEach((item) => {
+    const stationId = String(item.stationId ?? '');
+    const value = item.precipitationOneHour;
+    if (!stationId || !Number.isFinite(value) || value <= 0) {
+      return;
+    }
+
+    const existing = stations[stationId];
+    if (!existing || value > existing.value || (value === existing.value && observedAt > existing.observedAt)) {
+      stations[stationId] = {
+        stationId,
+        name: item.name,
+        address: item.address,
+        value,
+        observedAt,
+      };
+      hasChanged = true;
+    }
+  });
+
+  const aggregate = {
+    day,
+    observedAt:
+      previous?.observedAt && previous.observedAt > observedAt ? previous.observedAt : observedAt,
+    updatedAt: new Date().toISOString(),
+    stations,
+  };
+
+  if (hasChanged) {
+    await writePrecipitationMaxOneHourAggregate(context, day, aggregate);
+  }
+
+  return aggregate;
+};
 
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 12000) => {
   const controller = new AbortController();
@@ -775,6 +882,13 @@ const buildPrecipitationCurrent = async (context, stationMetadata, requestedObse
         hasValidAwsPrecipitationObservation,
       )
     : await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
+
+  try {
+    await updatePrecipitationMaxOneHourAggregate(context, observedAt, rows);
+  } catch {
+    // The current precipitation ranking should still render even if the max-60m cache update fails.
+  }
+
   return {
     observedAt,
     observedLabel: formatDisplayKoreanDateTime(observedAt),
@@ -796,6 +910,50 @@ const buildPrecipitationCurrent = async (context, stationMetadata, requestedObse
       'mm',
       'desc',
     ),
+  };
+};
+
+const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = 'today') => {
+  const now = getKstNow();
+  const normalizedPeriod = period === 'yesterday' ? 'yesterday' : 'today';
+  const targetDate = normalizedPeriod === 'yesterday' ? subtractDays(now, 1) : now;
+  const targetDay = formatKmaDay(targetDate);
+  let aggregate = await readPrecipitationMaxOneHourAggregate(context, targetDay);
+
+  if (normalizedPeriod === 'today') {
+    try {
+      const latestCurrent = await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
+      aggregate = await updatePrecipitationMaxOneHourAggregate(
+        context,
+        latestCurrent.observedAt,
+        latestCurrent.rows,
+      );
+    } catch (error) {
+      if (!aggregate) {
+        throw error;
+      }
+    }
+  }
+
+  const rows = Object.values(aggregate?.stations ?? {})
+    .filter((item) => Number.isFinite(item.value) && item.value > 0)
+    .map((item) => ({
+      name: item.name,
+      address: item.address,
+      value: item.value,
+    }));
+
+  const observedAt = aggregate?.observedAt || formatKmaMinuteTime(targetDate);
+
+  return {
+    observedAt,
+    observedLabel: aggregate?.observedAt
+      ? formatDisplayKoreanDateTime(observedAt)
+      : `${normalizedPeriod === 'yesterday' ? '어제' : '오늘'} 최대 60분 강수량 집계가 아직 없습니다.`,
+    maxOneHour: buildRankingRows(rows, 'mm', 'desc'),
+    maxOneHourPeriod: normalizedPeriod,
+    maxOneHourDay: targetDay,
+    maxOneHourSource: 'rolling-cache',
   };
 };
 
@@ -862,7 +1020,7 @@ const buildPrecipitationSinceYesterday = async (context, stationMetadata, reques
 };
 
 export const buildRankingPayload = async (context, kind, options = {}) => {
-  const { observedAt = '' } = options;
+  const { observedAt = '', period = 'today' } = options;
 
   if (kind === 'temperature-current') {
     const stationMetadata = await getAwsStationMetadata(context);
@@ -880,6 +1038,11 @@ export const buildRankingPayload = async (context, kind, options = {}) => {
   if (kind === 'precipitation-current') {
     const stationMetadata = await getAwsStationMetadata(context);
     return buildPrecipitationCurrent(context, stationMetadata, observedAt);
+  }
+
+  if (kind === 'precipitation-max-one-hour') {
+    const stationMetadata = await getAwsStationMetadata(context);
+    return buildPrecipitationMaxOneHour(context, stationMetadata, period);
   }
 
   if (kind === 'precipitation-since-yesterday') {
@@ -901,6 +1064,9 @@ export async function onRequestGet(context) {
   const requestUrl = new URL(context.request.url);
   const kind = requestUrl.searchParams.get('kind');
   const requestedObservedAt = requestUrl.searchParams.get('tm') || '';
+  const requestedPeriod = requestUrl.searchParams.get('period') || 'today';
+  const cacheVariant =
+    kind === 'precipitation-max-one-hour' ? `period:${requestedPeriod}` : requestedObservedAt;
   const forceRefresh = requestUrl.searchParams.has('_refresh');
   let cachedRecord = null;
 
@@ -919,16 +1085,27 @@ export async function onRequestGet(context) {
       });
     }
 
+    if (
+      kind === 'precipitation-max-one-hour' &&
+      requestedPeriod !== 'today' &&
+      requestedPeriod !== 'yesterday'
+    ) {
+      return new Response(JSON.stringify({ error: 'Invalid precipitation period.' }), {
+        status: 400,
+        headers: corsHeaders,
+      });
+    }
+
     try {
-      cachedRecord = await readPrecomputedRankingRecord(context, kind, requestedObservedAt);
+      cachedRecord = await readPrecomputedRankingRecord(context, kind, cacheVariant);
     } catch {
       cachedRecord = null;
     }
 
     if (
       !forceRefresh &&
-      isFreshCacheRecord(cachedRecord, requestedObservedAt, kind) &&
-      isCacheFastReturnAllowed(cachedRecord, kind, requestedObservedAt)
+      isFreshCacheRecord(cachedRecord, cacheVariant, kind) &&
+      isCacheFastReturnAllowed(cachedRecord, kind, cacheVariant)
     ) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'kv',
@@ -938,10 +1115,13 @@ export async function onRequestGet(context) {
 
     if (
       !forceRefresh &&
-      isUsableStaleCacheRecord(cachedRecord, requestedObservedAt, kind) &&
-      isCacheFastReturnAllowed(cachedRecord, kind, requestedObservedAt)
+      isUsableStaleCacheRecord(cachedRecord, cacheVariant, kind) &&
+      isCacheFastReturnAllowed(cachedRecord, kind, cacheVariant)
     ) {
-      schedulePrecomputedRankingRefresh(context, kind, requestedObservedAt);
+      schedulePrecomputedRankingRefresh(context, kind, cacheVariant, {
+        observedAt: requestedObservedAt,
+        period: requestedPeriod,
+      });
 
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
@@ -950,13 +1130,16 @@ export async function onRequestGet(context) {
       });
     }
 
-    const payload = await refreshPrecomputedRanking(context, kind, requestedObservedAt);
+    const payload = await refreshPrecomputedRanking(context, kind, cacheVariant, {
+      observedAt: requestedObservedAt,
+      period: requestedPeriod,
+    });
 
     return makeJsonResponse(payload, {
       'X-Weather-Data-Source': forceRefresh ? 'manual-refresh' : 'live',
     });
   } catch (error) {
-    if (isUsableStaleCacheRecord(cachedRecord, requestedObservedAt, kind)) {
+    if (isUsableStaleCacheRecord(cachedRecord, cacheVariant, kind)) {
       return makeJsonResponse(cachedRecord.payload, {
         'X-Weather-Data-Source': 'stale-kv',
         'X-Weather-Cache-Generated-At': cachedRecord.generatedAt ?? '',
