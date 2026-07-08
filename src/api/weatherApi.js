@@ -1232,15 +1232,14 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
     records.forEach((record) => {
       const isMarine =
         /(해상|바다|앞바다|먼바다)/.test(record.regUpKo) || /(해상|바다|앞바다|먼바다)/.test(record.regKo);
-      const recordSearchText = `${record.regUpKo ?? ''} ${record.regKo ?? ''}`;
+      const broadRegion = getBroadRegion(record.regUpKo, record.regKo || record.regUpKo);
+      const recordSearchText = `${record.regUpKo ?? ''} ${record.regKo ?? ''} ${broadRegion}`.trim();
       const isExcluded = targetRegion?.excludeKeywords?.some((keyword) => recordSearchText.includes(keyword));
       const regionMatches =
         regionId === 'all' ||
         isMarine ||
         (!isExcluded &&
-          targetRegion?.keywords?.some(
-            (keyword) => record.regUpKo.includes(keyword) || record.regKo.includes(keyword),
-          ));
+          targetRegion?.keywords?.some((keyword) => recordSearchText.includes(keyword)));
 
       if (!regionMatches) {
         return;
@@ -1256,7 +1255,6 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
       const typeName = isPreliminary
         ? `${record.wrn} ${levelLabel} 특보`
         : `${record.wrn} ${levelLabel}`;
-      const broadRegion = getBroadRegion(record.regUpKo, record.regKo || record.regUpKo);
       const rawDetailRegion = isMarine
         ? formatDetailOcean(record.regKo || record.regUpKo)
         : formatDetailLand(record.regKo || record.regUpKo);
