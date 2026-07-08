@@ -16,7 +16,7 @@ export const REGIONS = [
   {
     id: 'gwangju',
     label: '광주총국',
-    keywords: ['광주', '전라남도', '전남', '흑산도', '홍도'],
+    keywords: ['전남광주', '광주', '전라남도', '전남', '흑산도', '홍도'],
     excludeKeywords: ['경기도 광주시', '경기도 광주', '경기 광주시', '경기 광주'],
   },
   { id: 'jeju', label: '제주총국', keywords: ['제주'] },

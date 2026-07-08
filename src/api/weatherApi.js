@@ -823,8 +823,7 @@ const KNOWN_LAND_BROAD_REGIONS = new Set([
   '대전',
   '세종',
   '전북',
-  '전남',
-  '광주',
+  '전남광주',
   '경북',
   '경남',
   '대구',
@@ -832,7 +831,16 @@ const KNOWN_LAND_BROAD_REGIONS = new Set([
   '부산',
   '제주',
 ]);
-const METROPOLITAN_DETAIL_SORT_REGIONS = new Set(['서울', '인천', '대전', '대구', '부산', '울산', '광주', '제주']);
+const METROPOLITAN_DETAIL_SORT_REGIONS = new Set([
+  '서울',
+  '인천',
+  '대전',
+  '대구',
+  '부산',
+  '울산',
+  '전남광주',
+  '제주',
+]);
 const LAND_BROAD_REGION_RULES = [
   { broad: '서울', pattern: /^서울/ },
   { broad: '인천', pattern: /^인천/ },
@@ -840,7 +848,7 @@ const LAND_BROAD_REGION_RULES = [
   { broad: '대구', pattern: /^(대구|달성|군위)(시|군)?/ },
   { broad: '부산', pattern: /^부산/ },
   { broad: '울산', pattern: /^울산/ },
-  { broad: '광주', pattern: /^광주(광역|동부|서부|남부|북부|중부)/ },
+  { broad: '전남광주', pattern: /^광주(광역|동부|서부|남부|북부|중부)/ },
   { broad: '세종', pattern: /^세종/ },
   { broad: '제주', pattern: /^(제주|서귀포)(시)?/ },
   {
@@ -852,7 +860,7 @@ const LAND_BROAD_REGION_RULES = [
     pattern: /^(포항|경주|김천|안동|구미|영주|영천|상주|문경|경산|의성|청송|영양|영덕|청도|고령|성주|칠곡|예천|봉화|울진|울릉)(시|군)?/,
   },
   {
-    broad: '전남',
+    broad: '전남광주',
     pattern: /^(목포|여수|순천|나주|광양|담양|곡성|구례|고흥|보성|화순|장흥|강진|해남|영암|무안|함평|영광|장성|완도|진도|신안)(시|군)?/,
   },
   {
@@ -909,10 +917,14 @@ const getBroadRegion = (upperRegion, detailRegion) => {
   if (combined.includes('제주도') && combined.includes('앞바다')) return '제주도 앞바다';
   if (combined.includes('제주도') && combined.includes('먼바다')) return '제주도 먼바다';
   if (combined.includes('울릉도') || combined.includes('독도')) return '경북';
-  if (combined.includes('흑산도') || combined.includes('홍도')) return '전남';
+  if (combined.includes('흑산도') || combined.includes('홍도')) return '전남광주';
   if (combined.includes('서해5도')) return '인천';
 
   const normalizedUpperRegion = normalizeBroadRegionName(upperRegion);
+  if (normalizedUpperRegion === '전남' || normalizedUpperRegion === '광주') {
+    return '전남광주';
+  }
+
   if (KNOWN_LAND_BROAD_REGIONS.has(normalizedUpperRegion)) {
     return normalizedUpperRegion;
   }
@@ -960,6 +972,13 @@ const sortDetailsForDisplay = (broadRegion, details) => {
   return details
     .map((detail, index) => ({ detail, index }))
     .sort((left, right) => {
+      if (broadRegion === '전남광주') {
+        const metropolitanOrder = Number(right.detail.startsWith('광주')) - Number(left.detail.startsWith('광주'));
+        if (metropolitanOrder) {
+          return metropolitanOrder;
+        }
+      }
+
       const leftCountyOrder = getMetropolitanCountyDetailOrder(left.detail);
       const rightCountyOrder = getMetropolitanCountyDetailOrder(right.detail);
       const countyGroupOrder = Number(leftCountyOrder >= 0) - Number(rightCountyOrder >= 0);
@@ -1257,9 +1276,16 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
       const rawDetailRegion = isMarine
         ? formatDetailOcean(record.regKo || record.regUpKo)
         : formatDetailLand(record.regKo || record.regUpKo);
-      const detailRegion = isMarine
+      const normalizedDetailRegion = isMarine
         ? rawDetailRegion
         : stripRepeatedBroadRegionPrefix(rawDetailRegion, broadRegion);
+      const detailRegion =
+        broadRegion === '전남광주' &&
+        record.regUpKo?.includes('광주광역시') &&
+        normalizedDetailRegion &&
+        !normalizedDetailRegion.startsWith('광주')
+          ? `광주${normalizedDetailRegion}`
+          : normalizedDetailRegion;
 
       if (!targetMap.has(typeName)) {
         targetMap.set(typeName, new Map());
