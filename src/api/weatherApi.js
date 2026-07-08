@@ -832,24 +832,24 @@ const KNOWN_LAND_BROAD_REGIONS = new Set([
   '부산',
   '제주',
 ]);
-const COMPACT_PARENTHESES_BROAD_REGIONS = new Set(['서울', '인천', '대전', '대구', '부산', '울산', '광주']);
+const COMPACT_PARENTHESES_BROAD_REGIONS = new Set(['서울', '인천', '대전', '대구', '부산', '울산', '광주', '제주']);
 const LAND_BROAD_REGION_RULES = [
   { broad: '서울', pattern: /^서울/ },
   { broad: '인천', pattern: /^인천/ },
   { broad: '대전', pattern: /^대전/ },
-  { broad: '대구', pattern: /^대구/ },
+  { broad: '대구', pattern: /^(대구|달성|군위)(시|군)?/ },
   { broad: '부산', pattern: /^부산/ },
   { broad: '울산', pattern: /^울산/ },
   { broad: '광주', pattern: /^광주(광역|동부|서부|남부|북부|중부)/ },
   { broad: '세종', pattern: /^세종/ },
-  { broad: '제주', pattern: /^제주/ },
+  { broad: '제주', pattern: /^(제주|서귀포)(시)?/ },
   {
     broad: '경남',
     pattern: /^(창원|김해|함안|진주|밀양|창녕|양산|의령|하동|산청|함양|거창|합천|통영|사천|거제|고성|남해)(시|군)?/,
   },
   {
     broad: '경북',
-    pattern: /^(포항|경주|김천|안동|구미|영주|영천|상주|문경|경산|군위|의성|청송|영양|영덕|청도|고령|성주|칠곡|예천|봉화|울진|울릉)(시|군)?/,
+    pattern: /^(포항|경주|김천|안동|구미|영주|영천|상주|문경|경산|의성|청송|영양|영덕|청도|고령|성주|칠곡|예천|봉화|울진|울릉)(시|군)?/,
   },
   {
     broad: '전남',
@@ -942,17 +942,36 @@ const formatDetailLand = (value) =>
 
 const stripRepeatedBroadRegionPrefix = (detailRegion, broadRegion) => {
   const detail = detailRegion.trim();
-  const broadAliases = [broadRegion, broadRegion === '제주' ? '제주도' : ''].filter(Boolean);
+  const broadAliases = broadRegion === '제주' ? ['제주도'] : [broadRegion];
   const matchedAlias = broadAliases.find((alias) => detail.startsWith(alias) && detail.length > alias.length);
   return matchedAlias ? detail.slice(matchedAlias.length).trim() : detail;
 };
 
-const getRegionParenthesisSeparator = (broadRegion, details) =>
-  COMPACT_PARENTHESES_BROAD_REGIONS.has(broadRegion) &&
-  details.length > 0 &&
-  details.every((detail) => !/[시군구]$/.test(detail))
-    ? ''
-    : ' ';
+const METROPOLITAN_COUNTY_DETAIL_ORDER = ['달성군', '군위군', '울주군', '기장군', '강화군', '옹진군'];
+
+const getMetropolitanCountyDetailOrder = (detail) =>
+  METROPOLITAN_COUNTY_DETAIL_ORDER.findIndex((countyName) => detail.startsWith(countyName));
+
+const sortDetailsForDisplay = (broadRegion, details) => {
+  if (!COMPACT_PARENTHESES_BROAD_REGIONS.has(broadRegion)) {
+    return details;
+  }
+
+  return details
+    .map((detail, index) => ({ detail, index }))
+    .sort((left, right) => {
+      const leftCountyOrder = getMetropolitanCountyDetailOrder(left.detail);
+      const rightCountyOrder = getMetropolitanCountyDetailOrder(right.detail);
+      const countyGroupOrder = Number(leftCountyOrder >= 0) - Number(rightCountyOrder >= 0);
+      const countyDetailOrder =
+        leftCountyOrder >= 0 && rightCountyOrder >= 0 ? leftCountyOrder - rightCountyOrder : 0;
+      return countyGroupOrder || countyDetailOrder || left.index - right.index;
+    })
+    .map((item) => item.detail);
+};
+
+const getRegionParenthesisSeparator = (broadRegion) =>
+  COMPACT_PARENTHESES_BROAD_REGIONS.has(broadRegion) ? '' : ' ';
 
 const buildForecastDocCandidates = (now) =>
   [0, 1, 2]
@@ -1265,8 +1284,8 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
         time: '',
         content: [...broadMap.entries()]
           .map(([broadRegion, detailRegions]) => {
-            const details = [...detailRegions];
-            const separator = getRegionParenthesisSeparator(broadRegion, details);
+            const details = sortDetailsForDisplay(broadRegion, [...detailRegions]);
+            const separator = getRegionParenthesisSeparator(broadRegion);
             return details.length > 0
               ? `• ${broadRegion}${separator}(${details.join(', ')})`
               : `• ${broadRegion}`;
