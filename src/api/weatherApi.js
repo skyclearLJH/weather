@@ -832,7 +832,7 @@ const KNOWN_LAND_BROAD_REGIONS = new Set([
   '부산',
   '제주',
 ]);
-const COMPACT_PARENTHESES_BROAD_REGIONS = new Set(['서울', '인천', '대전', '대구', '부산', '울산', '광주', '제주']);
+const METROPOLITAN_DETAIL_SORT_REGIONS = new Set(['서울', '인천', '대전', '대구', '부산', '울산', '광주', '제주']);
 const LAND_BROAD_REGION_RULES = [
   { broad: '서울', pattern: /^서울/ },
   { broad: '인천', pattern: /^인천/ },
@@ -953,7 +953,7 @@ const getMetropolitanCountyDetailOrder = (detail) =>
   METROPOLITAN_COUNTY_DETAIL_ORDER.findIndex((countyName) => detail.startsWith(countyName));
 
 const sortDetailsForDisplay = (broadRegion, details) => {
-  if (!COMPACT_PARENTHESES_BROAD_REGIONS.has(broadRegion)) {
+  if (!METROPOLITAN_DETAIL_SORT_REGIONS.has(broadRegion)) {
     return details;
   }
 
@@ -970,8 +970,7 @@ const sortDetailsForDisplay = (broadRegion, details) => {
     .map((item) => item.detail);
 };
 
-const getRegionParenthesisSeparator = (broadRegion) =>
-  COMPACT_PARENTHESES_BROAD_REGIONS.has(broadRegion) ? '' : ' ';
+const getRegionParenthesisSeparator = () => ' ';
 
 const buildForecastDocCandidates = (now) =>
   [0, 1, 2]
