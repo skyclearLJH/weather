@@ -813,6 +813,90 @@ const formatDisplayTime = (tmfc) => {
   return `${year}.${month}.${day} ${hour}:${minute} 발표`;
 };
 
+const KNOWN_LAND_BROAD_REGIONS = new Set([
+  '서울',
+  '인천',
+  '경기',
+  '강원',
+  '충북',
+  '충남',
+  '대전',
+  '세종',
+  '전북',
+  '전남',
+  '광주',
+  '경북',
+  '경남',
+  '대구',
+  '울산',
+  '부산',
+  '제주',
+]);
+const COMPACT_PARENTHESES_BROAD_REGIONS = new Set(['서울', '인천', '대전', '대구', '부산', '울산', '광주']);
+const LAND_BROAD_REGION_RULES = [
+  { broad: '서울', pattern: /^서울/ },
+  { broad: '인천', pattern: /^인천/ },
+  { broad: '대전', pattern: /^대전/ },
+  { broad: '대구', pattern: /^대구/ },
+  { broad: '부산', pattern: /^부산/ },
+  { broad: '울산', pattern: /^울산/ },
+  { broad: '광주', pattern: /^광주(광역|동부|서부|남부|북부|중부)/ },
+  { broad: '세종', pattern: /^세종/ },
+  { broad: '제주', pattern: /^제주/ },
+  {
+    broad: '경남',
+    pattern: /^(창원|김해|함안|진주|밀양|창녕|양산|의령|하동|산청|함양|거창|합천|통영|사천|거제|고성|남해)(시|군)?/,
+  },
+  {
+    broad: '경북',
+    pattern: /^(포항|경주|김천|안동|구미|영주|영천|상주|문경|경산|군위|의성|청송|영양|영덕|청도|고령|성주|칠곡|예천|봉화|울진|울릉)(시|군)?/,
+  },
+  {
+    broad: '전남',
+    pattern: /^(목포|여수|순천|나주|광양|담양|곡성|구례|고흥|보성|화순|장흥|강진|해남|영암|무안|함평|영광|장성|완도|진도|신안)(시|군)?/,
+  },
+  {
+    broad: '전북',
+    pattern: /^(전주|군산|익산|정읍|남원|김제|완주|진안|무주|장수|임실|순창|고창|부안)(시|군)?/,
+  },
+  {
+    broad: '충남',
+    pattern: /^(천안|공주|보령|아산|서산|논산|계룡|당진|금산|부여|서천|청양|홍성|예산|태안)(시|군)?/,
+  },
+  {
+    broad: '충북',
+    pattern: /^(청주|충주|제천|보은|옥천|영동|증평|진천|괴산|음성|단양)(시|군)?/,
+  },
+  {
+    broad: '강원',
+    pattern: /^(춘천|원주|강릉|동해|태백|속초|삼척|홍천|횡성|영월|평창|정선|철원|화천|양구|인제|고성|양양)(시|군)?/,
+  },
+  {
+    broad: '경기',
+    pattern: /^(수원|성남|의정부|안양|부천|광명|평택|동두천|안산|고양|과천|구리|남양주|오산|시흥|군포|의왕|하남|용인|파주|이천|안성|김포|화성|광주|양주|포천|여주|연천|가평|양평)(시|군)?/,
+  },
+];
+
+const normalizeBroadRegionName = (value = '') =>
+  value
+    .replace('경상북도', '경북')
+    .replace('경상남도', '경남')
+    .replace('전북특별자치도', '전북')
+    .replace('전라북도', '전북')
+    .replace('전라남도', '전남')
+    .replace('충청북도', '충북')
+    .replace('충청남도', '충남')
+    .replace('제주도', '제주')
+    .replace('특별자치도', '')
+    .replace('특별시', '')
+    .replace('광역시', '')
+    .trim();
+
+const getLandBroadRegionFromDetail = (value = '') => {
+  const normalizedValue = normalizeBroadRegionName(value).replace(/\s+/g, '');
+  return LAND_BROAD_REGION_RULES.find((rule) => rule.pattern.test(normalizedValue))?.broad ?? '';
+};
+
 const getBroadRegion = (upperRegion, detailRegion) => {
   const combined = `${upperRegion} ${detailRegion}`;
 
@@ -828,19 +912,16 @@ const getBroadRegion = (upperRegion, detailRegion) => {
   if (combined.includes('흑산도') || combined.includes('홍도')) return '전남';
   if (combined.includes('서해5도')) return '인천';
 
-  return upperRegion
-    .replace('경상북도', '경북')
-    .replace('경상남도', '경남')
-    .replace('전북특별자치도', '전북')
-    .replace('전라북도', '전북')
-    .replace('전라남도', '전남')
-    .replace('충청북도', '충북')
-    .replace('충청남도', '충남')
-    .replace('제주도', '제주')
-    .replace('특별자치도', '')
-    .replace('특별시', '')
-    .replace('광역시', '')
-    .trim();
+  const normalizedUpperRegion = normalizeBroadRegionName(upperRegion);
+  if (KNOWN_LAND_BROAD_REGIONS.has(normalizedUpperRegion)) {
+    return normalizedUpperRegion;
+  }
+
+  return (
+    getLandBroadRegionFromDetail(detailRegion) ||
+    getLandBroadRegionFromDetail(upperRegion) ||
+    normalizedUpperRegion
+  );
 };
 
 const formatDetailOcean = (value) =>
@@ -858,6 +939,20 @@ const formatDetailLand = (value) =>
       '',
     )
     .trim();
+
+const stripRepeatedBroadRegionPrefix = (detailRegion, broadRegion) => {
+  const detail = detailRegion.trim();
+  const broadAliases = [broadRegion, broadRegion === '제주' ? '제주도' : ''].filter(Boolean);
+  const matchedAlias = broadAliases.find((alias) => detail.startsWith(alias) && detail.length > alias.length);
+  return matchedAlias ? detail.slice(matchedAlias.length).trim() : detail;
+};
+
+const getRegionParenthesisSeparator = (broadRegion, details) =>
+  COMPACT_PARENTHESES_BROAD_REGIONS.has(broadRegion) &&
+  details.length > 0 &&
+  details.every((detail) => !/[시군구]$/.test(detail))
+    ? ''
+    : ' ';
 
 const buildForecastDocCandidates = (now) =>
   [0, 1, 2]
@@ -1143,9 +1238,12 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
         ? `${record.wrn} ${levelLabel} 특보`
         : `${record.wrn} ${levelLabel}`;
       const broadRegion = getBroadRegion(record.regUpKo, record.regKo || record.regUpKo);
-      const detailRegion = isMarine
+      const rawDetailRegion = isMarine
         ? formatDetailOcean(record.regKo || record.regUpKo)
         : formatDetailLand(record.regKo || record.regUpKo);
+      const detailRegion = isMarine
+        ? rawDetailRegion
+        : stripRepeatedBroadRegionPrefix(rawDetailRegion, broadRegion);
 
       if (!targetMap.has(typeName)) {
         targetMap.set(typeName, new Map());
@@ -1168,8 +1266,9 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
         content: [...broadMap.entries()]
           .map(([broadRegion, detailRegions]) => {
             const details = [...detailRegions];
+            const separator = getRegionParenthesisSeparator(broadRegion, details);
             return details.length > 0
-              ? `• ${broadRegion} (${details.join(', ')})`
+              ? `• ${broadRegion}${separator}(${details.join(', ')})`
               : `• ${broadRegion}`;
           })
           .join('\n'),
