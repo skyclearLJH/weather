@@ -20,10 +20,8 @@ const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_AGE_MS = 60 * 1000;
 const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const PRECIPITATION_MAX_ONE_HOUR_AGGREGATE_TTL_SECONDS = 3 * 24 * 60 * 60;
-const PRECIPITATION_MAX_ONE_HOUR_BACKFILL_STEP_MINUTES = 5;
-const PRECIPITATION_MAX_ONE_HOUR_BACKFILL_BATCH_SIZE = 42;
-const PRECIPITATION_MAX_ONE_HOUR_RECENT_BACKFILL_MINUTES = 4 * 60;
-const PRECIPITATION_MAX_ONE_HOUR_COARSE_STEP_MINUTES = 60;
+const ASOS_DAILY_RN_60M_MAX_INDEX = 41;
+const ASOS_DAILY_RN_60M_MAX_TM_INDEX = 42;
 const RANKING_CACHE_VERSION = 'v7';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
 const TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES = 5;
@@ -267,7 +265,6 @@ const formatKmaMinuteTime = (date) => {
 
 const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
 const formatStationInfoTime = (date) => `${formatKmaMinuteTime(date).slice(0, 10)}00`;
-const addMinutes = (date, minutes) => new Date(date.getTime() + minutes * 60 * 1000);
 const subtractMinutes = (date, minutes) => new Date(date.getTime() - minutes * 60 * 1000);
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -724,97 +721,38 @@ const fetchLatestAwsPrecipitationObservations = (context, stationMetadata) => {
   return fetchAwsMinuteObservationsByTimes(context, stationMetadata, candidateTimes, hasValidAwsPrecipitationObservation);
 };
 
-const isSameKmaDay = (timestamp, day) => timestamp?.slice(0, 8) === day;
+const parseAsosDailyMaxOneHourRows = (rawText, stationMetadata) =>
+  rawText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.split(/\s+/))
+    .filter((fields) => fields.length > ASOS_DAILY_RN_60M_MAX_TM_INDEX)
+    .map((fields) => {
+      const stationId = fields[1];
+      const metadata = stationMetadata.get(stationId) ?? { name: stationId, address: stationId };
+      const occurredClock = fields[ASOS_DAILY_RN_60M_MAX_TM_INDEX] ?? '';
+      return {
+        stationId,
+        name: metadata.name,
+        address: metadata.address,
+        value: parseNumericValue(fields[ASOS_DAILY_RN_60M_MAX_INDEX]),
+        occurredClock: /^\d{1,4}$/.test(occurredClock) ? occurredClock.padStart(4, '0') : '',
+      };
+    });
 
-const buildPrecipitationMaxOneHourSteppedTimes = (targetDate, endDate, stepMinutes, startOffsetMinutes) => {
-  const targetDay = formatKmaDay(targetDate);
-  const dayStart = getKstDayStart(targetDate);
-  const dayEnd = subtractMinutes(addMinutes(dayStart, 24 * 60), 1);
-  const cappedEnd = endDate && endDate.getTime() < dayEnd.getTime() ? endDate : dayEnd;
-  const times = [];
-
-  for (
-    let cursor = addMinutes(dayStart, startOffsetMinutes);
-    cursor.getTime() <= cappedEnd.getTime();
-    cursor = addMinutes(cursor, stepMinutes)
-  ) {
-    const timestamp = formatKmaMinuteTime(cursor);
-    if (isSameKmaDay(timestamp, targetDay)) {
-      times.push(timestamp);
-    }
-  }
-
-  const exactEnd = formatKmaMinuteTime(cappedEnd);
-  if (isSameKmaDay(exactEnd, targetDay)) {
-    times.push(exactEnd);
-  }
-
-  return [...new Set(times)].sort().reverse();
-};
-
-const buildPrecipitationMaxOneHourCandidateTimes = (targetDate, endDate, period) => {
-  const allFiveMinuteTimes = buildPrecipitationMaxOneHourSteppedTimes(
-    targetDate,
-    endDate,
-    PRECIPITATION_MAX_ONE_HOUR_BACKFILL_STEP_MINUTES,
-    PRECIPITATION_MAX_ONE_HOUR_BACKFILL_STEP_MINUTES,
-  );
-
-  if (period === 'today') {
-    const recentStart = formatKmaMinuteTime(subtractMinutes(endDate, PRECIPITATION_MAX_ONE_HOUR_RECENT_BACKFILL_MINUTES));
-    const recentTimes = allFiveMinuteTimes.filter((timestamp) => timestamp >= recentStart);
-    return [...new Set([...recentTimes, ...allFiveMinuteTimes])];
-  }
-
-  const coarseTimes = buildPrecipitationMaxOneHourSteppedTimes(
-    targetDate,
-    endDate,
-    PRECIPITATION_MAX_ONE_HOUR_COARSE_STEP_MINUTES,
-    PRECIPITATION_MAX_ONE_HOUR_COARSE_STEP_MINUTES - 1,
-  );
-
-  return [...new Set([...coarseTimes, ...allFiveMinuteTimes])];
-};
-
-const fetchPrecipitationMaxOneHourSamples = async (context, stationMetadata, aggregate, observedTimes = []) => {
-  const sampledTimes = new Set(aggregate?.sampledTimes ?? []);
-  const pendingTimes = [];
-  const seen = new Set();
-
-  observedTimes.forEach((observedAt) => {
-    if (!parseKmaMinuteTime(observedAt) || sampledTimes.has(observedAt) || seen.has(observedAt)) {
-      return;
-    }
-
-    seen.add(observedAt);
-    pendingTimes.push(observedAt);
-  });
-
-  const limitedTimes = pendingTimes.slice(0, PRECIPITATION_MAX_ONE_HOUR_BACKFILL_BATCH_SIZE);
-  if (limitedTimes.length === 0) {
-    return false;
-  }
-
-  let hasChanged = false;
-  const results = await Promise.allSettled(
-    limitedTimes.map((observedAt) =>
-      fetchAwsMinuteObservationsAtTime(context, stationMetadata, observedAt, hasValidAwsPrecipitationObservation),
+const fetchAsosDailyMaxOneHourRows = async (context, targetDay, isConfirmedDay) => {
+  const [sfcStationMetadata, rawText] = await Promise.all([
+    getSfcStationMetadata(context),
+    fetchKmaText(
+      context,
+      'api/typ01/url/kma_sfcdd3.php',
+      { tm1: targetDay, tm2: targetDay, stn: 0, disp: 0, help: 0 },
+      SLOW_DAILY_RAIN_TIMEOUT_MS,
+      isConfirmedDay ? 600 : 60,
     ),
-  );
-
-  results.forEach((result) => {
-    if (result.status !== 'fulfilled') {
-      return;
-    }
-
-    hasChanged = mergePrecipitationMaxOneHourRows(
-      aggregate,
-      result.value.observedAt,
-      result.value.rows,
-    ) || hasChanged;
-  });
-
-  return hasChanged;
+  ]);
+  return parseAsosDailyMaxOneHourRows(rawText, sfcStationMetadata);
 };
 
 const getAwsStationMetadata = async (context) => {
@@ -1042,68 +980,84 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
   const normalizedPeriod = period === 'yesterday' ? 'yesterday' : 'today';
   const targetDate = normalizedPeriod === 'yesterday' ? subtractDays(now, 1) : now;
   const targetDay = formatKmaDay(targetDate);
+
+  // ASOS 일자료의 RN_60M_MAX는 관측소가 매분 굴림합으로 계산한 공식 통계라
+  // 분자료 샘플링 횟수와 무관하게 하루 전체가 누락 없이 반영된다.
+  const officialRowsPromise = fetchAsosDailyMaxOneHourRows(
+    context,
+    targetDay,
+    normalizedPeriod === 'yesterday',
+  );
+
   const previousAggregate = await readPrecipitationMaxOneHourAggregate(context, targetDay);
   const aggregate = createPrecipitationMaxOneHourAggregate(targetDay, previousAggregate);
   let hasAggregateChanged = false;
-  let backfillEndDate =
-    normalizedPeriod === 'yesterday'
-      ? subtractMinutes(addMinutes(getKstDayStart(targetDate), 24 * 60), 1)
-      : subtractMinutes(now, AWS_MINUTE_LOOKBACK_STEPS[0]);
 
   if (normalizedPeriod === 'today') {
     try {
       const latestCurrent = await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
-      const latestObservedDate = parseKmaMinuteTime(latestCurrent.observedAt);
-      if (latestObservedDate) {
-        backfillEndDate = latestObservedDate;
-      }
       hasAggregateChanged = mergePrecipitationMaxOneHourRows(
         aggregate,
         latestCurrent.observedAt,
         latestCurrent.rows,
-      ) || hasAggregateChanged;
-    } catch (error) {
-      if (!aggregate.observedAt && Object.keys(aggregate.stations).length === 0) {
-        throw error;
-      }
+      );
+    } catch {
+      // AWS 지점 보완이 실패해도 공식 일자료만으로 순위를 만든다.
     }
   }
 
-  const candidateTimes = buildPrecipitationMaxOneHourCandidateTimes(
-    targetDate,
-    backfillEndDate,
-    normalizedPeriod,
-  );
-  hasAggregateChanged = await fetchPrecipitationMaxOneHourSamples(
-    context,
-    stationMetadata,
-    aggregate,
-    candidateTimes,
-  ) || hasAggregateChanged;
+  let officialRows = [];
+  let officialError = null;
+  try {
+    officialRows = await officialRowsPromise;
+  } catch (error) {
+    officialError = error;
+  }
 
   if (hasAggregateChanged) {
     await writePrecipitationMaxOneHourAggregate(context, targetDay, aggregate);
   }
 
-  const rows = Object.values(aggregate?.stations ?? {})
+  const stationValues = new Map();
+  Object.values(aggregate?.stations ?? {})
     .filter((item) => Number.isFinite(item.value) && item.value > 0)
-    .map((item) => ({
-      name: item.name,
-      address: item.address,
-      value: item.value,
-    }));
+    .forEach((item) => {
+      stationValues.set(String(item.stationId), {
+        name: item.name,
+        address: item.address,
+        value: item.value,
+      });
+    });
 
-  const observedAt = aggregate?.observedAt || formatKmaMinuteTime(targetDate);
+  officialRows
+    .filter((item) => Number.isFinite(item.value) && item.value > 0)
+    .forEach((item) => {
+      const existing = stationValues.get(item.stationId);
+      if (!existing || item.value >= existing.value) {
+        stationValues.set(item.stationId, {
+          name: item.name,
+          address: item.address,
+          value: item.value,
+        });
+      }
+    });
+
+  if (officialError && stationValues.size === 0) {
+    throw officialError;
+  }
+
+  const observedAt =
+    normalizedPeriod === 'yesterday'
+      ? `${targetDay}2359`
+      : aggregate?.observedAt || formatKmaMinuteTime(now);
 
   return {
     observedAt,
-    observedLabel: aggregate?.observedAt
-      ? formatDisplayKoreanDateTime(observedAt)
-      : `${normalizedPeriod === 'yesterday' ? '어제' : '오늘'} 최대 60분 강수량 집계가 아직 없습니다.`,
-    maxOneHour: buildRankingRows(rows, 'mm', 'desc'),
+    observedLabel: formatDisplayKoreanDateTime(observedAt),
+    maxOneHour: buildRankingRows([...stationValues.values()], 'mm', 'desc'),
     maxOneHourPeriod: normalizedPeriod,
     maxOneHourDay: targetDay,
-    maxOneHourSource: 'sampled-minute-cache',
+    maxOneHourSource: 'kma-sfcdd-daily+aws-minute',
     maxOneHourSampledCount: aggregate?.sampledTimes?.length ?? 0,
   };
 };
