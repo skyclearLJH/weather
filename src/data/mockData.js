@@ -26,6 +26,29 @@ export const REGIONS = [
   { id: 'changwon', label: '창원총국', keywords: ['경상남도', '경남'] },
 ];
 
+export const SUB_MENU_GROUPS = {
+  precipitation: [
+    {
+      id: 'hourly',
+      label: '60분 강수량',
+      items: [
+        { id: '1h', label: '60분 현재' },
+        { id: 'max_60m_today', label: '오늘 60분 최대' },
+        { id: 'max_60m_yesterday', label: '어제 60분 최대' },
+      ],
+    },
+    {
+      id: 'cumulative',
+      label: '누적 강수량',
+      items: [
+        { id: 'today', label: '오늘 누적' },
+        { id: 'since_yesterday', label: '어제부터 누적' },
+        { id: 'since_day_before_yesterday', label: '그제부터 누적' },
+      ],
+    },
+  ],
+};
+
 export const SUB_MENUS = {
   forecast: [
     { id: 'doc', label: '통보문' },
@@ -35,12 +58,7 @@ export const SUB_MENUS = {
     { id: 'current', label: '현재 특보' },
     { id: 'preliminary', label: '예비특보' },
   ],
-  precipitation: [
-    { id: '1h', label: '60분 강수량' },
-    { id: 'max_60m', label: '최대 60분 강수량' },
-    { id: 'today', label: '오늘 누적' },
-    { id: 'since_yesterday', label: '어제부터 누적' },
-  ],
+  precipitation: SUB_MENU_GROUPS.precipitation.flatMap((group) => group.items),
   minTemp: [
     { id: 'current', label: '현재' },
     { id: 'today', label: '오늘' },

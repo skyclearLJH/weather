@@ -61,6 +61,7 @@ export const RANKING_KINDS = [
   'precipitation-current',
   'precipitation-max-one-hour',
   'precipitation-since-yesterday',
+  'precipitation-since-day-before-yesterday',
 ];
 
 const getKstNow = () => new Date(Date.now() + KST_OFFSET_MS);
@@ -1243,16 +1244,26 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
   };
 };
 
-const buildPrecipitationSinceYesterday = async (context, stationMetadata, requestedObservedAt = '') => {
+// 오늘 현시점 누적에 지난 daysBack일치 일 강수량을 더한 누적 순위를 만든다.
+const buildPrecipitationCumulative = async (
+  context,
+  stationMetadata,
+  requestedObservedAt,
+  daysBack,
+  payloadKey,
+) => {
   const requestedDate = requestedObservedAt ? parseKmaMinuteTime(requestedObservedAt) : null;
   const baseDate = requestedDate ?? getKstNow();
-  const yesterday = subtractDays(baseDate, 1);
-  const yesterdayDailyRaw = await fetchKmaText(
-    context,
-    'api/typ01/url/sfc_aws_day.php',
-    { tm2: formatKmaDay(yesterday), obs: 'rn_day', stn: 0, disp: 0, help: 0 },
-    SLOW_DAILY_RAIN_TIMEOUT_MS,
-    300,
+  const pastDailyRaws = await Promise.all(
+    Array.from({ length: daysBack }, (_, index) =>
+      fetchKmaText(
+        context,
+        'api/typ01/url/sfc_aws_day.php',
+        { tm2: formatKmaDay(subtractDays(baseDate, index + 1)), obs: 'rn_day', stn: 0, disp: 0, help: 0 },
+        SLOW_DAILY_RAIN_TIMEOUT_MS,
+        300,
+      ),
+    ),
   );
 
   let observedAt = requestedObservedAt || formatKmaMinuteTime(baseDate);
@@ -1269,33 +1280,41 @@ const buildPrecipitationSinceYesterday = async (context, stationMetadata, reques
     observedAt = latestCurrent.observedAt;
     currentRows = latestCurrent.rows;
   } catch {
-    // Keep yesterday totals even when current minute data is unavailable.
+    // Keep past-day totals even when current minute data is unavailable.
   }
 
-  const yesterdayDailyRows = parseAwsDailyObservations(yesterdayDailyRaw, stationMetadata);
-  const yesterdayMap = new Map(yesterdayDailyRows.map((item) => [item.stationId, Math.max(0, item.value)]));
+  const pastTotals = new Map();
+  const pastRowsByStation = new Map();
+  pastDailyRaws.forEach((dailyRaw) => {
+    parseAwsDailyObservations(dailyRaw, stationMetadata).forEach((item) => {
+      if (!Number.isFinite(item.value) || item.value <= 0) {
+        return;
+      }
+      pastTotals.set(item.stationId, (pastTotals.get(item.stationId) ?? 0) + item.value);
+      if (!pastRowsByStation.has(item.stationId)) {
+        pastRowsByStation.set(item.stationId, item);
+      }
+    });
+  });
+
   const currentMap = new Map(currentRows.map((item) => [item.stationId, item]));
-  const allStationIds = new Set([
-    ...currentRows.map((item) => item.stationId),
-    ...yesterdayDailyRows.map((item) => item.stationId),
-  ]);
+  const allStationIds = new Set([...currentMap.keys(), ...pastTotals.keys()]);
 
   return {
     observedAt,
     observedLabel: formatDisplayKoreanDateTime(observedAt),
-    sinceYesterday: buildRankingRows(
+    [payloadKey]: buildRankingRows(
       [...allStationIds]
         .map((stationId) => {
           const currentItem = currentMap.get(stationId);
-          const yesterdayItem = yesterdayDailyRows.find((item) => item.stationId === stationId);
-          const name = currentItem?.name ?? yesterdayItem?.name ?? stationId;
-          const address = currentItem?.address ?? yesterdayItem?.address ?? stationId;
+          const pastItem = pastRowsByStation.get(stationId);
+          const name = currentItem?.name ?? pastItem?.name ?? stationId;
+          const address = currentItem?.address ?? pastItem?.address ?? stationId;
           const todayValue = Math.max(0, currentItem?.precipitationToday ?? Number.NaN);
-          const yesterdayValue = Math.max(0, yesterdayMap.get(stationId) ?? 0);
           return {
             name,
             address,
-            value: (Number.isFinite(todayValue) ? todayValue : 0) + yesterdayValue,
+            value: (Number.isFinite(todayValue) ? todayValue : 0) + (pastTotals.get(stationId) ?? 0),
           };
         })
         .filter((item) => item.value > 0),
@@ -1304,6 +1323,12 @@ const buildPrecipitationSinceYesterday = async (context, stationMetadata, reques
     ),
   };
 };
+
+const buildPrecipitationSinceYesterday = (context, stationMetadata, requestedObservedAt = '') =>
+  buildPrecipitationCumulative(context, stationMetadata, requestedObservedAt, 1, 'sinceYesterday');
+
+const buildPrecipitationSinceDayBeforeYesterday = (context, stationMetadata, requestedObservedAt = '') =>
+  buildPrecipitationCumulative(context, stationMetadata, requestedObservedAt, 2, 'sinceDayBeforeYesterday');
 
 export const buildRankingPayload = async (context, kind, options = {}) => {
   const { observedAt = '', period = 'today' } = options;
@@ -1334,6 +1359,11 @@ export const buildRankingPayload = async (context, kind, options = {}) => {
   if (kind === 'precipitation-since-yesterday') {
     const stationMetadata = await getAwsStationMetadata(context);
     return buildPrecipitationSinceYesterday(context, stationMetadata, observedAt);
+  }
+
+  if (kind === 'precipitation-since-day-before-yesterday') {
+    const stationMetadata = await getAwsStationMetadata(context);
+    return buildPrecipitationSinceDayBeforeYesterday(context, stationMetadata, observedAt);
   }
 
   throw new Error('Invalid rankings kind.');

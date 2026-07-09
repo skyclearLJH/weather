@@ -1405,6 +1405,9 @@ export const fetchServerPrecipitationMaxOneHourRankings = async (options = {}) =
 export const fetchServerPrecipitationSinceYesterdayRankings = async (options = {}) =>
   fetchRankingsJson('precipitation-since-yesterday', options);
 
+export const fetchServerPrecipitationSinceDayBeforeYesterdayRankings = async (options = {}) =>
+  fetchRankingsJson('precipitation-since-day-before-yesterday', options);
+
 export const fetchSnowData = async (type = 'tot', customTm = null, options = {}) => {
   const { refreshToken = '' } = options;
   const tm = customTm || formatKmaMinuteTime(new Date());

@@ -18,9 +18,10 @@ import {
   fetchServerPrecipitationCurrentRankings,
   fetchServerPrecipitationMaxOneHourRankings,
   fetchServerPrecipitationSinceYesterdayRankings,
+  fetchServerPrecipitationSinceDayBeforeYesterdayRankings,
   clearWeatherApiCaches,
 } from './api/weatherApi';
-import { REGIONS, SUB_MENUS } from './data/mockData';
+import { REGIONS, SUB_MENUS, SUB_MENU_GROUPS } from './data/mockData';
 
 const DEFAULT_UPDATED_AT = new Date();
 
@@ -116,6 +117,7 @@ function App() {
     maxOneHourDay: '',
     today: [],
     sinceYesterday: [],
+    sinceDayBeforeYesterday: [],
   });
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
@@ -126,7 +128,6 @@ function App() {
   const [snowTestRefreshKey, setSnowTestRefreshKey] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(DEFAULT_UPDATED_AT);
   const [isRankingExpanded, setIsRankingExpanded] = useState(false);
-  const [selectedPrecipitationMaxPeriod, setSelectedPrecipitationMaxPeriod] = useState('today');
 
   const handleRefresh = () => {
     clearWeatherApiCaches();
@@ -166,8 +167,11 @@ function App() {
     return Math.floor(observationTimeBase.getTime() / TROPICAL_NIGHT_AUTO_REFRESH_INTERVAL_MS);
   }, [observationTimeBase, selectedSubMenu, selectedTab]);
 
+  const isPrecipitationMaxMenu =
+    selectedSubMenu === 'max_60m_today' || selectedSubMenu === 'max_60m_yesterday';
+
   const isObservationTimeControlVisible =
-    (selectedTab === 'precipitation' && selectedSubMenu !== 'max_60m') ||
+    (selectedTab === 'precipitation' && !isPrecipitationMaxMenu) ||
     ((selectedTab === 'minTemp' || selectedTab === 'maxTemp') && selectedSubMenu === 'current');
 
   const renderObservationTimeControl = () =>
@@ -188,6 +192,7 @@ function App() {
         fetchServerTemperatureTodayRankings(refreshOptions),
         fetchServerPrecipitationCurrentRankings(refreshOptions),
         fetchServerPrecipitationSinceYesterdayRankings(refreshOptions),
+        fetchServerPrecipitationSinceDayBeforeYesterdayRankings(refreshOptions),
         fetchServerPrecipitationMaxOneHourRankings({ ...refreshOptions, period: 'today' }),
       ]).catch(() => {});
     }, 1200);
@@ -221,7 +226,6 @@ function App() {
     setIsRankingExpanded(false);
   }, [
     observationTimeMode,
-    selectedPrecipitationMaxPeriod,
     selectedRegion,
     selectedSubMenu,
     selectedTab,
@@ -347,7 +351,7 @@ function App() {
 
     const loadPrecipitationData = async () => {
       const refreshOptions = refreshTrigger > 0 ? { refreshToken: String(refreshTrigger) } : {};
-      const shouldUseObservationTime = selectedSubMenu !== 'max_60m' && selectedObservationTime;
+      const shouldUseObservationTime = !isPrecipitationMaxMenu && selectedObservationTime;
       const rankingOptions = shouldUseObservationTime
         ? { ...refreshOptions, observedAt: selectedObservationTime }
         : refreshOptions;
@@ -356,13 +360,15 @@ function App() {
 
       try {
         let data;
-        if (selectedSubMenu === 'max_60m') {
+        if (isPrecipitationMaxMenu) {
           data = await fetchServerPrecipitationMaxOneHourRankings({
             ...refreshOptions,
-            period: selectedPrecipitationMaxPeriod,
+            period: selectedSubMenu === 'max_60m_yesterday' ? 'yesterday' : 'today',
           });
         } else if (selectedSubMenu === 'since_yesterday') {
           data = await fetchServerPrecipitationSinceYesterdayRankings(rankingOptions);
+        } else if (selectedSubMenu === 'since_day_before_yesterday') {
+          data = await fetchServerPrecipitationSinceDayBeforeYesterdayRankings(rankingOptions);
         } else {
           data = await fetchServerPrecipitationCurrentRankings(rankingOptions);
         }
@@ -390,9 +396,9 @@ function App() {
       isActive = false;
     };
   }, [
+    isPrecipitationMaxMenu,
     refreshTrigger,
     selectedObservationTime,
-    selectedPrecipitationMaxPeriod,
     selectedSubMenu,
     selectedTab,
   ]);
@@ -480,45 +486,15 @@ function App() {
 
   const precipitationData = useMemo(() => {
     if (selectedSubMenu === '1h') return precipitationApiData.oneHour;
-    if (selectedSubMenu === 'max_60m') return precipitationApiData.maxOneHour;
+    if (selectedSubMenu === 'max_60m_today' || selectedSubMenu === 'max_60m_yesterday') {
+      return precipitationApiData.maxOneHour;
+    }
     if (selectedSubMenu === 'today') return precipitationApiData.today;
+    if (selectedSubMenu === 'since_day_before_yesterday') {
+      return precipitationApiData.sinceDayBeforeYesterday;
+    }
     return precipitationApiData.sinceYesterday;
   }, [precipitationApiData, selectedSubMenu]);
-
-  const renderPrecipitationMaxPeriodSelector = () => {
-    if (selectedTab !== 'precipitation' || selectedSubMenu !== 'max_60m') {
-      return null;
-    }
-
-    const periodItems = [
-      { id: 'today', label: '오늘' },
-      { id: 'yesterday', label: '어제' },
-    ];
-
-    return (
-      <div className="flex justify-end">
-        <div className="inline-flex rounded-full border border-slate-200 bg-white p-1 shadow-sm">
-          {periodItems.map((item) => {
-            const isSelected = selectedPrecipitationMaxPeriod === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setSelectedPrecipitationMaxPeriod(item.id)}
-                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-                  isSelected
-                    ? 'bg-[#0033a0] text-white shadow-sm'
-                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
 
   const snowData = selectedSubMenu === 'current' ? snowApiData.tot : snowApiData.day;
   const rankingLimit = isRankingExpanded ? RANKING_EXPANDED_LIMIT : RANKING_COLLAPSED_LIMIT;
@@ -613,12 +589,11 @@ function App() {
 
       const fullData = filterByRegion(precipitationData);
       const filteredData = getVisibleRankings(fullData);
-      const precipitationSubtitle =
-        selectedSubMenu === 'max_60m'
-          ? `${selectedPrecipitationMaxPeriod === 'yesterday' ? '어제' : '오늘'} 기록된 최대 60분 강수량입니다. ${precipitationApiData.observedLabel || ''}`.trim()
-          : precipitationApiData.observedLabel
-            ? `선택한 기준으로 가장 높은 강수 기록을 보여줍니다. ${precipitationApiData.observedLabel}`
-            : '선택한 기준으로 가장 높은 강수 기록을 보여줍니다.';
+      const precipitationSubtitle = isPrecipitationMaxMenu
+        ? `${selectedSubMenu === 'max_60m_yesterday' ? '어제' : '오늘'} 기록된 최대 60분 강수량입니다. ${precipitationApiData.observedLabel || ''}`.trim()
+        : precipitationApiData.observedLabel
+          ? `선택한 기준으로 가장 높은 강수 기록을 보여줍니다. ${precipitationApiData.observedLabel}`
+          : '선택한 기준으로 가장 높은 강수 기록을 보여줍니다.';
 
       return filteredData.length > 0 ? (
         <WeatherTable
@@ -735,10 +710,13 @@ function App() {
 
       <main className="mx-auto flex w-full max-w-screen-xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         {SHOW_SUBMENU_TABS.has(selectedTab) ? (
-          <SubMenu items={SUB_MENUS[selectedTab]} selectedId={selectedSubMenu} onSelect={setSelectedSubMenu} />
+          <SubMenu
+            items={SUB_MENUS[selectedTab]}
+            groups={SUB_MENU_GROUPS[selectedTab]}
+            selectedId={selectedSubMenu}
+            onSelect={setSelectedSubMenu}
+          />
         ) : null}
-
-        {renderPrecipitationMaxPeriodSelector()}
 
         {renderContent()}
       </main>
