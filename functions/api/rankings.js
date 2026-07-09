@@ -20,7 +20,11 @@ const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
 const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_AGE_MS = 60 * 1000;
 const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const PRECIPITATION_MAX_ONE_HOUR_AGGREGATE_TTL_SECONDS = 3 * 24 * 60 * 60;
-const RANKING_CACHE_VERSION = 'v6';
+const PRECIPITATION_MAX_ONE_HOUR_BACKFILL_STEP_MINUTES = 5;
+const PRECIPITATION_MAX_ONE_HOUR_BACKFILL_BATCH_SIZE = 42;
+const PRECIPITATION_MAX_ONE_HOUR_RECENT_BACKFILL_MINUTES = 4 * 60;
+const PRECIPITATION_MAX_ONE_HOUR_COARSE_STEP_MINUTES = 60;
+const RANKING_CACHE_VERSION = 'v7';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
 const TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES = 5;
 const TROPICAL_NIGHT_CACHE_MAX_AGE_MS = 60 * 1000;
@@ -263,6 +267,7 @@ const formatKmaMinuteTime = (date) => {
 
 const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
 const formatStationInfoTime = (date) => `${formatKmaMinuteTime(date).slice(0, 10)}00`;
+const addMinutes = (date, minutes) => new Date(date.getTime() + minutes * 60 * 1000);
 const subtractMinutes = (date, minutes) => new Date(date.getTime() - minutes * 60 * 1000);
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -380,15 +385,31 @@ const writePrecipitationMaxOneHourAggregate = async (context, day, aggregate) =>
   });
 };
 
-const updatePrecipitationMaxOneHourAggregate = async (context, observedAt, rows = []) => {
-  if (!observedAt || rows.length === 0) {
-    return null;
+const createPrecipitationMaxOneHourAggregate = (day, previous) => ({
+  day,
+  observedAt: previous?.observedAt ?? '',
+  updatedAt: previous?.updatedAt ?? '',
+  stations: { ...(previous?.stations ?? {}) },
+  sampledTimes: Array.isArray(previous?.sampledTimes) ? [...previous.sampledTimes] : [],
+});
+
+const mergePrecipitationMaxOneHourRows = (aggregate, observedAt, rows = []) => {
+  if (!aggregate || !observedAt) {
+    return false;
   }
 
-  const day = observedAt.slice(0, 8);
-  const previous = await readPrecipitationMaxOneHourAggregate(context, day);
-  const stations = { ...(previous?.stations ?? {}) };
-  let hasChanged = !previous || observedAt > (previous?.observedAt ?? '');
+  const sampledTimes = new Set(aggregate.sampledTimes ?? []);
+  let hasChanged = false;
+
+  if (!sampledTimes.has(observedAt)) {
+    sampledTimes.add(observedAt);
+    hasChanged = true;
+  }
+
+  if (!aggregate.observedAt || observedAt > aggregate.observedAt) {
+    aggregate.observedAt = observedAt;
+    hasChanged = true;
+  }
 
   rows.forEach((item) => {
     const stationId = String(item.stationId ?? '');
@@ -397,9 +418,9 @@ const updatePrecipitationMaxOneHourAggregate = async (context, observedAt, rows 
       return;
     }
 
-    const existing = stations[stationId];
+    const existing = aggregate.stations[stationId];
     if (!existing || value > existing.value || (value === existing.value && observedAt > existing.observedAt)) {
-      stations[stationId] = {
+      aggregate.stations[stationId] = {
         stationId,
         name: item.name,
         address: item.address,
@@ -410,13 +431,23 @@ const updatePrecipitationMaxOneHourAggregate = async (context, observedAt, rows 
     }
   });
 
-  const aggregate = {
-    day,
-    observedAt:
-      previous?.observedAt && previous.observedAt > observedAt ? previous.observedAt : observedAt,
-    updatedAt: new Date().toISOString(),
-    stations,
-  };
+  aggregate.sampledTimes = [...sampledTimes].sort();
+  if (hasChanged) {
+    aggregate.updatedAt = new Date().toISOString();
+  }
+
+  return hasChanged;
+};
+
+const updatePrecipitationMaxOneHourAggregate = async (context, observedAt, rows = []) => {
+  if (!observedAt) {
+    return null;
+  }
+
+  const day = observedAt.slice(0, 8);
+  const previous = await readPrecipitationMaxOneHourAggregate(context, day);
+  const aggregate = createPrecipitationMaxOneHourAggregate(day, previous);
+  const hasChanged = mergePrecipitationMaxOneHourRows(aggregate, observedAt, rows);
 
   if (hasChanged) {
     await writePrecipitationMaxOneHourAggregate(context, day, aggregate);
@@ -693,6 +724,99 @@ const fetchLatestAwsPrecipitationObservations = (context, stationMetadata) => {
   return fetchAwsMinuteObservationsByTimes(context, stationMetadata, candidateTimes, hasValidAwsPrecipitationObservation);
 };
 
+const isSameKmaDay = (timestamp, day) => timestamp?.slice(0, 8) === day;
+
+const buildPrecipitationMaxOneHourSteppedTimes = (targetDate, endDate, stepMinutes, startOffsetMinutes) => {
+  const targetDay = formatKmaDay(targetDate);
+  const dayStart = getKstDayStart(targetDate);
+  const dayEnd = subtractMinutes(addMinutes(dayStart, 24 * 60), 1);
+  const cappedEnd = endDate && endDate.getTime() < dayEnd.getTime() ? endDate : dayEnd;
+  const times = [];
+
+  for (
+    let cursor = addMinutes(dayStart, startOffsetMinutes);
+    cursor.getTime() <= cappedEnd.getTime();
+    cursor = addMinutes(cursor, stepMinutes)
+  ) {
+    const timestamp = formatKmaMinuteTime(cursor);
+    if (isSameKmaDay(timestamp, targetDay)) {
+      times.push(timestamp);
+    }
+  }
+
+  const exactEnd = formatKmaMinuteTime(cappedEnd);
+  if (isSameKmaDay(exactEnd, targetDay)) {
+    times.push(exactEnd);
+  }
+
+  return [...new Set(times)].sort().reverse();
+};
+
+const buildPrecipitationMaxOneHourCandidateTimes = (targetDate, endDate, period) => {
+  const allFiveMinuteTimes = buildPrecipitationMaxOneHourSteppedTimes(
+    targetDate,
+    endDate,
+    PRECIPITATION_MAX_ONE_HOUR_BACKFILL_STEP_MINUTES,
+    PRECIPITATION_MAX_ONE_HOUR_BACKFILL_STEP_MINUTES,
+  );
+
+  if (period === 'today') {
+    const recentStart = formatKmaMinuteTime(subtractMinutes(endDate, PRECIPITATION_MAX_ONE_HOUR_RECENT_BACKFILL_MINUTES));
+    const recentTimes = allFiveMinuteTimes.filter((timestamp) => timestamp >= recentStart);
+    return [...new Set([...recentTimes, ...allFiveMinuteTimes])];
+  }
+
+  const coarseTimes = buildPrecipitationMaxOneHourSteppedTimes(
+    targetDate,
+    endDate,
+    PRECIPITATION_MAX_ONE_HOUR_COARSE_STEP_MINUTES,
+    PRECIPITATION_MAX_ONE_HOUR_COARSE_STEP_MINUTES - 1,
+  );
+
+  return [...new Set([...coarseTimes, ...allFiveMinuteTimes])];
+};
+
+const fetchPrecipitationMaxOneHourSamples = async (context, stationMetadata, aggregate, observedTimes = []) => {
+  const sampledTimes = new Set(aggregate?.sampledTimes ?? []);
+  const pendingTimes = [];
+  const seen = new Set();
+
+  observedTimes.forEach((observedAt) => {
+    if (!parseKmaMinuteTime(observedAt) || sampledTimes.has(observedAt) || seen.has(observedAt)) {
+      return;
+    }
+
+    seen.add(observedAt);
+    pendingTimes.push(observedAt);
+  });
+
+  const limitedTimes = pendingTimes.slice(0, PRECIPITATION_MAX_ONE_HOUR_BACKFILL_BATCH_SIZE);
+  if (limitedTimes.length === 0) {
+    return false;
+  }
+
+  let hasChanged = false;
+  const results = await Promise.allSettled(
+    limitedTimes.map((observedAt) =>
+      fetchAwsMinuteObservationsAtTime(context, stationMetadata, observedAt, hasValidAwsPrecipitationObservation),
+    ),
+  );
+
+  results.forEach((result) => {
+    if (result.status !== 'fulfilled') {
+      return;
+    }
+
+    hasChanged = mergePrecipitationMaxOneHourRows(
+      aggregate,
+      result.value.observedAt,
+      result.value.rows,
+    ) || hasChanged;
+  });
+
+  return hasChanged;
+};
+
 const getAwsStationMetadata = async (context) => {
   const rawText = await fetchKmaText(
     context,
@@ -918,21 +1042,47 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
   const normalizedPeriod = period === 'yesterday' ? 'yesterday' : 'today';
   const targetDate = normalizedPeriod === 'yesterday' ? subtractDays(now, 1) : now;
   const targetDay = formatKmaDay(targetDate);
-  let aggregate = await readPrecipitationMaxOneHourAggregate(context, targetDay);
+  const previousAggregate = await readPrecipitationMaxOneHourAggregate(context, targetDay);
+  const aggregate = createPrecipitationMaxOneHourAggregate(targetDay, previousAggregate);
+  let hasAggregateChanged = false;
+  let backfillEndDate =
+    normalizedPeriod === 'yesterday'
+      ? subtractMinutes(addMinutes(getKstDayStart(targetDate), 24 * 60), 1)
+      : subtractMinutes(now, AWS_MINUTE_LOOKBACK_STEPS[0]);
 
   if (normalizedPeriod === 'today') {
     try {
       const latestCurrent = await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
-      aggregate = await updatePrecipitationMaxOneHourAggregate(
-        context,
+      const latestObservedDate = parseKmaMinuteTime(latestCurrent.observedAt);
+      if (latestObservedDate) {
+        backfillEndDate = latestObservedDate;
+      }
+      hasAggregateChanged = mergePrecipitationMaxOneHourRows(
+        aggregate,
         latestCurrent.observedAt,
         latestCurrent.rows,
-      );
+      ) || hasAggregateChanged;
     } catch (error) {
-      if (!aggregate) {
+      if (!aggregate.observedAt && Object.keys(aggregate.stations).length === 0) {
         throw error;
       }
     }
+  }
+
+  const candidateTimes = buildPrecipitationMaxOneHourCandidateTimes(
+    targetDate,
+    backfillEndDate,
+    normalizedPeriod,
+  );
+  hasAggregateChanged = await fetchPrecipitationMaxOneHourSamples(
+    context,
+    stationMetadata,
+    aggregate,
+    candidateTimes,
+  ) || hasAggregateChanged;
+
+  if (hasAggregateChanged) {
+    await writePrecipitationMaxOneHourAggregate(context, targetDay, aggregate);
   }
 
   const rows = Object.values(aggregate?.stations ?? {})
@@ -953,7 +1103,8 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
     maxOneHour: buildRankingRows(rows, 'mm', 'desc'),
     maxOneHourPeriod: normalizedPeriod,
     maxOneHourDay: targetDay,
-    maxOneHourSource: 'rolling-cache',
+    maxOneHourSource: 'sampled-minute-cache',
+    maxOneHourSampledCount: aggregate?.sampledTimes?.length ?? 0,
   };
 };
 
