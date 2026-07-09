@@ -1092,10 +1092,12 @@ const buildPrecipitationCurrent = async (context, stationMetadata, requestedObse
       )
     : await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
 
-  try {
-    await updatePrecipitationMaxOneHourAggregate(context, observedAt, rows);
-  } catch {
-    // The current precipitation ranking should still render even if the max-60m cache update fails.
+  // 최대 60분 집계 갱신은 응답을 막지 않도록 백그라운드에서 처리한다.
+  const aggregateUpdate = updatePrecipitationMaxOneHourAggregate(context, observedAt, rows).catch(
+    () => {},
+  );
+  if (context.waitUntil) {
+    context.waitUntil(aggregateUpdate);
   }
 
   return {
@@ -1135,8 +1137,23 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
     targetDay,
     normalizedPeriod === 'yesterday',
   );
+  officialRowsPromise.catch(() => {});
 
-  const previousAggregate = await readPrecipitationMaxOneHourAggregate(context, targetDay);
+  // 집계 읽기(KV)와 관측 데이터 요청은 서로 독립이므로 동시에 시작한다.
+  const previousAggregatePromise = readPrecipitationMaxOneHourAggregate(context, targetDay);
+  const observationPromise =
+    normalizedPeriod === 'today'
+      ? fetchLatestAwsPrecipitationObservations(context, stationMetadata)
+      : fetchKmaText(
+          context,
+          'api/typ01/url/sfc_aws_day.php',
+          { tm2: targetDay, obs: 'rn_day', stn: 0, disp: 0, help: 0 },
+          SLOW_DAILY_RAIN_TIMEOUT_MS,
+          600,
+        );
+  observationPromise.catch(() => {});
+
+  const previousAggregate = await previousAggregatePromise;
   const aggregate = createPrecipitationMaxOneHourAggregate(targetDay, previousAggregate);
   let hasAggregateChanged = false;
   let dayTotals = [];
@@ -1144,7 +1161,7 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
 
   if (normalizedPeriod === 'today') {
     try {
-      const latestCurrent = await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
+      const latestCurrent = await observationPromise;
       hasAggregateChanged = mergePrecipitationMaxOneHourRows(
         aggregate,
         latestCurrent.observedAt,
@@ -1160,13 +1177,7 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
   } else {
     exactWindowEnd = `${targetDay}2359`;
     try {
-      const dailyRaw = await fetchKmaText(
-        context,
-        'api/typ01/url/sfc_aws_day.php',
-        { tm2: targetDay, obs: 'rn_day', stn: 0, disp: 0, help: 0 },
-        SLOW_DAILY_RAIN_TIMEOUT_MS,
-        600,
-      );
+      const dailyRaw = await observationPromise;
       dayTotals = parseAwsDailyObservations(dailyRaw, stationMetadata)
         .filter((item) => Number.isFinite(item.value) && item.value > 0)
         .map((item) => ({ stationId: String(item.stationId), total: item.value }));
@@ -1254,6 +1265,18 @@ const buildPrecipitationCumulative = async (
 ) => {
   const requestedDate = requestedObservedAt ? parseKmaMinuteTime(requestedObservedAt) : null;
   const baseDate = requestedDate ?? getKstNow();
+
+  // 일자료 응답이 느린 편이라 현재 분자료 조회를 같이 시작해 대기 시간을 겹친다.
+  const latestCurrentPromise = requestedObservedAt
+    ? fetchAwsMinuteObservationsAtTime(
+        context,
+        stationMetadata,
+        requestedObservedAt,
+        hasValidAwsPrecipitationObservation,
+      )
+    : fetchLatestAwsPrecipitationObservations(context, stationMetadata);
+  latestCurrentPromise.catch(() => {});
+
   const pastDailyRaws = await Promise.all(
     Array.from({ length: daysBack }, (_, index) =>
       fetchKmaText(
@@ -1269,14 +1292,7 @@ const buildPrecipitationCumulative = async (
   let observedAt = requestedObservedAt || formatKmaMinuteTime(baseDate);
   let currentRows = [];
   try {
-    const latestCurrent = requestedObservedAt
-      ? await fetchAwsMinuteObservationsAtTime(
-          context,
-          stationMetadata,
-          requestedObservedAt,
-          hasValidAwsPrecipitationObservation,
-        )
-      : await fetchLatestAwsPrecipitationObservations(context, stationMetadata);
+    const latestCurrent = await latestCurrentPromise;
     observedAt = latestCurrent.observedAt;
     currentRows = latestCurrent.rows;
   } catch {
@@ -1473,10 +1489,13 @@ export async function onRequestGet(context) {
       });
     }
 
-    const payload = await refreshPrecomputedRanking(context, kind, cacheVariant, {
-      observedAt: requestedObservedAt,
-      period: requestedPeriod,
-    });
+    // 동시에 들어온 요청들이 각자 전체 재계산을 돌리지 않도록,
+    // 수동 새로고침이 아니면 진행 중인 재계산에 합류한다.
+    const refreshOptions = { observedAt: requestedObservedAt, period: requestedPeriod };
+    const payload = forceRefresh
+      ? await refreshPrecomputedRanking(context, kind, cacheVariant, refreshOptions)
+      : await (schedulePrecomputedRankingRefresh(context, kind, cacheVariant, refreshOptions) ??
+          refreshPrecomputedRanking(context, kind, cacheVariant, refreshOptions));
 
     return makeJsonResponse(payload, {
       'X-Weather-Data-Source': forceRefresh ? 'manual-refresh' : 'live',
