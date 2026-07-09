@@ -757,9 +757,52 @@ const parseAwsStationMinuteSeries = (rawText) =>
       value: parseNumericValue(fields[11]),
     }));
 
-// 강수량 상위 지점만 골라 그날의 분자료(RN-60m) 전 구간을 지점별로 통째로 받아
-// 정확한 최대 60분 강수량을 계산한다. 일 강수량이 이미 알려진 최대값 이하인
-// 지점은 굴림합 최대가 일 강수량을 넘을 수 없으므로 다시 조회하지 않는다.
+// 후보 풀은 현재 스냅샷의 일 강수량 지점과 기존 집계에 잡힌 지점의 합집합이라,
+// 중간에 결측된 지점도 과거 구간의 정밀 계산 대상에서 빠지지 않는다.
+const buildExactFetchCandidates = (aggregate, dayTotals, windowEnd) => {
+  const potentials = new Map();
+  dayTotals.forEach(({ stationId, total }) => {
+    if (Number.isFinite(total) && total > 0) {
+      potentials.set(stationId, total);
+    }
+  });
+  Object.values(aggregate.stations ?? {}).forEach((item) => {
+    const stationId = String(item.stationId);
+    if (Number.isFinite(item.value) && item.value > 0) {
+      potentials.set(stationId, Math.max(potentials.get(stationId) ?? 0, item.value));
+    }
+  });
+
+  return [...potentials.entries()]
+    .map(([stationId, potential]) => ({
+      stationId,
+      potential,
+      exactUpTo: aggregate.exactUpTo?.[stationId] ?? '',
+    }))
+    .filter(({ stationId, potential, exactUpTo }) => {
+      if (exactUpTo >= windowEnd) {
+        return false;
+      }
+      if (!exactUpTo) {
+        return true;
+      }
+      // 최대 60분 강수량은 일 강수량을 넘을 수 없으므로, 강수량이 알려진
+      // 최대값을 넘지 못한 지점은 다시 계산해도 순위가 바뀌지 않는다.
+      return potential > (aggregate.stations[stationId]?.value ?? 0);
+    })
+    .sort((left, right) => {
+      // 정밀 계산을 아직 못 받은 지점을 최우선으로, 그다음은 가장 오래된
+      // 순으로 순환시켜 특정 지점이 계산 슬롯을 독점하지 못하게 한다.
+      if (left.exactUpTo !== right.exactUpTo) {
+        return left.exactUpTo < right.exactUpTo ? -1 : 1;
+      }
+      return right.potential - left.potential;
+    })
+    .slice(0, PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT);
+};
+
+// 선정된 지점의 분자료(RN-60m)를 아직 계산하지 않은 구간만큼 통째로 받아
+// 정확한 최대 60분 강수량을 집계에 반영한다.
 const refreshExactStationMaxima = async (
   context,
   stationMetadata,
@@ -772,17 +815,7 @@ const refreshExactStationMaxima = async (
     return false;
   }
 
-  const candidates = dayTotals
-    .filter(({ stationId, total }) => {
-      const knownValue = aggregate.stations[stationId]?.value ?? 0;
-      if (!Number.isFinite(total) || total <= knownValue) {
-        return false;
-      }
-      return (aggregate.exactUpTo?.[stationId] ?? '') < windowEnd;
-    })
-    .sort((left, right) => right.total - left.total)
-    .slice(0, PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT);
-
+  const candidates = buildExactFetchCandidates(aggregate, dayTotals, windowEnd);
   if (candidates.length === 0) {
     return false;
   }
