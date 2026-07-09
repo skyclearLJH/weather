@@ -20,12 +20,32 @@ const refreshRankings = async (context) => {
   const results = [];
 
   for (const kind of RANKING_KINDS) {
-    try {
-      const payload = await buildRankingPayload(context, kind);
-      await writePrecomputedRanking(context, kind, payload);
-      results.push({ kind, ok: true, observedAt: payload.observedAt ?? '' });
-    } catch (error) {
-      results.push({ kind, ok: false, error: error.message });
+    // 최대 60분 강수량은 기간별 캐시 키(period:...)로 조회되므로
+    // 오늘/어제를 각각 계산해 같은 키에 저장해야 프런트가 읽는다.
+    const variants =
+      kind === 'precipitation-max-one-hour'
+        ? [
+            { cacheVariant: 'period:today', options: { period: 'today' } },
+            { cacheVariant: 'period:yesterday', options: { period: 'yesterday' } },
+          ]
+        : [{ cacheVariant: '', options: {} }];
+
+    for (const { cacheVariant, options } of variants) {
+      try {
+        const payload = await buildRankingPayload(context, kind, options);
+        await writePrecomputedRanking(context, kind, payload, cacheVariant);
+        results.push({
+          kind: cacheVariant ? `${kind}:${cacheVariant}` : kind,
+          ok: true,
+          observedAt: payload.observedAt ?? '',
+        });
+      } catch (error) {
+        results.push({
+          kind: cacheVariant ? `${kind}:${cacheVariant}` : kind,
+          ok: false,
+          error: error.message,
+        });
+      }
     }
   }
 

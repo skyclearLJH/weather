@@ -1339,6 +1339,24 @@ export const buildRankingPayload = async (context, kind, options = {}) => {
   throw new Error('Invalid rankings kind.');
 };
 
+// '어제' 집계는 어제 탭을 열 때만 진행되면 하루 뒤에나 수렴하므로,
+// 트래픽이 많은 '오늘' 조회에 편승해 백그라운드로 계속 채워 둔다.
+const scheduleYesterdayMaxOneHourRefresh = async (context) => {
+  const kind = 'precipitation-max-one-hour';
+  const variant = 'period:yesterday';
+
+  try {
+    const record = await readPrecomputedRankingRecord(context, kind, variant);
+    if (isFreshCacheRecord(record, variant, kind)) {
+      return;
+    }
+  } catch {
+    // 캐시 확인에 실패하면 갱신을 시도한다.
+  }
+
+  schedulePrecomputedRankingRefresh(context, kind, variant, { period: 'yesterday' });
+};
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
@@ -1380,6 +1398,15 @@ export async function onRequestGet(context) {
         status: 400,
         headers: corsHeaders,
       });
+    }
+
+    if (kind === 'precipitation-max-one-hour' && requestedPeriod === 'today') {
+      const yesterdayRefresh = scheduleYesterdayMaxOneHourRefresh(context);
+      if (context.waitUntil) {
+        context.waitUntil(yesterdayRefresh);
+      } else {
+        yesterdayRefresh.catch(() => {});
+      }
     }
 
     try {
