@@ -831,6 +831,35 @@ const KNOWN_LAND_BROAD_REGIONS = new Set([
   '부산',
   '제주',
 ]);
+const WARNING_SPECIAL_CITY_ORDER = ['서울'];
+const WARNING_METROPOLITAN_CITY_ORDER = ['인천', '대전', '세종', '전남광주', '대구', '부산', '울산'];
+const WARNING_PROVINCE_ORDER = ['경기', '강원', '충북', '충남', '전북', '경북', '경남', '제주'];
+const WARNING_SELECTED_BROAD_REGION_ORDER = [
+  ...WARNING_SPECIAL_CITY_ORDER,
+  ...WARNING_METROPOLITAN_CITY_ORDER,
+  ...WARNING_PROVINCE_ORDER,
+];
+const WARNING_NATIONWIDE_BROAD_REGION_ORDER = [
+  '서울',
+  '인천',
+  '경기',
+  '강원',
+  '대전',
+  '세종',
+  '충북',
+  '충남',
+  '전남광주',
+  '전북',
+  '대구',
+  '부산',
+  '울산',
+  '경북',
+  '경남',
+  '제주',
+];
+const createRegionOrderMap = (regions) => new Map(regions.map((region, index) => [region, index]));
+const WARNING_SELECTED_BROAD_REGION_ORDER_MAP = createRegionOrderMap(WARNING_SELECTED_BROAD_REGION_ORDER);
+const WARNING_NATIONWIDE_BROAD_REGION_ORDER_MAP = createRegionOrderMap(WARNING_NATIONWIDE_BROAD_REGION_ORDER);
 const METROPOLITAN_DETAIL_SORT_REGIONS = new Set([
   '서울',
   '인천',
@@ -987,6 +1016,22 @@ const sortDetailsForDisplay = (broadRegion, details) => {
       return countyGroupOrder || countyDetailOrder || left.index - right.index;
     })
     .map((item) => item.detail);
+};
+
+const sortWarningBroadRegionEntries = (entries, regionId) => {
+  const orderMap =
+    regionId === 'all'
+      ? WARNING_NATIONWIDE_BROAD_REGION_ORDER_MAP
+      : WARNING_SELECTED_BROAD_REGION_ORDER_MAP;
+
+  return entries
+    .map((entry, index) => ({
+      entry,
+      index,
+      order: orderMap.get(entry[0]) ?? Number.POSITIVE_INFINITY,
+    }))
+    .sort((left, right) => left.order - right.order || left.index - right.index)
+    .map((item) => item.entry);
 };
 
 const getRegionParenthesisSeparator = () => ' ';
@@ -1973,7 +2018,7 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
         id: `${typeName}-${index}-${Date.now()}`,
         type: typeName,
         time: '',
-        content: [...broadMap.entries()]
+        content: sortWarningBroadRegionEntries([...broadMap.entries()], regionId)
           .map(([broadRegion, detailEntries]) => {
             const { isEntireBroadRegion, details } = collapseWarningRegionDetails(
               broadRegion,
