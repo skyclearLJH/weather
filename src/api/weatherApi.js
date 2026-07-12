@@ -1183,7 +1183,7 @@ const NATIONAL_TEMP_CITIES = [
   { id: '11G00201', name: '제주' },
 ];
 
-// 예보구역코드 앞자리로 총국 권역을 가른다. 부산총국만 도시 단위(부산·울산·양산)로 지정한다.
+// 예보구역코드 앞자리로 총국 권역을 가른다. 부산총국만 도시 단위(부산·울산)로 지정한다.
 const REGION_TEMP_ZONE_FILTERS = {
   hq: { prefixes: ['11B', '11A'] },
   chuncheon: { prefixes: ['11D'] },
@@ -1193,8 +1193,8 @@ const REGION_TEMP_ZONE_FILTERS = {
   gwangju: { prefixes: ['11F2', '21F2'] },
   jeju: { prefixes: ['11G'] },
   daegu: { prefixes: ['11H1', '11E'] },
-  busan: { ids: ['11H20201', '11H20101', '11H20102'] },
-  changwon: { prefixes: ['11H2'], excludeIds: ['11H20201', '11H20101', '11H20102'] },
+  busan: { ids: ['11H20201', '11H20101'] },
+  changwon: { prefixes: ['11H2'], excludeIds: ['11H20201', '11H20101'] },
 };
 
 const REGION_TEMP_EXCLUDED_ZONE_IDS = new Set([
