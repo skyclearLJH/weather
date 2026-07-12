@@ -991,6 +991,173 @@ const sortDetailsForDisplay = (broadRegion, details) => {
 
 const getRegionParenthesisSeparator = () => ' ';
 
+// 행정구역상 같은 시군이지만 기상청 특보구역 계층에서는 분리되어 있는 섬 구역들.
+// 구성 구역이 모두 발령되면 시군명(전 지역)으로 축약한다.
+const WARNING_CITY_UNION_RULES = [
+  { name: '신안군', zoneNames: ['신안군(흑산면제외)', '흑산도.홍도'] },
+  { name: '여수시', zoneNames: ['여수시', '거문도.초도'] },
+  { name: '옹진군', zoneNames: ['옹진군', '백령도.대청도', '연평도.우도'] },
+];
+
+const isWarningLeafZone = (regSp = '') => regSp.endsWith('13') || regSp.endsWith('14');
+const isSubdividedCityZone = (regSp = '') => regSp.endsWith('03');
+
+const parseWarningRegionZones = (rawText) => {
+  const nowTm = formatKmaMinuteTime(new Date());
+  const zones = new Map();
+
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const match = trimmed.match(/^(L\S+)\s+(\d{12})\s+(\d{12})\s+(\d{8})\s+(\S+)\s+(.+)$/);
+    if (!match) {
+      return;
+    }
+
+    const [, regId, tmSt, tmEd, regSp, parentId, namePart] = match;
+    if (tmSt > nowTm || tmEd < nowTm) {
+      return;
+    }
+
+    // REG_KO와 REG_NAME은 2칸 이상의 공백으로 구분된다(이름 안의 공백은 1칸).
+    const nameFields = namePart
+      .split(/\s{2,}/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    zones.set(regId, {
+      regSp,
+      parentId,
+      name: nameFields[nameFields.length - 1] || nameFields[0] || regId,
+    });
+  });
+
+  return zones;
+};
+
+const buildWarningRegionIndex = (zones) => {
+  const childIdsByParent = new Map();
+  zones.forEach((zone, regId) => {
+    if (!childIdsByParent.has(zone.parentId)) {
+      childIdsByParent.set(zone.parentId, []);
+    }
+    childIdsByParent.get(zone.parentId).push(regId);
+  });
+
+  const broadLeafIds = new Map();
+  const leafIdsByName = new Map();
+  zones.forEach((zone, regId) => {
+    if (!isWarningLeafZone(zone.regSp)) {
+      return;
+    }
+
+    const parentName = zones.get(zone.parentId)?.name ?? '';
+    const broad = getBroadRegion(parentName, zone.name);
+    if (KNOWN_LAND_BROAD_REGIONS.has(broad)) {
+      if (!broadLeafIds.has(broad)) {
+        broadLeafIds.set(broad, new Set());
+      }
+      broadLeafIds.get(broad).add(regId);
+    }
+
+    if (!leafIdsByName.has(zone.name)) {
+      leafIdsByName.set(zone.name, regId);
+    }
+  });
+
+  // 하위 권역이 모두 발령 대상 구역(leaf)인 시군/도서 그룹만 축약 후보로 삼는다.
+  // 인천처럼 중간 그룹이 섞여 있으면 leaf 자식만으로는 전체가 아니므로 제외한다.
+  const cityGroups = [];
+  childIdsByParent.forEach((ids, parentId) => {
+    const parent = zones.get(parentId);
+    if (!parent) {
+      return;
+    }
+
+    const isCityParent = isSubdividedCityZone(parent.regSp) || parent.regSp === '00000102';
+    if (!isCityParent) {
+      return;
+    }
+
+    const leafIds = ids.filter((id) => isWarningLeafZone(zones.get(id)?.regSp ?? ''));
+    if (leafIds.length < 2 || leafIds.length !== ids.length) {
+      return;
+    }
+
+    cityGroups.push({ name: parent.name, memberIds: new Set(leafIds) });
+  });
+
+  WARNING_CITY_UNION_RULES.forEach(({ name, zoneNames }) => {
+    const memberIds = zoneNames.map((zoneName) => leafIdsByName.get(zoneName)).filter(Boolean);
+    if (memberIds.length === zoneNames.length) {
+      cityGroups.push({ name, memberIds: new Set(memberIds) });
+    }
+  });
+
+  // 구성원이 많은 그룹부터 적용해, 겹치는 그룹(예: 옹진군 ↔ 서해5도)에서
+  // 더 넓은 축약이 우선되도록 한다.
+  cityGroups.sort((left, right) => right.memberIds.size - left.memberIds.size);
+
+  return { broadLeafIds, cityGroups };
+};
+
+let warningRegionIndexPromise = null;
+
+const fetchWarningRegionIndex = async () => {
+  if (!warningRegionIndexPromise) {
+    warningRegionIndexPromise = fetchKmaText('api/typ01/url/wrn_reg.php', { tmfc: 0 }, {
+      ttlMs: TTL.stationInfo,
+      cacheKey: 'warning-region-list',
+      timeoutMs: 9000,
+    })
+      .then((rawText) => buildWarningRegionIndex(parseWarningRegionZones(rawText)))
+      .catch((error) => {
+        warningRegionIndexPromise = null;
+        throw error;
+      });
+  }
+
+  return warningRegionIndexPromise;
+};
+
+const collapseWarningRegionDetails = (broadRegion, detailEntries, regionIndex) => {
+  const allDetails = [...new Set([...detailEntries.values()].filter(Boolean))];
+  if (!regionIndex || !KNOWN_LAND_BROAD_REGIONS.has(broadRegion)) {
+    return { isEntireBroadRegion: false, details: allDetails };
+  }
+
+  const issuedIds = new Set([...detailEntries.keys()].filter((key) => key.startsWith('L')));
+  const broadIds = regionIndex.broadLeafIds.get(broadRegion);
+  if (broadIds && broadIds.size >= 2 && [...broadIds].every((id) => issuedIds.has(id))) {
+    return { isEntireBroadRegion: true, details: [] };
+  }
+
+  const consumed = new Set();
+  const labelByEntryKey = new Map();
+  regionIndex.cityGroups.forEach((group) => {
+    const memberIds = [...group.memberIds];
+    if (!memberIds.every((id) => issuedIds.has(id) && !consumed.has(id))) {
+      return;
+    }
+
+    const firstKey = [...detailEntries.keys()].find((key) => group.memberIds.has(key));
+    memberIds.forEach((id) => consumed.add(id));
+    labelByEntryKey.set(firstKey, `${group.name}(전 지역)`);
+  });
+
+  if (labelByEntryKey.size === 0) {
+    return { isEntireBroadRegion: false, details: allDetails };
+  }
+
+  const details = [...detailEntries.entries()]
+    .map(([key, detail]) => labelByEntryKey.get(key) ?? (consumed.has(key) ? null : detail))
+    .filter(Boolean);
+  return { isEntireBroadRegion: false, details: [...new Set(details)] };
+};
+
 const buildForecastDocCandidates = (now) =>
   [0, 1, 2]
     .flatMap((dayOffset) => {
@@ -1214,6 +1381,8 @@ export const fetchWeatherDoc = async (regionId, options = {}) => {
 export const fetchWeatherWarnings = async (regionId, options = {}) => {
   const { refreshToken = '' } = options;
   try {
+    // 구역 계층 목록은 24시간 캐시되므로 특보 데이터와 병렬로 준비한다.
+    const regionIndexPromise = fetchWarningRegionIndex().catch(() => null);
     const rawText = await fetchKmaText('api/typ01/url/wrn_now_data.php', {
       fe: 'f',
       tm: '',
@@ -1224,6 +1393,7 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
       cacheKey: 'weather-warnings-raw',
       refreshToken,
     });
+    const regionIndex = await regionIndexPromise;
 
     const records = rawText
       .split('\n')
@@ -1233,6 +1403,7 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
         const fields = line.split(',').map((item) => item.trim());
         return {
           regUpKo: fields[1],
+          regId: fields[2],
           regKo: fields[3],
           tmFc: fields[4],
           tmEf: fields[5],
@@ -1292,11 +1463,15 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
       }
 
       if (!targetMap.get(typeName).has(broadRegion)) {
-        targetMap.get(typeName).set(broadRegion, new Set());
+        targetMap.get(typeName).set(broadRegion, new Map());
       }
 
-      if (detailRegion && detailRegion !== broadRegion) {
-        targetMap.get(typeName).get(broadRegion).add(detailRegion);
+      // 구역코드를 키로 보관해 '전 지역' 판정에 쓴다. 표시명이 광역명과 같아
+      // 생략되는 구역도 발령 여부는 코드로 남겨 둔다.
+      const entryKey = record.regId || detailRegion || record.regKo || record.regUpKo;
+      const entryDetail = detailRegion && detailRegion !== broadRegion ? detailRegion : '';
+      if (entryKey && !targetMap.get(typeName).get(broadRegion).has(entryKey)) {
+        targetMap.get(typeName).get(broadRegion).set(entryKey, entryDetail);
       }
     });
 
@@ -1306,11 +1481,20 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
         type: typeName,
         time: '',
         content: [...broadMap.entries()]
-          .map(([broadRegion, detailRegions]) => {
-            const details = sortDetailsForDisplay(broadRegion, [...detailRegions]);
+          .map(([broadRegion, detailEntries]) => {
+            const { isEntireBroadRegion, details } = collapseWarningRegionDetails(
+              broadRegion,
+              detailEntries,
+              regionIndex,
+            );
+            if (isEntireBroadRegion) {
+              return `• ${broadRegion} (전 지역)`;
+            }
+
+            const sortedDetails = sortDetailsForDisplay(broadRegion, details);
             const separator = getRegionParenthesisSeparator(broadRegion);
-            return details.length > 0
-              ? `• ${broadRegion}${separator}(${details.join(', ')})`
+            return sortedDetails.length > 0
+              ? `• ${broadRegion}${separator}(${sortedDetails.join(', ')})`
               : `• ${broadRegion}`;
           })
           .join('\n'),
