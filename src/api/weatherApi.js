@@ -1183,6 +1183,10 @@ const NATIONAL_TEMP_CITIES = [
   { id: '11G00201', name: '제주' },
 ];
 
+const REGION_TEMP_PRIORITY_ZONE_ORDER = new Map(
+  NATIONAL_TEMP_CITIES.map(({ id }, index) => [id, index]),
+);
+
 // 예보구역코드 앞자리로 총국 권역을 가른다. 부산총국만 도시 단위(부산·울산)로 지정한다.
 const REGION_TEMP_ZONE_FILTERS = {
   hq: { prefixes: ['11B', '11A'] },
@@ -1474,6 +1478,29 @@ const formatForecastIssueLabel = (tmFc) => {
   return `${month}월 ${day}일 ${hour}시 발표`;
 };
 
+const sortRegionTempTargets = (targets) =>
+  targets
+    .map((zone, index) => ({
+      zone,
+      index,
+      priority: REGION_TEMP_PRIORITY_ZONE_ORDER.get(zone.id) ?? Number.POSITIVE_INFINITY,
+    }))
+    .sort((left, right) => {
+      const leftIsPriority = Number.isFinite(left.priority);
+      const rightIsPriority = Number.isFinite(right.priority);
+
+      if (leftIsPriority !== rightIsPriority) {
+        return leftIsPriority ? -1 : 1;
+      }
+
+      if (leftIsPriority && left.priority !== right.priority) {
+        return left.priority - right.priority;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ zone }) => zone);
+
 const resolveRegionTempTargets = async (regionId) => {
   const filter = REGION_TEMP_ZONE_FILTERS[regionId];
   if (!filter) {
@@ -1484,15 +1511,17 @@ const resolveRegionTempTargets = async (regionId) => {
   const availableZones = zones.filter((zone) => !REGION_TEMP_EXCLUDED_ZONE_IDS.has(zone.id));
 
   if (filter.ids) {
-    return filter.ids
+    return sortRegionTempTargets(filter.ids
       .map((zoneId) => availableZones.find((zone) => zone.id === zoneId))
-      .filter(Boolean);
+      .filter(Boolean));
   }
 
-  return availableZones.filter(
-    (zone) =>
-      filter.prefixes.some((prefix) => zone.id.startsWith(prefix)) &&
-      !(filter.excludeIds ?? []).includes(zone.id),
+  return sortRegionTempTargets(
+    availableZones.filter(
+      (zone) =>
+        filter.prefixes.some((prefix) => zone.id.startsWith(prefix)) &&
+        !(filter.excludeIds ?? []).includes(zone.id),
+    ),
   );
 };
 
