@@ -16,9 +16,14 @@ const getCacheTtl = (pathname, searchParams) => {
   if (
     pathname.includes('/stn_snow.php') ||
     pathname.includes('/stn_inf.php') ||
-    pathname.includes('/wrn_reg.php')
+    pathname.includes('/wrn_reg.php') ||
+    pathname.includes('/fct_shrt_reg.php')
   ) {
     return 86400;
+  }
+
+  if (pathname.includes('/fct_afs_dl.php')) {
+    return 180;
   }
 
   if (pathname.includes('/sfc_aws_day.php')) {

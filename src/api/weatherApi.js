@@ -1158,6 +1158,238 @@ const collapseWarningRegionDetails = (broadRegion, detailEntries, regionIndex) =
   return { isEntireBroadRegion: false, details: [...new Set(details)] };
 };
 
+// 전국 보기: 특별·광역시 + KBS 총국·을지국 소재 도시 (북→남 순서)
+const NATIONAL_TEMP_CITIES = [
+  { id: '11B10101', name: '서울' },
+  { id: '11B20201', name: '인천' },
+  { id: '11D10301', name: '춘천' },
+  { id: '11D10401', name: '원주' },
+  { id: '11D20501', name: '강릉' },
+  { id: '11C10301', name: '청주' },
+  { id: '11C10101', name: '충주' },
+  { id: '11C20404', name: '세종' },
+  { id: '11C20401', name: '대전' },
+  { id: '11F10201', name: '전주' },
+  { id: '11F20501', name: '광주' },
+  { id: '21F20801', name: '목포' },
+  { id: '11F20405', name: '순천' },
+  { id: '11H10701', name: '대구' },
+  { id: '11H10501', name: '안동' },
+  { id: '11H10201', name: '포항' },
+  { id: '11H20201', name: '부산' },
+  { id: '11H20101', name: '울산' },
+  { id: '11H20301', name: '창원' },
+  { id: '11H20701', name: '진주' },
+  { id: '11G00201', name: '제주' },
+];
+
+// 예보구역코드 앞자리로 총국 권역을 가른다. 부산총국만 도시 단위(부산·울산·양산)로 지정한다.
+const REGION_TEMP_ZONE_FILTERS = {
+  hq: { prefixes: ['11B', '11A'] },
+  chuncheon: { prefixes: ['11D'] },
+  daejeon: { prefixes: ['11C2'] },
+  cheongju: { prefixes: ['11C1'] },
+  jeonju: { prefixes: ['11F1', '21F1'] },
+  gwangju: { prefixes: ['11F2', '21F2'] },
+  jeju: { prefixes: ['11G'] },
+  daegu: { prefixes: ['11H1', '11E'] },
+  busan: { ids: ['11H20201', '11H20101', '11H20102'] },
+  changwon: { prefixes: ['11H2'], excludeIds: ['11H20201', '11H20101', '11H20102'] },
+};
+
+const REGION_TEMP_EXCLUDED_ZONE_IDS = new Set([
+  '11F20603', // 순천(구역 중복, 순천시 구역 사용)
+  '11H20406', // 하동(해안) — 통합 구역인 하동으로 표기
+  '11H20702', // 하동(내륙)
+  '21F20202', // 해남(화원) — 해남으로 표기
+  '11G00601', // 이어도
+]);
+
+const parseForecastCityZones = (rawText) => {
+  const nowTm = formatKmaMinuteTime(new Date());
+  const zones = [];
+
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const fields = trimmed.split(/\s+/);
+    if (fields.length < 5) {
+      return;
+    }
+
+    const [regId, tmSt, tmEd, regSp] = fields;
+    if (regSp !== 'C' || tmSt > nowTm || tmEd < nowTm) {
+      return;
+    }
+
+    zones.push({ id: regId, name: fields.slice(4).join(' ').trim() });
+  });
+
+  return zones;
+};
+
+let forecastCityZonesPromise = null;
+
+const fetchForecastCityZones = async () => {
+  if (!forecastCityZonesPromise) {
+    forecastCityZonesPromise = fetchKmaText('api/typ01/url/fct_shrt_reg.php', { tmfc: 0 }, {
+      ttlMs: TTL.stationInfo,
+      cacheKey: 'forecast-city-zones',
+      timeoutMs: 9000,
+    })
+      .then(parseForecastCityZones)
+      .catch((error) => {
+        forecastCityZonesPromise = null;
+        throw error;
+      });
+  }
+
+  return forecastCityZonesPromise;
+};
+
+// 육상 단기예보에서 구역별 최신 발표의 발효시각별 기온(TA)을 뽑는다.
+// 발효 00시 구간의 TA가 아침 최저기온, 12시 구간의 TA가 낮 최고기온이다.
+const parseLandForecastTemps = (rawText) => {
+  const byRegion = new Map();
+
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const fields = trimmed.split(/\s+/);
+    if (fields.length < 13 || !/^\d{12}$/.test(fields[1]) || !/^\d{12}$/.test(fields[2])) {
+      return;
+    }
+
+    const [regId, tmFc, tmEf] = fields;
+    let entry = byRegion.get(regId);
+    if (!entry || tmFc > entry.tmFc) {
+      entry = { tmFc, temps: new Map() };
+      byRegion.set(regId, entry);
+    }
+
+    if (entry.tmFc === tmFc) {
+      entry.temps.set(tmEf, Number.parseInt(fields[12], 10));
+    }
+  });
+
+  return byRegion;
+};
+
+const buildRegionTempColumns = (latestTmFc, now) => {
+  const today = formatKmaDay(now);
+  const tomorrow = formatKmaDay(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+  const fcDay = latestTmFc.slice(0, 8);
+  const fcHour = Number.parseInt(latestTmFc.slice(8, 10), 10);
+
+  // 5시 발표 전에는 오늘 최저/최고, 5시·11시 발표 후에는 오늘 최고와 내일
+  // 최저/최고, 17시 발표 후에는 내일 최저/최고를 보여준다.
+  if (fcDay < today || fcHour < 5) {
+    return [
+      { key: `${today}0000`, label: '오늘 최저' },
+      { key: `${today}1200`, label: '오늘 최고' },
+    ];
+  }
+
+  if (fcHour < 17) {
+    return [
+      { key: `${today}1200`, label: '오늘 최고' },
+      { key: `${tomorrow}0000`, label: '내일 최저' },
+      { key: `${tomorrow}1200`, label: '내일 최고' },
+    ];
+  }
+
+  return [
+    { key: `${tomorrow}0000`, label: '내일 최저' },
+    { key: `${tomorrow}1200`, label: '내일 최고' },
+  ];
+};
+
+const formatForecastIssueLabel = (tmFc) => {
+  if (!tmFc || tmFc.length < 10) {
+    return '';
+  }
+
+  const month = Number.parseInt(tmFc.slice(4, 6), 10);
+  const day = Number.parseInt(tmFc.slice(6, 8), 10);
+  const hour = Number.parseInt(tmFc.slice(8, 10), 10);
+  return `${month}월 ${day}일 ${hour}시 발표`;
+};
+
+const resolveRegionTempTargets = async (regionId) => {
+  const filter = REGION_TEMP_ZONE_FILTERS[regionId];
+  if (!filter) {
+    return NATIONAL_TEMP_CITIES;
+  }
+
+  const zones = await fetchForecastCityZones();
+  const availableZones = zones.filter((zone) => !REGION_TEMP_EXCLUDED_ZONE_IDS.has(zone.id));
+
+  if (filter.ids) {
+    return filter.ids
+      .map((zoneId) => availableZones.find((zone) => zone.id === zoneId))
+      .filter(Boolean);
+  }
+
+  return availableZones.filter(
+    (zone) =>
+      filter.prefixes.some((prefix) => zone.id.startsWith(prefix)) &&
+      !(filter.excludeIds ?? []).includes(zone.id),
+  );
+};
+
+export const fetchRegionTemperatureForecast = async (regionId, options = {}) => {
+  const { refreshToken = '' } = options;
+
+  return withDataCache(`region-temp-forecast-${regionId}`, TTL.doc, async () => {
+    const [rawText, targets] = await Promise.all([
+      fetchKmaText('api/typ01/url/fct_afs_dl.php', { reg: '', tmfc: 0, disp: 0, help: 0 }, {
+        ttlMs: TTL.doc,
+        cacheKey: 'land-forecast-latest',
+        timeoutMs: 15000,
+        refreshToken,
+      }),
+      resolveRegionTempTargets(regionId),
+    ]);
+
+    const byRegion = parseLandForecastTemps(rawText);
+    const latestTmFc = targets.reduce((latest, { id }) => {
+      const tmFc = byRegion.get(id)?.tmFc ?? '';
+      return tmFc > latest ? tmFc : latest;
+    }, '');
+
+    if (!latestTmFc) {
+      throw new Error('지역별 기온 예보 데이터를 불러오지 못했습니다.');
+    }
+
+    const columns = buildRegionTempColumns(latestTmFc, new Date());
+    const rows = targets
+      .map(({ id, name }) => {
+        const temps = byRegion.get(id)?.temps;
+        return {
+          id,
+          name,
+          values: columns.map(({ key }) => {
+            const ta = temps?.get(key);
+            return Number.isFinite(ta) && ta > -90 ? `${ta}°` : '-';
+          }),
+        };
+      })
+      .filter((row) => row.values.some((value) => value !== '-'));
+
+    return {
+      issuedLabel: formatForecastIssueLabel(latestTmFc),
+      columns: columns.map(({ label }) => label),
+      rows,
+    };
+  }, { refreshToken });
+};
+
 const buildForecastDocCandidates = (now) =>
   [0, 1, 2]
     .flatMap((dayOffset) => {

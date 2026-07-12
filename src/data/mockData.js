@@ -53,6 +53,7 @@ export const SUB_MENUS = {
   forecast: [
     { id: 'doc', label: '통보문' },
     { id: 'commentary', label: '날씨해설' },
+    { id: 'region_temp', label: '지역별 기온' },
   ],
   warning: [
     { id: 'current', label: '현재 특보' },

@@ -3,11 +3,13 @@ import Header from './components/Header';
 import Navigation from './components/Navigation';
 import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
+import RegionTempTable from './components/RegionTempTable';
 import SubMenu from './components/SubMenu';
 import ObservationTimeSelector from './components/ObservationTimeSelector';
 import {
   fetchWeatherCommentary,
   fetchWeatherDoc,
+  fetchRegionTemperatureForecast,
   fetchWeatherWarnings,
   getWarningImageUrl,
   fetchWarningImageUrls,
@@ -93,6 +95,7 @@ function App() {
   const [selectedSubMenu, setSelectedSubMenu] = useState(SUB_MENUS.forecast[0].id);
   const [apiData, setApiData] = useState([]);
   const [docApiData, setDocApiData] = useState([]);
+  const [regionTempData, setRegionTempData] = useState(null);
   const [warningApiData, setWarningApiData] = useState({ current: [], preliminary: [] });
   const [warningImageUrls, setWarningImageUrls] = useState({ current: '', preliminary: '' });
   const [snowApiData, setSnowApiData] = useState({ tot: [], day: [] });
@@ -235,9 +238,10 @@ function App() {
   useEffect(() => {
     const isCommentary = selectedTab === 'forecast' && selectedSubMenu === 'commentary';
     const isDoc = selectedTab === 'forecast' && selectedSubMenu === 'doc';
+    const isRegionTemp = selectedTab === 'forecast' && selectedSubMenu === 'region_temp';
     const isWarning = selectedTab === 'warning';
 
-    if (!isCommentary && !isDoc && !isWarning) {
+    if (!isCommentary && !isDoc && !isRegionTemp && !isWarning) {
       return undefined;
     }
 
@@ -258,6 +262,11 @@ function App() {
           const data = await fetchWeatherDoc(selectedRegion, refreshOptions);
           if (isActive) {
             setDocApiData(data);
+          }
+        } else if (isRegionTemp) {
+          const data = await fetchRegionTemperatureForecast(selectedRegion, refreshOptions);
+          if (isActive) {
+            setRegionTempData(data);
           }
         } else if (isWarning) {
           const [data, imageUrls] = await Promise.all([
@@ -653,6 +662,27 @@ function App() {
             renderEmptyState(apiError || EMPTY_STATE_MESSAGE.snow)
           )}
         </section>
+      );
+    }
+
+    if (selectedTab === 'forecast' && selectedSubMenu === 'region_temp') {
+      if (isLoading) {
+        return renderEmptyState('지역별 기온 예보를 불러오는 중입니다.');
+      }
+
+      return regionTempData?.rows?.length ? (
+        <RegionTempTable
+          title="지역별 기온"
+          subtitle={
+            regionTempData.issuedLabel
+              ? `기상청 단기예보 기준입니다. ${regionTempData.issuedLabel}`
+              : '기상청 단기예보 기준입니다.'
+          }
+          columns={regionTempData.columns}
+          rows={regionTempData.rows}
+        />
+      ) : (
+        renderEmptyState(apiError || '지역별 기온 예보 데이터가 없습니다.')
       );
     }
 
