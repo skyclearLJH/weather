@@ -1286,29 +1286,182 @@ const buildRegionTempColumns = (latestTmFc, now) => {
   const tomorrow = formatKmaDay(new Date(now.getTime() + 24 * 60 * 60 * 1000));
   const fcDay = latestTmFc.slice(0, 8);
   const fcHour = Number.parseInt(latestTmFc.slice(8, 10), 10);
+  const todayMin = { key: `${today}0000`, label: '오늘 최저', date: today, metric: 'min', prevLabel: '어제' };
+  const todayMax = { key: `${today}1200`, label: '오늘 최고', date: today, metric: 'max', prevLabel: '어제' };
+  const tomorrowMin = { key: `${tomorrow}0000`, label: '내일 최저', date: tomorrow, metric: 'min', prevLabel: '오늘' };
+  const tomorrowMax = { key: `${tomorrow}1200`, label: '내일 최고', date: tomorrow, metric: 'max', prevLabel: '오늘' };
 
   // 5시 발표 전에는 오늘 최저/최고, 5시·11시 발표 후에는 오늘 최고와 내일
   // 최저/최고, 17시 발표 후에는 내일 최저/최고를 보여준다.
   if (fcDay < today || fcHour < 5) {
-    return [
-      { key: `${today}0000`, label: '오늘 최저' },
-      { key: `${today}1200`, label: '오늘 최고' },
-    ];
+    return [todayMin, todayMax];
   }
 
   if (fcHour < 17) {
-    return [
-      { key: `${today}1200`, label: '오늘 최고' },
-      { key: `${tomorrow}0000`, label: '내일 최저' },
-      { key: `${tomorrow}1200`, label: '내일 최고' },
-    ];
+    return [todayMax, tomorrowMin, tomorrowMax];
   }
 
-  return [
-    { key: `${tomorrow}0000`, label: '내일 최저' },
-    { key: `${tomorrow}1200`, label: '내일 최고' },
-  ];
+  return [tomorrowMin, tomorrowMax];
 };
+
+// 예보구역코드 앞자리 → 관측지점 주소로 지점명 중복(예: 강원/경남 고성)을 가려낸다.
+const ZONE_PREFIX_ADDRESS_KEYWORDS = [
+  { prefix: '21F1', keywords: ['전북'] },
+  { prefix: '21F2', keywords: ['전남'] },
+  { prefix: '11C1', keywords: ['충청북도', '충북'] },
+  { prefix: '11C2', keywords: ['대전', '세종', '충청남도', '충남'] },
+  { prefix: '11F1', keywords: ['전북'] },
+  { prefix: '11F2', keywords: ['전남', '광주'] },
+  { prefix: '11H1', keywords: ['대구', '경상북도', '경북'] },
+  { prefix: '11H2', keywords: ['부산', '울산', '경상남도', '경남'] },
+  { prefix: '11A', keywords: ['인천'] },
+  { prefix: '11B', keywords: ['서울', '인천', '경기'] },
+  { prefix: '11D', keywords: ['강원'] },
+  { prefix: '11E', keywords: ['경상북도', '경북'] },
+  { prefix: '11G', keywords: ['제주'] },
+];
+
+const buildStationNameIndex = (stationMetadata) => {
+  const idsByName = new Map();
+  stationMetadata.forEach(({ name }, stationId) => {
+    if (!name) {
+      return;
+    }
+    if (!idsByName.has(name)) {
+      idsByName.set(name, []);
+    }
+    idsByName.get(name).push(stationId);
+  });
+
+  // 지점번호가 작은 쪽(종관관측소)을 우선한다. 평년값은 종관관측소만 제공된다.
+  idsByName.forEach((ids) => ids.sort((left, right) => Number(left) - Number(right)));
+  return idsByName;
+};
+
+// 같은 이름의 지점이 여러 개면 권역이 맞는 지점들만 남긴다. 관측소 이전 등으로
+// 평년값과 관측값이 서로 다른 지점번호에 있을 수 있어 후보 전체를 돌려준다.
+const resolveZoneStationIds = (zoneId, zoneName, idsByName, stationMetadata) => {
+  const candidates = idsByName.get(zoneName) ?? [];
+  if (candidates.length <= 1) {
+    return candidates;
+  }
+
+  const rule = ZONE_PREFIX_ADDRESS_KEYWORDS.find(({ prefix }) => zoneId.startsWith(prefix));
+  if (!rule) {
+    return candidates;
+  }
+
+  const matched = candidates.filter((stationId) => {
+    const address = stationMetadata.get(stationId)?.address ?? '';
+    return rule.keywords.some((keyword) => address.includes(keyword));
+  });
+
+  return matched.length > 0 ? matched : candidates;
+};
+
+// 평년값(1991~2020)을 지점별로 파싱한다. CSV 형태: ST,STN,MM,DD,TA,TA_MAX,TA_MIN,...
+const parseDailyNormals = (rawText) => {
+  const byStation = new Map();
+
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const fields = trimmed.split(',').map((item) => item.trim());
+    if (fields.length < 7) {
+      return;
+    }
+
+    const stationId = fields[1];
+    const max = parseNumericValue(fields[5]);
+    const min = parseNumericValue(fields[6]);
+    byStation.set(stationId, {
+      min: Number.isFinite(min) && min > -90 ? min : null,
+      max: Number.isFinite(max) && max > -90 ? max : null,
+    });
+  });
+
+  return byStation;
+};
+
+const fetchDailyNormalsByPeriod = async (day, tmst) => {
+  const month = Number.parseInt(day.slice(4, 6), 10);
+  const date = Number.parseInt(day.slice(6, 8), 10);
+  const rawText = await fetchKmaText('api/typ01/url/sfc_norm1.php', {
+    norm: 'D',
+    tmst,
+    stn: 0,
+    MM1: month,
+    DD1: date,
+    MM2: month,
+    DD2: date,
+  }, {
+    ttlMs: TTL.stationInfo,
+    cacheKey: `daily-normals-${tmst}-${day.slice(4)}`,
+    timeoutMs: 9000,
+  });
+
+  return parseDailyNormals(rawText);
+};
+
+// 신평년(1991~2020)을 우선 쓰되, 관측소 이전으로 신평년이 없는 지점(대구,
+// 전주 등)은 구평년(1981~2010)으로 보완한다.
+const fetchDailyNormals = async (day) => {
+  const [current, legacy] = await Promise.all([
+    fetchDailyNormalsByPeriod(day, 2021),
+    fetchDailyNormalsByPeriod(day, 2011).catch(() => new Map()),
+  ]);
+
+  const merged = new Map(legacy);
+  current.forEach((value, stationId) => {
+    merged.set(stationId, value);
+  });
+  return merged;
+};
+
+const parseDailyObservedTemps = (rawText) => {
+  const byStation = new Map();
+
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const fields = trimmed.split(/\s+/);
+    if (fields.length < 6) {
+      return;
+    }
+
+    const value = parseNumericValue(fields[5]);
+    if (Number.isFinite(value) && value > -90) {
+      byStation.set(fields[1], value);
+    }
+  });
+
+  return byStation;
+};
+
+const fetchDailyObservedTemps = async (day, metric, isToday, refreshToken) => {
+  const rawText = await fetchKmaText('api/typ01/url/sfc_aws_day.php', {
+    tm2: day,
+    obs: metric === 'min' ? 'ta_min' : 'ta_max',
+    stn: 0,
+    disp: 0,
+    help: 0,
+  }, {
+    ttlMs: isToday ? TTL.awsDaily : TTL.stationInfo,
+    cacheKey: `daily-observed-${metric}-${day}`,
+    timeoutMs: 20000,
+    refreshToken: isToday ? refreshToken : '',
+  });
+
+  return parseDailyObservedTemps(rawText);
+};
+
+const roundTempDiff = (value) => Math.round(value * 10) / 10;
 
 const formatForecastIssueLabel = (tmFc) => {
   if (!tmFc || tmFc.length < 10) {
@@ -1367,20 +1520,99 @@ export const fetchRegionTemperatureForecast = async (regionId, options = {}) => 
       throw new Error('지역별 기온 예보 데이터를 불러오지 못했습니다.');
     }
 
-    const columns = buildRegionTempColumns(latestTmFc, new Date());
+    const now = new Date();
+    const today = formatKmaDay(now);
+    const yesterday = formatKmaDay(subtractDays(now, 1));
+    const columns = buildRegionTempColumns(latestTmFc, now);
+
+    // 평년값·전날 관측값은 비교용 부가 정보라 실패해도 기온 표는 그대로 낸다.
+    const columnDates = [...new Set(columns.map(({ date }) => date))];
+    const prevDates = [...new Set(columns.map(({ date }) => (date === today ? yesterday : today)))];
+    const [stationMetadata, normalsByDate, observedByDay] = await Promise.all([
+      fetchAwsStationMetadata().catch(() => null),
+      Promise.all(
+        columnDates.map(async (date) => [date, await fetchDailyNormals(date).catch(() => null)]),
+      ).then((entries) => new Map(entries)),
+      Promise.all(
+        prevDates.flatMap((day) =>
+          ['min', 'max'].map(async (metric) => [
+            `${day}-${metric}`,
+            await fetchDailyObservedTemps(day, metric, day === today, refreshToken).catch(() => null),
+          ]),
+        ),
+      ).then((entries) => new Map(entries)),
+    ]);
+
+    const idsByName = stationMetadata ? buildStationNameIndex(stationMetadata) : null;
+
+    const buildComparisons = (zoneId, zoneName, column, forecastTa, temps) => {
+      if (!idsByName) {
+        return [];
+      }
+
+      const stationIds = resolveZoneStationIds(zoneId, zoneName, idsByName, stationMetadata);
+      if (stationIds.length === 0) {
+        return [];
+      }
+
+      const firstFinite = (values) => values.find((value) => Number.isFinite(value)) ?? null;
+      const readObserved = (day, metric) =>
+        firstFinite(stationIds.map((id) => observedByDay.get(`${day}-${metric}`)?.get(id)));
+
+      const comparisons = [];
+      const normal = firstFinite(
+        stationIds.map((id) => normalsByDate.get(column.date)?.get(id)?.[column.metric]),
+      );
+      if (Number.isFinite(normal)) {
+        comparisons.push({ label: '평년', diff: roundTempDiff(forecastTa - normal) });
+      }
+
+      // 내일 최고의 비교 대상인 오늘 최고는 아직 관측이 끝나지 않았을 수
+      // 있으므로, 같은 발표문의 오늘 최고 예보값을 우선 사용한다.
+      const prevDay = column.date === today ? yesterday : today;
+      let prevValue = null;
+      if (column.metric === 'max' && prevDay === today) {
+        const bulletinTodayMax = temps?.get(`${today}1200`);
+        prevValue =
+          Number.isFinite(bulletinTodayMax) && bulletinTodayMax > -90
+            ? bulletinTodayMax
+            : readObserved(prevDay, 'max');
+      } else {
+        prevValue = readObserved(prevDay, column.metric);
+        if (!Number.isFinite(prevValue) && column.metric === 'min' && prevDay === today) {
+          const bulletinTodayMin = temps?.get(`${today}0000`);
+          prevValue =
+            Number.isFinite(bulletinTodayMin) && bulletinTodayMin > -90 ? bulletinTodayMin : null;
+        }
+      }
+
+      if (Number.isFinite(prevValue)) {
+        comparisons.push({ label: column.prevLabel, diff: roundTempDiff(forecastTa - prevValue) });
+      }
+
+      return comparisons;
+    };
+
     const rows = targets
       .map(({ id, name }) => {
         const temps = byRegion.get(id)?.temps;
         return {
           id,
           name,
-          values: columns.map(({ key }) => {
-            const ta = temps?.get(key);
-            return Number.isFinite(ta) && ta > -90 ? `${ta}°` : '-';
+          cells: columns.map((column) => {
+            const ta = temps?.get(column.key);
+            if (!Number.isFinite(ta) || ta <= -90) {
+              return { value: '-', comparisons: [] };
+            }
+
+            return {
+              value: `${ta}°`,
+              comparisons: buildComparisons(id, name, column, ta, temps),
+            };
           }),
         };
       })
-      .filter((row) => row.values.some((value) => value !== '-'));
+      .filter((row) => row.cells.some((cell) => cell.value !== '-'));
 
     return {
       issuedLabel: formatForecastIssueLabel(latestTmFc),

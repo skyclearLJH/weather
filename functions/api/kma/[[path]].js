@@ -17,7 +17,8 @@ const getCacheTtl = (pathname, searchParams) => {
     pathname.includes('/stn_snow.php') ||
     pathname.includes('/stn_inf.php') ||
     pathname.includes('/wrn_reg.php') ||
-    pathname.includes('/fct_shrt_reg.php')
+    pathname.includes('/fct_shrt_reg.php') ||
+    pathname.includes('/sfc_norm1.php')
   ) {
     return 86400;
   }
