@@ -14,6 +14,26 @@ const normalizeForecastDocContent = (content = '') =>
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
+const WarningRegionList = ({ regions }) => (
+  <div className="mt-4 divide-y divide-slate-100 border-y border-slate-100">
+    {regions.map((region) => (
+      <div key={region.id} className="py-2.5 sm:flex sm:items-start sm:gap-4">
+        <p className="min-w-0 flex-1 text-sm leading-relaxed text-slate-700 sm:text-base">
+          <span className="font-semibold text-slate-900">• {region.name}</span>
+          {region.details?.length > 0 && (
+            <span> ({region.details.join(', ')})</span>
+          )}
+        </p>
+        {region.countLabel && (
+          <span className="mt-1 inline-flex shrink-0 whitespace-nowrap text-xs font-semibold text-slate-500 sm:mt-0 sm:text-sm">
+            {region.countLabel}
+          </span>
+        )}
+      </div>
+    ))}
+  </div>
+);
+
 const ForecastCard = ({ data, type, variant = type, isLoading, error }) => {
   const Icon = type === 'warning' ? AlertTriangle : Info;
   const iconColor = type === 'warning' ? 'text-red-500' : 'text-blue-500';
@@ -83,16 +103,20 @@ const ForecastCard = ({ data, type, variant = type, isLoading, error }) => {
               </div>
             </div>
 
-            <div
-              className="mt-4 overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
-              style={{
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                lineHeight: '1.6',
-              }}
-            >
-              {variant === 'doc' ? normalizeForecastDocContent(item.content) : item.content}
-            </div>
+            {variant === 'warning' && item.regions?.length > 0 ? (
+              <WarningRegionList regions={item.regions} />
+            ) : (
+              <div
+                className="mt-4 overflow-visible whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700 sm:text-base"
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  lineHeight: '1.6',
+                }}
+              >
+                {variant === 'doc' ? normalizeForecastDocContent(item.content) : item.content}
+              </div>
+            )}
           </div>
         </div>
       ))}

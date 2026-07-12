@@ -834,6 +834,17 @@ const KNOWN_LAND_BROAD_REGIONS = new Set([
 const WARNING_SPECIAL_CITY_ORDER = ['서울'];
 const WARNING_METROPOLITAN_CITY_ORDER = ['인천', '대전', '세종', '전남광주', '대구', '부산', '울산'];
 const WARNING_PROVINCE_ORDER = ['경기', '강원', '충북', '충남', '전북', '경북', '경남', '제주'];
+const WARNING_CITY_COUNT_BROAD_REGIONS = new Set([
+  '경기',
+  '강원',
+  '충북',
+  '충남',
+  '전북',
+  '전남광주',
+  '경북',
+  '경남',
+  '제주',
+]);
 const WARNING_SELECTED_BROAD_REGION_ORDER = [
   ...WARNING_SPECIAL_CITY_ORDER,
   ...WARNING_METROPOLITAN_CITY_ORDER,
@@ -1034,6 +1045,38 @@ const sortWarningBroadRegionEntries = (entries, regionId) => {
     .map((item) => item.entry);
 };
 
+const normalizeWarningCityCountyName = (detail = '', broadRegion = '') => {
+  const normalizedDetail = detail.replace(/\s+/g, '').replace(/\([^)]*\)/g, '');
+  if (!normalizedDetail) {
+    return '';
+  }
+
+  if (broadRegion === '전남광주' && normalizedDetail.startsWith('광주')) {
+    return '광주';
+  }
+
+  const cityCountyMatch = normalizedDetail.match(/^(.+?(?:시|군))/);
+  return cityCountyMatch?.[1] ?? '';
+};
+
+const getWarningCityCountyCount = (broadRegion, detailEntries, regionIndex) => {
+  if (!WARNING_CITY_COUNT_BROAD_REGIONS.has(broadRegion)) {
+    return 0;
+  }
+
+  const names = new Set();
+
+  detailEntries.forEach((detail, key) => {
+    const groupedName = key.startsWith('L') ? regionIndex?.cityGroupNameByMemberId?.get(key) : '';
+    const countName = normalizeWarningCityCountyName(groupedName || detail, broadRegion);
+    if (countName) {
+      names.add(countName);
+    }
+  });
+
+  return names.size;
+};
+
 const getRegionParenthesisSeparator = () => ' ';
 
 // 행정구역상 같은 시군이지만 기상청 특보구역 계층에서는 분리되어 있는 섬 구역들.
@@ -1146,7 +1189,16 @@ const buildWarningRegionIndex = (zones) => {
   // 더 넓은 축약이 우선되도록 한다.
   cityGroups.sort((left, right) => right.memberIds.size - left.memberIds.size);
 
-  return { broadLeafIds, cityGroups };
+  const cityGroupNameByMemberId = new Map();
+  cityGroups.forEach((group) => {
+    group.memberIds.forEach((id) => {
+      if (!cityGroupNameByMemberId.has(id)) {
+        cityGroupNameByMemberId.set(id, group.name);
+      }
+    });
+  });
+
+  return { broadLeafIds, cityGroups, cityGroupNameByMemberId };
 };
 
 let warningRegionIndexPromise = null;
@@ -2014,30 +2066,40 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
     });
 
     const formatOutput = (map) =>
-      [...map.entries()].map(([typeName, broadMap], index) => ({
-        id: `${typeName}-${index}-${Date.now()}`,
-        type: typeName,
-        time: '',
-        content: sortWarningBroadRegionEntries([...broadMap.entries()], regionId)
+      [...map.entries()].map(([typeName, broadMap], index) => {
+        const regions = sortWarningBroadRegionEntries([...broadMap.entries()], regionId)
           .map(([broadRegion, detailEntries]) => {
             const { isEntireBroadRegion, details } = collapseWarningRegionDetails(
               broadRegion,
               detailEntries,
               regionIndex,
             );
-            // 전 지역 발령이면 권역명만 남긴다. 일부 권역 발령은 괄호로 나열한다.
-            if (isEntireBroadRegion) {
-              return `• ${broadRegion}`;
-            }
-
-            const sortedDetails = sortDetailsForDisplay(broadRegion, details);
+            const sortedDetails = isEntireBroadRegion ? [] : sortDetailsForDisplay(broadRegion, details);
             const separator = getRegionParenthesisSeparator(broadRegion);
-            return sortedDetails.length > 0
-              ? `• ${broadRegion}${separator}(${sortedDetails.join(', ')})`
-              : `• ${broadRegion}`;
-          })
-          .join('\n'),
-      }));
+            const text =
+              sortedDetails.length > 0
+                ? `• ${broadRegion}${separator}(${sortedDetails.join(', ')})`
+                : `• ${broadRegion}`;
+            const cityCountyCount = getWarningCityCountyCount(broadRegion, detailEntries, regionIndex);
+
+            return {
+              id: broadRegion,
+              name: broadRegion,
+              details: sortedDetails,
+              isEntireBroadRegion,
+              text,
+              countLabel: cityCountyCount > 0 ? `${cityCountyCount}개 시군` : '',
+            };
+          });
+
+        return {
+          id: `${typeName}-${index}-${Date.now()}`,
+          type: typeName,
+          time: '',
+          regions,
+          content: regions.map((region) => region.text).join('\n'),
+        };
+      });
 
     return {
       current: formatOutput(currentMap),
