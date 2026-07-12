@@ -1145,7 +1145,7 @@ const collapseWarningRegionDetails = (broadRegion, detailEntries, regionIndex) =
 
     const firstKey = [...detailEntries.keys()].find((key) => group.memberIds.has(key));
     memberIds.forEach((id) => consumed.add(id));
-    labelByEntryKey.set(firstKey, `${group.name}(전 지역)`);
+    labelByEntryKey.set(firstKey, group.name);
   });
 
   if (labelByEntryKey.size === 0) {
@@ -1487,8 +1487,9 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
               detailEntries,
               regionIndex,
             );
+            // 전 지역 발령이면 권역명만 남긴다. 일부 권역 발령은 괄호로 나열한다.
             if (isEntireBroadRegion) {
-              return `• ${broadRegion} (전 지역)`;
+              return `• ${broadRegion}`;
             }
 
             const sortedDetails = sortDetailsForDisplay(broadRegion, details);
