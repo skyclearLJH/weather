@@ -1098,6 +1098,15 @@ const getWarningCityCountyCount = (broadRegion, detailEntries, regionIndex) => {
 
 const getRegionParenthesisSeparator = () => ' ';
 
+// 광주광역시 명칭이 행정구역 개편으로 사라져, 특보 목록에서 옛 광주 전역으로
+// 축약된 표시명은 관할 구 이름으로 풀어서 표기한다. 시군 수 계산과 정렬은
+// 축약명(광주광역시) 기준을 그대로 쓰므로 표시 직전에만 치환한다.
+const GWANGJU_METRO_COLLAPSED_DETAIL = '광주광역시';
+const GWANGJU_DISTRICT_DETAILS = ['동구', '서구', '남구', '북구', '광산구'];
+
+const expandGwangjuMetroDetail = (detail) =>
+  detail === GWANGJU_METRO_COLLAPSED_DETAIL ? GWANGJU_DISTRICT_DETAILS : [detail];
+
 // 행정구역상 같은 시군이지만 기상청 특보구역 계층에서는 분리되어 있는 섬 구역들.
 // 구성 구역이 모두 발령되면 시군명(전 지역)으로 축약한다.
 const WARNING_CITY_UNION_RULES = [
@@ -2090,7 +2099,9 @@ export const fetchWeatherWarnings = async (regionId, options = {}) => {
               detailEntries,
               regionIndex,
             );
-            const sortedDetails = isEntireBroadRegion ? [] : sortDetailsForDisplay(broadRegion, details);
+            const sortedDetails = isEntireBroadRegion
+              ? []
+              : sortDetailsForDisplay(broadRegion, details).flatMap(expandGwangjuMetroDetail);
             const separator = getRegionParenthesisSeparator(broadRegion);
             const text =
               sortedDetails.length > 0
