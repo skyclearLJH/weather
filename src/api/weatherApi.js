@@ -1520,7 +1520,7 @@ const fetchDailyNormalsByPeriod = async (day, tmst) => {
   }, {
     ttlMs: TTL.stationInfo,
     cacheKey: `daily-normals-${tmst}-${day.slice(4)}`,
-    timeoutMs: 9000,
+    timeoutMs: 20000,
   });
 
   return parseDailyNormals(rawText);
@@ -1669,6 +1669,7 @@ export const fetchRegionTemperatureForecast = async (regionId, options = {}) => 
     const today = formatKmaDay(now);
     const yesterday = formatKmaDay(subtractDays(now, 1));
     const columns = buildRegionTempColumns(latestTmFc, now);
+    const isEveningBulletin = Number.parseInt(latestTmFc.slice(8, 10), 10) >= 17;
 
     // 평년값·전날 관측값은 비교용 부가 정보라 실패해도 기온 표는 그대로 낸다.
     const columnDates = [...new Set(columns.map(({ date }) => date))];
@@ -1712,16 +1713,12 @@ export const fetchRegionTemperatureForecast = async (regionId, options = {}) => 
         comparisons.push({ label: '평년', diff: roundTempDiff(forecastTa - normal) });
       }
 
-      // 내일 최고의 비교 대상인 오늘 최고는 아직 관측이 끝나지 않았을 수
-      // 있으므로, 같은 발표문의 오늘 최고 예보값을 우선 사용한다.
+      // 내일 최고의 비교 대상인 오늘 최고는 17시 발표 전에는 관측이 끝나지
+      // 않았으므로 평년 대비만 보여주고, 17시 발표 후에만 관측값과 비교한다.
       const prevDay = column.date === today ? yesterday : today;
       let prevValue = null;
       if (column.metric === 'max' && prevDay === today) {
-        const bulletinTodayMax = temps?.get(`${today}1200`);
-        prevValue =
-          Number.isFinite(bulletinTodayMax) && bulletinTodayMax > -90
-            ? bulletinTodayMax
-            : readObserved(prevDay, 'max');
+        prevValue = isEveningBulletin ? readObserved(prevDay, 'max') : null;
       } else {
         prevValue = readObserved(prevDay, column.metric);
         if (!Number.isFinite(prevValue) && column.metric === 'min' && prevDay === today) {
