@@ -35,13 +35,14 @@ const Header = ({ selectedRegion, onChangeRegion, onRefresh, lastUpdatedAt, isRe
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <label className="relative flex min-w-[180px] items-center rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm shadow-sm">
-              <span className="mr-2 shrink-0 text-slate-500">지역</span>
+          {/* 모바일에서는 한 줄에 담기도록 부가 라벨을 숨기고 압축한다. */}
+          <div className="flex flex-row items-center gap-2 sm:gap-3">
+            <label className="relative flex min-w-0 flex-1 items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm shadow-sm sm:flex-none sm:min-w-[180px] sm:px-4">
+              <span className="mr-2 hidden shrink-0 text-slate-500 sm:inline">지역</span>
               <select
                 value={selectedRegion}
                 onChange={(event) => onChangeRegion(event.target.value)}
-                className="w-full appearance-none bg-transparent pr-7 font-semibold text-slate-800 outline-none"
+                className="w-full appearance-none bg-transparent pr-6 font-semibold text-slate-800 outline-none sm:pr-7"
               >
                 {REGIONS.map((region) => (
                   <option key={region.id} value={region.id}>
@@ -49,23 +50,26 @@ const Header = ({ selectedRegion, onChangeRegion, onRefresh, lastUpdatedAt, isRe
                   </option>
                 ))}
               </select>
-              <ChevronDown size={16} className="pointer-events-none absolute right-4 text-slate-500" />
+              <ChevronDown size={16} className="pointer-events-none absolute right-3 text-slate-500 sm:right-4" />
             </label>
 
             <button
               type="button"
               onClick={onRefresh}
-              className="inline-flex items-center justify-center gap-2 rounded-full bg-[#0033a0] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#00257a] disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-[#0033a0] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#00257a] disabled:cursor-not-allowed disabled:opacity-70 sm:px-4"
               disabled={isRefreshing}
+              aria-label="새로고침"
             >
               <RefreshCcw size={16} className={isRefreshing ? 'animate-spin' : ''} />
-              새로고침
+              <span className="hidden sm:inline">새로고침</span>
             </button>
 
-            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm">
-              <Clock3 size={16} className="text-[#0033a0]" />
-              <span className="font-medium">업데이트 시각</span>
-              <span className="font-semibold text-slate-900">{formatUpdatedAt(lastUpdatedAt)}</span>
+            <div className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm sm:gap-2 sm:px-4 sm:text-sm">
+              <Clock3 size={16} className="shrink-0 text-[#0033a0]" />
+              <span className="hidden font-medium lg:inline">업데이트 시각</span>
+              <span className="whitespace-nowrap font-semibold tabular-nums text-slate-900">
+                {formatUpdatedAt(lastUpdatedAt)}
+              </span>
             </div>
           </div>
         </div>
