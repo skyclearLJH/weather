@@ -928,6 +928,8 @@ const LAND_BROAD_REGION_RULES = [
 
 const normalizeBroadRegionName = (value = '') =>
   value
+    .replace('강원특별자치도', '강원')
+    .replace('강원도', '강원')
     .replace('경상북도', '경북')
     .replace('경상남도', '경남')
     .replace('전북특별자치도', '전북')
@@ -941,9 +943,25 @@ const normalizeBroadRegionName = (value = '') =>
     .replace('광역시', '')
     .trim();
 
+const getAmbiguousGoseongBroadRegion = (normalizedValue = '') => {
+  if (/^강원.*고성군?/.test(normalizedValue) || /^고성군?(산지|평지)/.test(normalizedValue)) {
+    return '강원';
+  }
+
+  if (/^경남.*고성군?/.test(normalizedValue)) {
+    return '경남';
+  }
+
+  return '';
+};
+
 const getLandBroadRegionFromDetail = (value = '') => {
   const normalizedValue = normalizeBroadRegionName(value).replace(/\s+/g, '');
-  return LAND_BROAD_REGION_RULES.find((rule) => rule.pattern.test(normalizedValue))?.broad ?? '';
+  return (
+    getAmbiguousGoseongBroadRegion(normalizedValue) ||
+    LAND_BROAD_REGION_RULES.find((rule) => rule.pattern.test(normalizedValue))?.broad ||
+    ''
+  );
 };
 
 const getBroadRegion = (upperRegion, detailRegion) => {
@@ -988,7 +1006,7 @@ const formatDetailOcean = (value) =>
 const formatDetailLand = (value) =>
   value
     .replace(
-      /^(강원도|경기도|충청북도|충청남도|전라북도|전북특별자치도|전라남도|경상북도|경상남도|제주도|서울특별시|인천광역시|대전광역시|대구광역시|부산광역시|울산광역시|광주광역시|세종특별자치시)/,
+      /^(강원특별자치도|강원도|경기도|충청북도|충청남도|전라북도|전북특별자치도|전라남도|경상북도|경상남도|제주도|서울특별시|인천광역시|대전광역시|대구광역시|부산광역시|울산광역시|광주광역시|세종특별자치시)/,
       '',
     )
     .trim();
