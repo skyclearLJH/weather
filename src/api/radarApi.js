@@ -228,9 +228,10 @@ export const fetchQpfFrame = async (tm, efMinutes) => {
 };
 
 // 최신 자료 시각 탐색: 후보 시각을 최신부터 시도해 처음 성공하는 프레임을 쓴다.
-export const probeLatestRadarTm = async (now = new Date()) => {
+export const probeLatestRadarTm = async (now = new Date(), lookbackMinutes = 30) => {
   const base = floorToFiveMinutes(now);
-  for (let step = 0; step < 6; step++) {
+  const maxSteps = Math.floor(lookbackMinutes / 5) + 1;
+  for (let step = 0; step < maxSteps; step++) {
     const candidate = new Date(base.getTime() - step * 5 * 60 * 1000);
     const tm = formatRadarTm(candidate);
     try {

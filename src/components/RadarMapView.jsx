@@ -23,7 +23,13 @@ const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.3
 const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
 
-const OBS_FRAME_COUNT = 25; // 최신 포함 과거 2시간 (5분 간격)
+const OBS_HISTORY_HOURS = 6;
+const OBS_FRAME_INTERVAL_MINUTES = 5;
+const OBS_FRAME_COUNT = (OBS_HISTORY_HOURS * 60) / OBS_FRAME_INTERVAL_MINUTES + 1; // 최신 포함 과거 6시간
+const FRAME_CACHE_LIMIT = 48;
+const INITIAL_OBS_PREFETCH_COUNT = 18;
+const INITIAL_QPF_PREFETCH_COUNT = 18;
+const NEARBY_PREFETCH_RADIUS = 3;
 const QPF_EF_MINUTES = Array.from({ length: 36 }, (_, index) => (index + 1) * 10);
 const PLAY_INTERVAL_MS = 450;
 
@@ -319,10 +325,29 @@ const RadarMapView = () => {
     [refreshOverlaySource],
   );
 
+  const rememberFrameBuckets = useCallback((key, buckets) => {
+    const cache = frameCacheRef.current;
+    if (cache.has(key)) {
+      cache.delete(key);
+    }
+    cache.set(key, buckets);
+
+    while (cache.size > FRAME_CACHE_LIMIT) {
+      const oldestKey = cache.keys().next().value;
+      if (!oldestKey) {
+        break;
+      }
+      cache.delete(oldestKey);
+    }
+  }, []);
+
   const loadFrameData = useCallback((frameDef) => {
     const cache = frameCacheRef.current;
     if (cache.has(frameDef.key)) {
-      return Promise.resolve(cache.get(frameDef.key));
+      const cachedBuckets = cache.get(frameDef.key);
+      cache.delete(frameDef.key);
+      cache.set(frameDef.key, cachedBuckets);
+      return Promise.resolve(cachedBuckets);
     }
 
     const pending = pendingRef.current;
@@ -335,7 +360,7 @@ const RadarMapView = () => {
       : fetchQpfFrame(frameDef.tm, frameDef.ef)
     )
       .then((data) => {
-        cache.set(frameDef.key, data.buckets);
+        rememberFrameBuckets(frameDef.key, data.buckets);
         return data.buckets;
       })
       .finally(() => {
@@ -343,7 +368,7 @@ const RadarMapView = () => {
       });
     pending.set(frameDef.key, promise);
     return promise;
-  }, []);
+  }, [rememberFrameBuckets]);
 
   // 초기 로딩: 최신 실황·예측 시각을 찾아 타임라인 구성
   useEffect(() => {
@@ -352,7 +377,7 @@ const RadarMapView = () => {
     const initialize = async () => {
       try {
         const [radarLatest, qpfLatest] = await Promise.all([
-          probeLatestRadarTm(),
+          probeLatestRadarTm(new Date(), OBS_HISTORY_HOURS * 60),
           probeLatestQpfTm().catch(() => null),
         ]);
         if (!isActive) {
@@ -362,7 +387,7 @@ const RadarMapView = () => {
         const latestObsTime = parseRadarTm(radarLatest.tm);
         const observationFrames = [];
         for (let step = OBS_FRAME_COUNT - 1; step >= 0; step--) {
-          const time = new Date(latestObsTime.getTime() - step * 5 * 60 * 1000);
+          const time = new Date(latestObsTime.getTime() - step * OBS_FRAME_INTERVAL_MINUTES * 60 * 1000);
           const tm = `${time.getFullYear()}${String(time.getMonth() + 1).padStart(2, '0')}${String(time.getDate()).padStart(2, '0')}${String(time.getHours()).padStart(2, '0')}${String(time.getMinutes()).padStart(2, '0')}`;
           observationFrames.push({
             key: `obs-${tm}`,
@@ -389,9 +414,9 @@ const RadarMapView = () => {
           });
         }
 
-        frameCacheRef.current.set(`obs-${radarLatest.tm}`, radarLatest.frame.buckets);
+        rememberFrameBuckets(`obs-${radarLatest.tm}`, radarLatest.frame.buckets);
         if (qpfLatest) {
-          frameCacheRef.current.set(`fct-${qpfLatest.tm}-10`, qpfLatest.frame.buckets);
+          rememberFrameBuckets(`fct-${qpfLatest.tm}-10`, qpfLatest.frame.buckets);
         }
 
         const timeline = [...observationFrames, ...forecastFrames];
@@ -399,10 +424,10 @@ const RadarMapView = () => {
         setFrameIndex(observationFrames.length - 1);
         setStatus('ready');
 
-        // 나머지 프레임을 뒤에서 여유 있게 미리 받아 둔다.
+        // 6시간 전체를 한 번에 받으면 API와 브라우저 메모리에 부담이 커서 최신 주변부터 천천히 받는다.
         const prefetchQueue = [
-          ...[...observationFrames].reverse(),
-          ...forecastFrames,
+          ...[...observationFrames].reverse().slice(0, INITIAL_OBS_PREFETCH_COUNT),
+          ...forecastFrames.slice(0, INITIAL_QPF_PREFETCH_COUNT),
         ];
         let cursor = 0;
         const pump = () => {
@@ -414,10 +439,9 @@ const RadarMapView = () => {
           loadFrameData(frameDef)
             .catch(() => {})
             .finally(() => {
-              window.setTimeout(pump, 120);
+              window.setTimeout(pump, 300);
             });
         };
-        pump();
         pump();
       } catch (error) {
         if (isActive) {
@@ -431,7 +455,7 @@ const RadarMapView = () => {
     return () => {
       isActive = false;
     };
-  }, [loadFrameData]);
+  }, [loadFrameData, rememberFrameBuckets]);
 
   // 현재 프레임 렌더링
   useEffect(() => {
@@ -463,6 +487,32 @@ const RadarMapView = () => {
       });
   }, [frames, frameIndex, status, renderFrame, loadFrameData]);
 
+  // 슬라이더 이동 시 바로 앞뒤 프레임만 가볍게 미리 받아 과거 6시간 탐색을 부드럽게 한다.
+  useEffect(() => {
+    if (status !== 'ready' || frames.length === 0) {
+      return undefined;
+    }
+
+    const nearbyFrames = [];
+    for (let offset = 1; offset <= NEARBY_PREFETCH_RADIUS; offset++) {
+      [frameIndex - offset, frameIndex + offset].forEach((index) => {
+        if (index >= 0 && index < frames.length) {
+          nearbyFrames.push(frames[index]);
+        }
+      });
+    }
+
+    const timers = nearbyFrames.map((frameDef, index) =>
+      window.setTimeout(() => {
+        loadFrameData(frameDef).catch(() => {});
+      }, index * 180),
+    );
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [frames, frameIndex, loadFrameData, status]);
+
   // 재생
   useEffect(() => {
     if (!isPlaying || frames.length === 0) {
@@ -490,7 +540,7 @@ const RadarMapView = () => {
         <div>
           <h2 className="text-lg font-bold tracking-tight text-slate-900">레이더 · 초단기예측</h2>
           <div className="mt-1 text-sm text-slate-500">
-            기상청 레이더 강수 실황(5분)과 초단기 예측강수(10분, +6시간)입니다.
+            기상청 레이더 강수 실황(5분, 과거 6시간)과 초단기 예측강수(10분, +6시간)입니다.
           </div>
         </div>
         {currentFrame ? (
@@ -563,7 +613,7 @@ const RadarMapView = () => {
           />
         </div>
         <div className="flex items-center justify-between text-[11px] font-medium text-slate-400">
-          <span>◀ 관측 2시간 전</span>
+          <span>◀ 관측 6시간 전</span>
           <span className="text-slate-500">
             <span className="mr-3 inline-flex items-center gap-1">
               <span className="inline-block h-2 w-2 rounded-full bg-slate-500"></span>관측
