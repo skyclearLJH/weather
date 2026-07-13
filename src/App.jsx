@@ -527,7 +527,7 @@ function App() {
 
   const renderContent = () => {
     if (selectedTab === 'radar') {
-      return <RadarMapView />;
+      return <RadarMapView refreshToken={refreshTrigger} />;
     }
 
     if (selectedTab === 'minTemp') {

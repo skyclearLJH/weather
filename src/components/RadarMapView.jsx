@@ -236,7 +236,7 @@ const RadarLegend = () => (
   </div>
 );
 
-const RadarMapView = () => {
+const RadarMapView = ({ refreshToken = 0 }) => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const overlayCanvasRef = useRef(null);
@@ -443,11 +443,18 @@ const RadarMapView = () => {
     return promise;
   }, [rememberFrameBuckets]);
 
-  // 초기 로딩: 최신 실황·예측 시각을 찾아 타임라인 구성
+  // 초기 로딩 및 상단 새로고침(refreshToken 변경) 시 타임라인 재구성
   useEffect(() => {
     let isActive = true;
 
     const initialize = async () => {
+      if (refreshToken > 0) {
+        frameCacheRef.current.clear();
+        pendingRef.current.clear();
+        setIsPlaying(false);
+        setStatus('loading');
+      }
+
       try {
         const [radarLatest, qpfLatest] = await Promise.all([
           probeLatestRadarTm(new Date(), OBS_HISTORY_HOURS * 60),
@@ -528,7 +535,7 @@ const RadarMapView = () => {
     return () => {
       isActive = false;
     };
-  }, [loadFrameData, rememberFrameBuckets]);
+  }, [loadFrameData, rememberFrameBuckets, refreshToken]);
 
   // 현재 프레임 렌더링
   useEffect(() => {
