@@ -140,8 +140,10 @@ const buildPixelMappings = (width, height) => {
   return { radarMap, qpfMap };
 };
 
-const formatFrameLabel = (validTime) =>
-  `${validTime.getMonth() + 1}월 ${validTime.getDate()}일 ${String(validTime.getHours()).padStart(2, '0')}:${String(validTime.getMinutes()).padStart(2, '0')}`;
+const TIMELINE_RANGE_MINUTES = 360; // 관측 -6시간 ~ 예측 +6시간 (현재가 정중앙)
+
+const formatHourMinute = (validTime) =>
+  `${String(validTime.getHours()).padStart(2, '0')}:${String(validTime.getMinutes()).padStart(2, '0')}`;
 
 const LEGEND_SEGMENTS = [
   { key: 'blue', values: [0.1, 0.5, 1] },
@@ -592,14 +594,60 @@ const RadarMapView = () => {
   }, [isPlaying, frames.length]);
 
   const currentFrame = frames[frameIndex];
-  const obsCount = useMemo(() => frames.filter((frame) => frame.kind === 'obs').length, [frames]);
-  const sliderBackground = useMemo(() => {
-    if (frames.length < 2) {
-      return undefined;
+
+  // 타임라인은 프레임 개수가 아니라 시간에 비례한다. 기준(0분) = 최신 관측
+  // 시각이며, 관측 -6시간 ~ 예측 +6시간이라 '현재'가 정확히 가운데에 온다.
+  const baseTimeMs = useMemo(() => {
+    const latestObs = frames.filter((frame) => frame.kind === 'obs').at(-1);
+    return latestObs ? latestObs.validTime.getTime() : null;
+  }, [frames]);
+
+  const frameOffsets = useMemo(
+    () =>
+      baseTimeMs === null
+        ? []
+        : frames.map((frame) => Math.round((frame.validTime.getTime() - baseTimeMs) / 60000)),
+    [frames, baseTimeMs],
+  );
+
+  const currentOffset = frameOffsets[frameIndex] ?? 0;
+  const thumbPercent = ((currentOffset + TIMELINE_RANGE_MINUTES) / (TIMELINE_RANGE_MINUTES * 2)) * 100;
+
+  const handleTimelineChange = (offsetMinutes) => {
+    if (frameOffsets.length === 0) {
+      return;
     }
-    const boundary = ((obsCount - 0.5) / (frames.length - 1)) * 100;
-    return `linear-gradient(to right, #64748b ${boundary}%, #2563eb ${boundary}%)`;
-  }, [frames.length, obsCount]);
+    let nearestIndex = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    frameOffsets.forEach((offset, index) => {
+      const distance = Math.abs(offset - offsetMinutes);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+    setIsPlaying(false);
+    setFrameIndex(nearestIndex);
+  };
+
+  const timelineTicks = useMemo(() => {
+    if (baseTimeMs === null) {
+      return [];
+    }
+    return Array.from({ length: 13 }, (_, index) => {
+      const hourOffset = index - 6;
+      const position = (index / 12) * 100;
+      const isLabeled = hourOffset % 2 === 0;
+      let label = '';
+      if (isLabeled) {
+        label =
+          hourOffset === 0
+            ? '현재'
+            : formatHourMinute(new Date(baseTimeMs + hourOffset * 60 * 60 * 1000));
+      }
+      return { hourOffset, position, isLabeled, label };
+    });
+  }, [baseTimeMs]);
 
   return (
     <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -610,24 +658,8 @@ const RadarMapView = () => {
             기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
           </div>
         </div>
-        {currentFrame ? (
-          <div className="flex items-center gap-2">
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-bold ${
-                currentFrame.kind === 'obs'
-                  ? 'bg-slate-200 text-slate-700'
-                  : 'bg-blue-100 text-blue-700'
-              }`}
-            >
-              {currentFrame.kind === 'obs' ? '관측' : '예측'}
-            </span>
-            <span className="text-sm font-semibold tabular-nums text-slate-900">
-              {formatFrameLabel(currentFrame.validTime)}
-            </span>
-            {isFrameLoading ? (
-              <span className="text-xs font-medium text-slate-400">불러오는 중…</span>
-            ) : null}
-          </div>
+        {isFrameLoading ? (
+          <span className="text-xs font-medium text-slate-400">불러오는 중…</span>
         ) : null}
       </div>
 
@@ -665,31 +697,64 @@ const RadarMapView = () => {
               </svg>
             )}
           </button>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(frames.length - 1, 0)}
-            value={frameIndex}
-            onChange={(event) => {
-              setIsPlaying(false);
-              setFrameIndex(Number(event.target.value));
-            }}
-            disabled={status !== 'ready'}
-            className="h-2 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0]"
-            style={sliderBackground ? { background: sliderBackground } : undefined}
-          />
-        </div>
-        <div className="flex items-center justify-between text-[11px] font-medium text-slate-400">
-          <span>◀ 관측 6시간 전</span>
-          <span className="text-slate-500">
-            <span className="mr-3 inline-flex items-center gap-1">
-              <span className="inline-block h-2 w-2 rounded-full bg-slate-500"></span>관측
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="inline-block h-2 w-2 rounded-full bg-blue-600"></span>예측
-            </span>
-          </span>
-          <span>예측 +6시간 ▶</span>
+          <div className="relative min-w-0 flex-1 pt-8">
+            {currentFrame ? (
+              <div
+                className="pointer-events-none absolute top-0"
+                style={{ left: `${Math.min(Math.max(thumbPercent, 6), 94)}%` }}
+              >
+                <span
+                  className={`inline-block -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums text-white shadow-sm ${
+                    currentFrame.kind === 'obs' ? 'bg-slate-600' : 'bg-blue-600'
+                  }`}
+                >
+                  {currentFrame.kind === 'obs' ? '관측' : '예측'}{' '}
+                  {formatHourMinute(currentFrame.validTime)}
+                </span>
+              </div>
+            ) : null}
+            <input
+              type="range"
+              min={-TIMELINE_RANGE_MINUTES}
+              max={TIMELINE_RANGE_MINUTES}
+              step={5}
+              value={currentOffset}
+              onChange={(event) => handleTimelineChange(Number(event.target.value))}
+              disabled={status !== 'ready'}
+              className="h-2 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0]"
+              style={{ background: 'linear-gradient(to right, #64748b 50%, #2563eb 50%)' }}
+            />
+            <div className="relative mt-1 h-7">
+              {timelineTicks.map(({ hourOffset, position, isLabeled, label }) => (
+                <div
+                  key={hourOffset}
+                  className="absolute top-0"
+                  style={{ left: `${position}%` }}
+                >
+                  <div
+                    className={`mx-auto w-px -translate-x-1/2 ${
+                      isLabeled ? 'h-2 bg-slate-400' : 'h-1.5 bg-slate-300'
+                    }`}
+                  />
+                  {isLabeled ? (
+                    <div
+                      className={`mt-0.5 whitespace-nowrap text-[10px] font-medium tabular-nums ${
+                        hourOffset === 0 ? 'font-bold text-slate-700' : 'text-slate-400'
+                      } ${
+                        position <= 2
+                          ? ''
+                          : position >= 98
+                            ? '-translate-x-full'
+                            : '-translate-x-1/2'
+                      }`}
+                    >
+                      {label}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
         <div className="pb-3">
           <RadarLegend />
