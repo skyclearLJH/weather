@@ -250,7 +250,6 @@ const RadarMapView = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [statusMessage, setStatusMessage] = useState('');
-  const [isFrameLoading, setIsFrameLoading] = useState(false);
 
   const canvasHeight = useMemo(() => {
     const xSpan = VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin;
@@ -534,26 +533,13 @@ const RadarMapView = () => {
     }
 
     const token = ++renderTokenRef.current;
-    if (!frameCacheRef.current.has(frameDef.key)) {
-      queueMicrotask(() => {
-        if (renderTokenRef.current === token) {
-          setIsFrameLoading(true);
-        }
-      });
-    }
-
     loadFrameData(frameDef)
       .then((buckets) => {
         if (renderTokenRef.current === token) {
           renderFrame({ ...frameDef, buckets });
         }
       })
-      .catch(() => {})
-      .finally(() => {
-        if (renderTokenRef.current === token) {
-          setIsFrameLoading(false);
-        }
-      });
+      .catch(() => {});
   }, [frames, frameIndex, status, renderFrame, loadFrameData]);
 
   // 슬라이더 이동 시 바로 앞뒤 프레임만 가볍게 미리 받아 과거 6시간 탐색을 부드럽게 한다.
@@ -658,9 +644,6 @@ const RadarMapView = () => {
             기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
           </div>
         </div>
-        {isFrameLoading ? (
-          <span className="text-xs font-medium text-slate-400">불러오는 중…</span>
-        ) : null}
       </div>
 
       <div className="relative">
