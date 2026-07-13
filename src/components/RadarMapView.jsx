@@ -143,23 +143,43 @@ const buildPixelMappings = (width, height) => {
 const formatFrameLabel = (validTime) =>
   `${validTime.getMonth() + 1}월 ${validTime.getDate()}일 ${String(validTime.getHours()).padStart(2, '0')}:${String(validTime.getMinutes()).padStart(2, '0')}`;
 
-const LEGEND_LABELS = [1, 5, 10, 30, 50, 100, 150];
+const LEGEND_SEGMENTS = [
+  { key: 'blue', values: [0.1, 0.5, 1] },
+  { key: 'green', values: [2, 3, 4, 5] },
+  { key: 'yellow', values: [6, 7, 8, 9, 10] },
+  { key: 'red', values: [15, 20, 25, 30] },
+  { key: 'purple', values: [40, 50, 60, 70] },
+  { key: 'navy', values: [90, 110, 150] },
+];
+
+const LEGEND_SCALE_STOPS = [
+  { value: 0, position: 0 },
+  { value: 1, position: 100 / 6 },
+  { value: 5, position: (100 / 6) * 2 },
+  { value: 10, position: (100 / 6) * 3 },
+  { value: 30, position: (100 / 6) * 4 },
+  { value: 70, position: (100 / 6) * 5 },
+  { value: 150, position: 100 },
+];
+const LEGEND_LABELS = [0, 1, 5, 10, 30, 50, 100, 150];
+
+const getPaletteColorByValue = (value) =>
+  RAIN_PALETTE.find((item) => item.min === value)?.color ?? [0, 0, 0];
 
 const getLegendLabelPosition = (value) => {
-  const lastIndex = RAIN_PALETTE.length - 1;
-  const upperIndex = RAIN_PALETTE.findIndex((item) => item.min > value);
-  if (upperIndex <= 0) {
-    return 0;
-  }
-  if (upperIndex === -1) {
-    return 100;
+  const exactStop = LEGEND_SCALE_STOPS.find((item) => item.value === value);
+  if (exactStop) {
+    return exactStop.position;
   }
 
-  const lowerIndex = upperIndex - 1;
-  const lowerValue = RAIN_PALETTE[lowerIndex].min;
-  const upperValue = RAIN_PALETTE[upperIndex].min;
-  const segmentRatio = (value - lowerValue) / (upperValue - lowerValue);
-  return ((lowerIndex + segmentRatio) / lastIndex) * 100;
+  const upperIndex = LEGEND_SCALE_STOPS.findIndex((item) => item.value > value);
+  if (upperIndex <= 0) return 0;
+  if (upperIndex === -1) return 100;
+
+  const lowerStop = LEGEND_SCALE_STOPS[upperIndex - 1];
+  const upperStop = LEGEND_SCALE_STOPS[upperIndex];
+  const valueRatio = (value - lowerStop.value) / (upperStop.value - lowerStop.value);
+  return lowerStop.position + (upperStop.position - lowerStop.position) * valueRatio;
 };
 
 const getLegendLabelClassName = (position) => {
@@ -177,12 +197,22 @@ const RadarLegend = () => (
     <span className="mt-0.5 shrink-0 font-semibold">mm/h</span>
     <div className="relative flex-1 pb-5">
       <div className="flex h-3 overflow-hidden rounded-sm">
-        {RAIN_PALETTE.map(({ min, color }) => (
+        {LEGEND_SEGMENTS.map((segment) => (
           <div
-            key={min}
-            className="flex-1"
-            style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
-          />
+            key={segment.key}
+            className="flex flex-1"
+          >
+            {segment.values.map((value) => {
+              const color = getPaletteColorByValue(value);
+              return (
+                <div
+                  key={value}
+                  className="flex-1"
+                  style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
+                />
+              );
+            })}
+          </div>
         ))}
       </div>
       <div className="absolute left-0 right-0 top-4 h-4">
