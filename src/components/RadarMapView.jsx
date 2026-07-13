@@ -143,25 +143,62 @@ const buildPixelMappings = (width, height) => {
 const formatFrameLabel = (validTime) =>
   `${validTime.getMonth() + 1}월 ${validTime.getDate()}일 ${String(validTime.getHours()).padStart(2, '0')}:${String(validTime.getMinutes()).padStart(2, '0')}`;
 
-const LEGEND_TICKS = new Set([1, 5, 10, 30, 70, 150]);
+const LEGEND_LABELS = [1, 5, 10, 30, 50, 100, 150];
+
+const getLegendLabelPosition = (value) => {
+  const lastIndex = RAIN_PALETTE.length - 1;
+  const upperIndex = RAIN_PALETTE.findIndex((item) => item.min > value);
+  if (upperIndex <= 0) {
+    return 0;
+  }
+  if (upperIndex === -1) {
+    return 100;
+  }
+
+  const lowerIndex = upperIndex - 1;
+  const lowerValue = RAIN_PALETTE[lowerIndex].min;
+  const upperValue = RAIN_PALETTE[upperIndex].min;
+  const segmentRatio = (value - lowerValue) / (upperValue - lowerValue);
+  return ((lowerIndex + segmentRatio) / lastIndex) * 100;
+};
+
+const getLegendLabelClassName = (position) => {
+  if (position >= 96) {
+    return 'absolute top-0 -translate-x-full text-right text-[10px] font-medium text-slate-500';
+  }
+  if (position <= 4) {
+    return 'absolute top-0 text-[10px] font-medium text-slate-500';
+  }
+  return 'absolute top-0 -translate-x-1/2 text-[10px] font-medium text-slate-500';
+};
 
 const RadarLegend = () => (
-  <div className="flex items-center gap-2 text-[11px] text-slate-500">
-    <span className="shrink-0 font-semibold">mm/h</span>
-    <div className="flex h-3 flex-1 overflow-hidden rounded-sm">
-      {RAIN_PALETTE.map(({ min, color }) => (
-        <div
-          key={min}
-          className="relative flex-1"
-          style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
-        >
-          {LEGEND_TICKS.has(min) ? (
-            <span className="absolute -bottom-4 left-0 -translate-x-1/2 text-[10px] text-slate-500">
-              {min}
+  <div className="flex items-start gap-2 text-[11px] text-slate-500">
+    <span className="mt-0.5 shrink-0 font-semibold">mm/h</span>
+    <div className="relative flex-1 pb-5">
+      <div className="flex h-3 overflow-hidden rounded-sm">
+        {RAIN_PALETTE.map(({ min, color }) => (
+          <div
+            key={min}
+            className="flex-1"
+            style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
+          />
+        ))}
+      </div>
+      <div className="absolute left-0 right-0 top-4 h-4">
+        {LEGEND_LABELS.map((value) => {
+          const position = getLegendLabelPosition(value);
+          return (
+            <span
+              key={value}
+              className={getLegendLabelClassName(position)}
+              style={{ left: `${position}%` }}
+            >
+              {value}
             </span>
-          ) : null}
-        </div>
-      ))}
+          );
+        })}
+      </div>
     </div>
   </div>
 );
