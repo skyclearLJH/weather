@@ -142,6 +142,7 @@ const buildPixelMappings = (width, height) => {
 };
 
 const TIMELINE_RANGE_MINUTES = 360; // 관측 -6시간 ~ 예측 +6시간 (현재가 정중앙)
+const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 맞춘 자동 갱신
 
 const formatHourMinute = (validTime) =>
   `${String(validTime.getHours()).padStart(2, '0')}:${String(validTime.getMinutes()).padStart(2, '0')}`;
@@ -255,6 +256,13 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   const sectionRef = useRef(null);
   const [fullscreenMode, setFullscreenMode] = useState(null); // null | 'native' | 'css'
   const isFullscreen = fullscreenMode !== null;
+  // 주기적 자동 갱신(눈금·'현재'가 실제 시간을 따라가도록)
+  const [autoRefreshTick, setAutoRefreshTick] = useState(0);
+  const lastRefreshTokenRef = useRef(refreshToken);
+  const lastBuildSignatureRef = useRef('');
+  const framesRef = useRef([]);
+  const frameIndexRef = useRef(0);
+  const isPlayingRef = useRef(false);
 
   const canvasHeight = useMemo(() => {
     const xSpan = VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin;
@@ -448,11 +456,17 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     let isActive = true;
 
     const initialize = async () => {
-      if (refreshToken > 0) {
+      const isManualRefresh = refreshToken !== lastRefreshTokenRef.current;
+      lastRefreshTokenRef.current = refreshToken;
+
+      if (isManualRefresh) {
         frameCacheRef.current.clear();
         pendingRef.current.clear();
         setIsPlaying(false);
         setStatus('loading');
+      } else if (autoRefreshTick > 0 && isPlayingRef.current) {
+        // 재생 중에는 자동 갱신으로 타임라인을 흔들지 않는다. 다음 주기에 반영.
+        return;
       }
 
       try {
@@ -463,6 +477,13 @@ const RadarMapView = ({ refreshToken = 0 }) => {
         if (!isActive) {
           return;
         }
+
+        // 자동 갱신인데 최신 발표가 그대로면 타임라인을 건드리지 않는다.
+        const buildSignature = `${radarLatest.tm}|${qpfLatest?.tm ?? ''}`;
+        if (!isManualRefresh && buildSignature === lastBuildSignatureRef.current) {
+          return;
+        }
+        lastBuildSignatureRef.current = buildSignature;
 
         const latestObsTime = parseRadarTm(radarLatest.tm);
         const observationFrames = [];
@@ -500,8 +521,31 @@ const RadarMapView = ({ refreshToken = 0 }) => {
         }
 
         const timeline = [...observationFrames, ...forecastFrames];
+
+        // 자동 갱신 시, 사용자가 최신 프레임이 아닌 곳을 보고 있었다면
+        // 보고 있던 시각과 가장 가까운 프레임을 유지한다.
+        let nextFrameIndex = observationFrames.length - 1;
+        const previousFrames = framesRef.current;
+        const previousFrame = previousFrames[frameIndexRef.current];
+        const previousLatestObs = previousFrames.filter((frame) => frame.kind === 'obs').at(-1);
+        if (
+          !isManualRefresh &&
+          previousFrame &&
+          previousLatestObs &&
+          previousFrame.key !== previousLatestObs.key
+        ) {
+          let nearestDistance = Number.POSITIVE_INFINITY;
+          timeline.forEach((frame, index) => {
+            const distance = Math.abs(frame.validTime.getTime() - previousFrame.validTime.getTime());
+            if (distance < nearestDistance) {
+              nearestDistance = distance;
+              nextFrameIndex = index;
+            }
+          });
+        }
+
         setFrames(timeline);
-        setFrameIndex(observationFrames.length - 1);
+        setFrameIndex(nextFrameIndex);
         setStatus('ready');
 
         // 6시간 전체를 한 번에 받으면 API와 브라우저 메모리에 부담이 커서 최신 주변부터 천천히 받는다.
@@ -535,7 +579,16 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => {
       isActive = false;
     };
-  }, [loadFrameData, rememberFrameBuckets, refreshToken]);
+  }, [loadFrameData, rememberFrameBuckets, refreshToken, autoRefreshTick]);
+
+  // 시간이 흐르면 '현재'와 눈금도 따라가야 하므로 주기적으로 최신 발표를 확인한다.
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setAutoRefreshTick((tick) => tick + 1),
+      AUTO_REFRESH_INTERVAL_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
 
   // 현재 프레임 렌더링
   useEffect(() => {
@@ -579,6 +632,17 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, [frames, frameIndex, loadFrameData, status]);
+
+  // 자동 갱신 로직이 최신 상태를 참조할 수 있도록 ref를 동기화한다.
+  useEffect(() => {
+    framesRef.current = frames;
+  }, [frames]);
+  useEffect(() => {
+    frameIndexRef.current = frameIndex;
+  }, [frameIndex]);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   // 재생
   useEffect(() => {
@@ -632,18 +696,24 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     if (baseTimeMs === null) {
       return [];
     }
+    let previousLabeledDate = null;
     return Array.from({ length: 13 }, (_, index) => {
       const hourOffset = index - 6;
       const position = (index / 12) * 100;
       const isLabeled = hourOffset % 2 === 0;
       let label = '';
+      let dateLabel = '';
       if (isLabeled) {
-        label =
-          hourOffset === 0
-            ? '현재'
-            : formatHourMinute(new Date(baseTimeMs + hourOffset * 60 * 60 * 1000));
+        const tickTime = new Date(baseTimeMs + hourOffset * 60 * 60 * 1000);
+        label = hourOffset === 0 ? '현재' : formatHourMinute(tickTime);
+        // 날짜가 바뀌는 첫 눈금에는 날짜를 함께 표시한다.
+        const tickDate = `${tickTime.getMonth() + 1}.${tickTime.getDate()}`;
+        if (previousLabeledDate !== null && tickDate !== previousLabeledDate) {
+          dateLabel = tickDate;
+        }
+        previousLabeledDate = tickDate;
       }
-      return { hourOffset, position, isLabeled, label };
+      return { hourOffset, position, isLabeled, label, dateLabel };
     });
   }, [baseTimeMs]);
 
@@ -778,8 +848,8 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               className="h-2 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0]"
               style={{ background: 'linear-gradient(to right, #64748b 50%, #2563eb 50%)' }}
             />
-            <div className="relative mt-1 h-7">
-              {timelineTicks.map(({ hourOffset, position, isLabeled, label }) => (
+            <div className="relative mt-1 h-9">
+              {timelineTicks.map(({ hourOffset, position, isLabeled, label, dateLabel }) => (
                 <div
                   key={hourOffset}
                   className="absolute top-0"
@@ -803,6 +873,11 @@ const RadarMapView = ({ refreshToken = 0 }) => {
                       }`}
                     >
                       {label}
+                      {dateLabel ? (
+                        <div className="text-center text-[9px] font-semibold text-slate-500">
+                          {dateLabel}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
