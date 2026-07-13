@@ -309,6 +309,11 @@ const buildRankingRows = (items, unit, sortDirection = 'desc') =>
       address: item.address,
     }));
 
+const normalizeStationAddress = (value = '') =>
+  value
+    .replace(/^(?:(?:\d+|-{2,}|_+|\*+|[xX]+)\s*)+/, '')
+    .trim();
+
 const parseAwsStationMetadata = (rawText) => {
   const stationMetadata = new Map();
 
@@ -325,11 +330,7 @@ const parseAwsStationMetadata = (rawText) => {
 
     const stationId = fields[0];
     const stationName = fields[8];
-    const lawAddress = fields
-      .slice(13)
-      .join(' ')
-      .replace(/^\d+\s+/, '')
-      .trim();
+    const lawAddress = normalizeStationAddress(fields.slice(13).join(' '));
 
     stationMetadata.set(stationId, {
       name: stationName,
