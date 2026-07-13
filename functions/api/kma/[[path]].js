@@ -31,6 +31,11 @@ const getCacheTtl = (pathname, searchParams) => {
     return 300;
   }
 
+  // 레이더 합성 파일·초단기 예측 분포도는 발표시각(tm)별로 불변이라 길게 캐시한다.
+  if (pathname.includes('/rdr_cmp_file.php') || pathname.includes('/nph-qpf_ana_img')) {
+    return 3600;
+  }
+
   if (pathname.includes('/wthr_cmt_rpt.php') || pathname.includes('/fct_afs_ds.php')) {
     return 180;
   }

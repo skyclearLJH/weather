@@ -4,6 +4,7 @@ import Navigation from './components/Navigation';
 import WeatherTable from './components/WeatherTable';
 import ForecastCard from './components/ForecastCard';
 import RegionTempTable from './components/RegionTempTable';
+import RadarMapView from './components/RadarMapView';
 import SubMenu from './components/SubMenu';
 import ObservationTimeSelector from './components/ObservationTimeSelector';
 import {
@@ -525,6 +526,10 @@ function App() {
   );
 
   const renderContent = () => {
+    if (selectedTab === 'radar') {
+      return <RadarMapView />;
+    }
+
     if (selectedTab === 'minTemp') {
       if (isLoading) {
         return renderEmptyState('최저기온 데이터를 불러오는 중입니다.', renderObservationTimeControl());

@@ -1,6 +1,7 @@
 export const INITIAL_TABS = [
   { id: 'forecast', label: '예보' },
   { id: 'warning', label: '특보' },
+  { id: 'radar', label: '레이더' },
   { id: 'precipitation', label: '강수량' },
   { id: 'minTemp', label: '최저기온' },
   { id: 'maxTemp', label: '최고기온' },
