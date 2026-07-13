@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
@@ -250,6 +251,10 @@ const RadarMapView = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [statusMessage, setStatusMessage] = useState('');
+  // 전체화면: 지원 브라우저는 네이티브 API, 미지원(iOS 사파리 등)은 CSS 오버레이로 대체
+  const sectionRef = useRef(null);
+  const [fullscreenMode, setFullscreenMode] = useState(null); // null | 'native' | 'css'
+  const isFullscreen = fullscreenMode !== null;
 
   const canvasHeight = useMemo(() => {
     const xSpan = VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin;
@@ -635,19 +640,78 @@ const RadarMapView = () => {
     });
   }, [baseTimeMs]);
 
+  const toggleFullscreen = useCallback(async () => {
+    if (fullscreenMode) {
+      if (fullscreenMode === 'native' && document.fullscreenElement) {
+        await document.exitFullscreen().catch(() => {});
+      }
+      setFullscreenMode(null);
+      return;
+    }
+
+    const element = sectionRef.current;
+    try {
+      if (!element?.requestFullscreen) {
+        throw new Error('unsupported');
+      }
+      await element.requestFullscreen();
+      setFullscreenMode('native');
+    } catch {
+      setFullscreenMode('css');
+    }
+  }, [fullscreenMode]);
+
+  // Esc 등으로 네이티브 전체화면이 해제되면 상태를 따라간다.
+  useEffect(() => {
+    const handleChange = () => {
+      if (!document.fullscreenElement) {
+        setFullscreenMode((mode) => (mode === 'native' ? null : mode));
+      }
+    };
+    document.addEventListener('fullscreenchange', handleChange);
+    return () => document.removeEventListener('fullscreenchange', handleChange);
+  }, []);
+
+  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞춘다.
+  useEffect(() => {
+    const timers = [120, 400].map((delay) =>
+      window.setTimeout(() => mapRef.current?.resize(), delay),
+    );
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [isFullscreen]);
+
   return (
-    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
-        <div>
+    <section
+      ref={sectionRef}
+      className={`overflow-hidden bg-white ${
+        isFullscreen
+          ? `flex h-full flex-col ${fullscreenMode === 'css' ? 'fixed inset-0 z-[100]' : ''}`
+          : 'rounded-3xl border border-slate-200 shadow-sm'
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-5 py-3 sm:px-6 sm:py-4">
+        <div className="min-w-0">
           <h2 className="text-lg font-bold tracking-tight text-slate-900">레이더 · 초단기예측</h2>
-          <div className="mt-1 text-sm text-slate-500">
+          <div className={`mt-1 text-sm text-slate-500 ${isFullscreen ? 'hidden sm:block' : ''}`}>
             기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
           </div>
         </div>
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100"
+          aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
+        >
+          {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          <span className="hidden sm:inline">{isFullscreen ? '전체화면 종료' : '전체화면'}</span>
+        </button>
       </div>
 
-      <div className="relative">
-        <div ref={mapContainerRef} className="h-[60vh] min-h-[420px] w-full" />
+      <div className={`relative ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
+        <div
+          ref={mapContainerRef}
+          className={isFullscreen ? 'h-full w-full' : 'h-[60vh] min-h-[420px] w-full'}
+        />
         {status === 'loading' ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-sm font-medium text-slate-500">
             레이더 자료를 불러오는 중입니다…
