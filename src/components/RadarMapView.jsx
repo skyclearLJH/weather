@@ -607,7 +607,7 @@ const RadarMapView = () => {
         <div>
           <h2 className="text-lg font-bold tracking-tight text-slate-900">레이더 · 초단기예측</h2>
           <div className="mt-1 text-sm text-slate-500">
-            기상청 레이더 강수 실황(5분, 과거 6시간)과 초단기 예측강수(10분, +6시간)입니다.
+            기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
           </div>
         </div>
         {currentFrame ? (
