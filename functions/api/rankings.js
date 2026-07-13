@@ -335,6 +335,11 @@ const buildRankingRows = (items, unit, sortDirection = 'desc') =>
       address: item.address,
     }));
 
+const normalizeStationAddress = (value = '') =>
+  value
+    .replace(/^(?:(?:\d+|-{2,}|_+|\*+|[xX]+)\s*)+/, '')
+    .trim();
+
 const getPrecipitationMaxOneHourAggregateKey = (day) =>
   `precipitation-max-one-hour:${RANKING_CACHE_VERSION}:${day}`;
 
@@ -544,7 +549,7 @@ const parseAwsStationMetadata = (rawText) => {
 
     const stationId = fields[0];
     const stationName = fields[8];
-    const lawAddress = fields.slice(13).join(' ').replace(/^\d+\s+/, '').trim();
+    const lawAddress = normalizeStationAddress(fields.slice(13).join(' '));
     stationMetadata.set(stationId, {
       name: stationName,
       address: lawAddress || stationName,
@@ -570,7 +575,7 @@ const parseSfcStationMetadata = (rawText) => {
 
     const stationId = fields[0];
     const stationName = fields[10] || fields[9] || stationId;
-    const address = fields.slice(15).join(' ').replace(/^\d+\s+/, '').trim();
+    const address = normalizeStationAddress(fields.slice(15).join(' '));
     stationMetadata.set(stationId, {
       name: stationName,
       address: address || stationName,
