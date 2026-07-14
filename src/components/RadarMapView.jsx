@@ -275,8 +275,12 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: MAP_STYLE,
-      center: [127.6, 36.2],
-      zoom: 5.6,
+      // 화면 비율과 무관하게 남한 전체(제주 포함)가 들어오도록 영역 기준으로 맞춘다.
+      bounds: [
+        [125.0, 32.9],
+        [129.8, 38.7],
+      ],
+      fitBoundsOptions: { padding: 12 },
       minZoom: 4.5,
       maxZoom: 10,
       attributionControl: false,
