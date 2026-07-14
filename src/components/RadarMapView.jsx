@@ -61,9 +61,11 @@ const PORTAL_CITIES = [
 const BROADCAST_ADMIN_SOURCES = {
   'broadcast-sido': '/data/map/kr-sido-20260701.geojson',
   'broadcast-sgg': '/data/map/kr-sgg-20260701.geojson',
-  'broadcast-emd': '/data/map/kr-emd-20260701.geojson',
   'broadcast-sido-labels': '/data/map/kr-sido-labels-20260701.geojson',
   'broadcast-sgg-labels': '/data/map/kr-sgg-labels-20260701.geojson',
+};
+const BROADCAST_EMD_SOURCES = {
+  'broadcast-emd': '/data/map/kr-emd-20260701.geojson',
   'broadcast-emd-labels': '/data/map/kr-emd-labels-20260701.geojson',
 };
 const BROADCAST_ADMIN_LAYER_IDS = [
@@ -151,13 +153,6 @@ const ensureBroadcastAdminLayers = (map) => {
       paint: { 'line-color': '#6b7280', 'line-width': ['interpolate', ['linear'], ['zoom'], 5.1, 0.45, 9, 1] },
     },
     {
-      id: 'broadcast-emd-border',
-      type: 'line',
-      source: 'broadcast-emd',
-      minzoom: 8.1,
-      paint: { 'line-color': '#9ca3af', 'line-width': 0.55, 'line-opacity': 0.9 },
-    },
-    {
       id: 'broadcast-sido-label',
       type: 'symbol',
       source: 'broadcast-sido-labels',
@@ -187,20 +182,6 @@ const ensureBroadcastAdminLayers = (map) => {
       paint: { 'text-color': '#2f3b4d', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.25 },
     },
     {
-      id: 'broadcast-emd-label',
-      type: 'symbol',
-      source: 'broadcast-emd-labels',
-      minzoom: 8.35,
-      layout: {
-        'text-field': ['get', 'label'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 8.35, 9, 12, 13],
-        'text-font': ['Open Sans Regular'],
-        'text-allow-overlap': false,
-        'text-padding': 1,
-      },
-      paint: { 'text-color': '#3b4657', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.1 },
-    },
-    {
       id: 'broadcast-dokdo-dot',
       type: 'circle',
       source: 'broadcast-dokdo',
@@ -224,6 +205,44 @@ const ensureBroadcastAdminLayers = (map) => {
         'text-anchor': 'left',
       },
       paint: { 'text-color': '#263244', 'text-halo-color': 'rgba(255,255,255,0.92)', 'text-halo-width': 1.3 },
+    },
+  ];
+
+  layers.forEach((layer) => {
+    if (!map.getLayer(layer.id)) {
+      map.addLayer({ ...layer, layout: { visibility: 'visible', ...layer.layout } });
+    }
+  });
+};
+
+const ensureBroadcastEmdLayers = (map) => {
+  Object.entries(BROADCAST_EMD_SOURCES).forEach(([id, data]) => {
+    if (!map.getSource(id)) {
+      map.addSource(id, { type: 'geojson', data });
+    }
+  });
+
+  const layers = [
+    {
+      id: 'broadcast-emd-border',
+      type: 'line',
+      source: 'broadcast-emd',
+      minzoom: 8.1,
+      paint: { 'line-color': '#9ca3af', 'line-width': 0.55, 'line-opacity': 0.9 },
+    },
+    {
+      id: 'broadcast-emd-label',
+      type: 'symbol',
+      source: 'broadcast-emd-labels',
+      minzoom: 8.35,
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 8.35, 9, 12, 13],
+        'text-font': ['Open Sans Regular'],
+        'text-allow-overlap': false,
+        'text-padding': 1,
+      },
+      paint: { 'text-color': '#3b4657', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.1 },
     },
   ];
 
@@ -1084,14 +1103,27 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     const applyVisibility = () => {
       map.setMaxZoom(isBroadcast ? 16 : 10);
       setBroadcastAdminVisibility(map, isBroadcast);
+      if (isBroadcast && map.getZoom() >= 8) {
+        ensureBroadcastEmdLayers(map);
+      }
     };
+
+    const handleBroadcastZoom = () => {
+      if (isBroadcast && map.getZoom() >= 8) {
+        ensureBroadcastEmdLayers(map);
+      }
+    };
+    map.on('zoomend', handleBroadcastZoom);
 
     if (map.isStyleLoaded()) {
       applyVisibility();
-      return undefined;
+      return () => map.off('zoomend', handleBroadcastZoom);
     }
     map.once('load', applyVisibility);
-    return () => map.off('load', applyVisibility);
+    return () => {
+      map.off('load', applyVisibility);
+      map.off('zoomend', handleBroadcastZoom);
+    };
   }, [isBroadcast]);
 
   // 방송모드 진입·해제 시 각 모드의 기본 구도로 화면을 다시 잡는다.
