@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, Minimize2 } from 'lucide-react';
+import { Maximize2, Minimize2, MonitorPlay, X } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
@@ -149,6 +149,33 @@ const buildPixelMappings = (width, height) => {
 const TIMELINE_RANGE_MINUTES = 360; // 관측 -6시간 ~ 예측 +6시간 (현재가 정중앙)
 const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 맞춘 자동 갱신
 
+// --- 방송모드 ---
+const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
+const BROADCAST_CACHE_LIMIT = 130; // 전 구간 재생을 위해 모든 프레임을 캐시
+const BROADCAST_LEGEND_LABELS = [1, 5, 10, 30, 70, 150];
+const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
+
+const formatBroadcastDate = (time) =>
+  `${time.getMonth() + 1}/${time.getDate()} (${WEEKDAY_LABELS[time.getDay()]})`;
+
+// 지도 배색: 기본(포털)과 방송(어두운 바다·회색 주변국) 두 벌
+const MAP_COLOR_THEMES = {
+  default: {
+    sea: '#dbe6ef',
+    neighborLand: '#eceae6',
+    neighborCoast: '#c3c8ce',
+    land: '#ffffff',
+    provinceBorder: '#a5aeb9',
+  },
+  broadcast: {
+    sea: '#46536a',
+    neighborLand: '#828c9c',
+    neighborCoast: '#5d6879',
+    land: '#eef0f2',
+    provinceBorder: '#4a5568',
+  },
+};
+
 const formatHourMinute = (validTime) =>
   `${String(validTime.getHours()).padStart(2, '0')}:${String(validTime.getMinutes()).padStart(2, '0')}`;
 
@@ -261,6 +288,11 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   const sectionRef = useRef(null);
   const [fullscreenMode, setFullscreenMode] = useState(null); // null | 'native' | 'css'
   const isFullscreen = fullscreenMode !== null;
+  // 방송모드: 전체화면 + 방송 그래픽 레이아웃 (PC 전용)
+  const [isBroadcast, setIsBroadcast] = useState(false);
+  const [playDurationSec, setPlayDurationSec] = useState(10);
+  const [playTarget, setPlayTarget] = useState(null);
+  const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
   // 주기적 자동 갱신(눈금·'현재'가 실제 시간을 따라가도록)
   const [autoRefreshTick, setAutoRefreshTick] = useState(0);
   const lastRefreshTokenRef = useRef(refreshToken);
@@ -428,7 +460,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     }
     cache.set(key, buckets);
 
-    while (cache.size > FRAME_CACHE_LIMIT) {
+    while (cache.size > cacheLimitRef.current) {
       const oldestKey = cache.keys().next().value;
       if (!oldestKey) {
         break;
@@ -671,16 +703,55 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
-  // 재생
+  // 재생. 방송모드에서는 전체 타임라인을 선택한 재생 길이에 맞춰 진행한다.
   useEffect(() => {
     if (!isPlaying || frames.length === 0) {
       return undefined;
     }
+    const intervalMs = isBroadcast
+      ? Math.max(45, Math.round((playDurationSec * 1000) / frames.length))
+      : PLAY_INTERVAL_MS;
     const timer = window.setInterval(() => {
-      setFrameIndex((previous) => (previous + 1) % frames.length);
-    }, PLAY_INTERVAL_MS);
+      setFrameIndex((previous) =>
+        isBroadcast ? Math.min(previous + 1, frames.length - 1) : (previous + 1) % frames.length,
+      );
+    }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [isPlaying, frames.length]);
+  }, [isPlaying, frames.length, isBroadcast, playDurationSec]);
+
+  // 방송모드 재생은 목표 지점(현재 또는 예측 끝)에 도달하면 멈춘다.
+  useEffect(() => {
+    if (isBroadcast && isPlaying && playTarget !== null && frameIndex >= playTarget) {
+      setIsPlaying(false);
+    }
+  }, [isBroadcast, isPlaying, playTarget, frameIndex]);
+
+  // 재생 버튼: 방송모드에서는 ① 관측 시작→현재 ② 현재→예측 끝 두 단계로 나눠 재생한다.
+  const handlePlayButton = () => {
+    if (isPlaying) {
+      setIsPlaying(false);
+      return;
+    }
+    if (!isBroadcast) {
+      setIsPlaying(true);
+      return;
+    }
+
+    const kinds = frames.map((frame) => frame.kind);
+    const latestObsIndex = kinds.lastIndexOf('obs');
+    if (latestObsIndex < 0) {
+      setIsPlaying(true);
+      return;
+    }
+
+    if (frameIndex === latestObsIndex && frames.length - 1 > latestObsIndex) {
+      setPlayTarget(frames.length - 1);
+    } else {
+      setFrameIndex(0);
+      setPlayTarget(latestObsIndex);
+    }
+    setIsPlaying(true);
+  };
 
   const currentFrame = frames[frameIndex];
 
@@ -782,7 +853,194 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       window.setTimeout(() => mapRef.current?.resize(), delay),
     );
     return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [isFullscreen, isBroadcast]);
+
+  const enterBroadcastMode = useCallback(() => {
+    setIsBroadcast(true);
+    if (!fullscreenMode) {
+      toggleFullscreen();
+    }
+  }, [fullscreenMode, toggleFullscreen]);
+
+  const exitBroadcastMode = useCallback(() => {
+    setIsBroadcast(false);
+    setIsPlaying(false);
+    setPlayTarget(null);
+    if (fullscreenMode) {
+      toggleFullscreen();
+    }
+  }, [fullscreenMode, toggleFullscreen]);
+
+  // Esc 등으로 전체화면이 풀리면 방송모드도 함께 종료한다.
+  useEffect(() => {
+    if (!isFullscreen) {
+      setIsBroadcast(false);
+    }
   }, [isFullscreen]);
+
+  // 방송모드 지도 배색 전환 (스타일 로딩 전이면 준비되는 대로 적용)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return undefined;
+    }
+    const theme = isBroadcast ? MAP_COLOR_THEMES.broadcast : MAP_COLOR_THEMES.default;
+    const applyTheme = () => {
+      try {
+        map.setPaintProperty('sea', 'background-color', theme.sea);
+        map.setPaintProperty('neighbor-land', 'fill-color', theme.neighborLand);
+        map.setPaintProperty('neighbor-coast', 'line-color', theme.neighborCoast);
+        map.setPaintProperty('land', 'fill-color', theme.land);
+        map.setPaintProperty('province-border', 'line-color', theme.provinceBorder);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (map.isStyleLoaded() && applyTheme()) {
+      return undefined;
+    }
+    const retry = () => {
+      if (applyTheme()) {
+        map.off('styledata', retry);
+      }
+    };
+    map.on('styledata', retry);
+    return () => map.off('styledata', retry);
+  }, [isBroadcast]);
+
+  // 방송모드에서는 끊김 없는 재생을 위해 전 구간 프레임을 미리 받아 둔다.
+  useEffect(() => {
+    if (!isBroadcast || status !== 'ready') {
+      return undefined;
+    }
+    cacheLimitRef.current = BROADCAST_CACHE_LIMIT;
+    let isCancelled = false;
+    const queue = frames.filter((frame) => !frameCacheRef.current.has(frame.key));
+    let cursor = 0;
+    const pump = () => {
+      if (isCancelled || cursor >= queue.length) {
+        return;
+      }
+      const frameDef = queue[cursor];
+      cursor += 1;
+      loadFrameData(frameDef)
+        .catch(() => {})
+        .finally(() => {
+          window.setTimeout(pump, 150);
+        });
+    };
+    pump();
+    pump();
+    return () => {
+      isCancelled = true;
+      cacheLimitRef.current = FRAME_CACHE_LIMIT;
+    };
+  }, [isBroadcast, status, frames, loadFrameData]);
+
+  // 컨트롤바(재생 버튼 + 슬라이더 + 눈금). 방송모드에서는 어두운 배경 위에 얹는다.
+  const renderTimeline = (broadcast) => (
+    <div className="flex items-center gap-3">
+      {broadcast ? (
+        <select
+          value={playDurationSec}
+          onChange={(event) => setPlayDurationSec(Number(event.target.value))}
+          className="h-9 shrink-0 cursor-pointer rounded-full border-0 bg-white/25 px-2.5 text-sm font-semibold text-white outline-none backdrop-blur-sm"
+          aria-label="재생 길이"
+        >
+          {BROADCAST_PLAY_DURATIONS.map((seconds) => (
+            <option key={seconds} value={seconds} className="text-slate-900">
+              {seconds}초
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <button
+        type="button"
+        onClick={handlePlayButton}
+        disabled={status !== 'ready'}
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:opacity-40"
+        aria-label={isPlaying ? '일시정지' : '재생'}
+      >
+        {isPlaying ? (
+          <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+            <rect x="3" y="2" width="3.5" height="12" rx="1" />
+            <rect x="9.5" y="2" width="3.5" height="12" rx="1" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+            <path d="M4.5 2.7a1 1 0 0 1 1.53-.85l8 5.3a1 1 0 0 1 0 1.7l-8 5.3a1 1 0 0 1-1.53-.85V2.7Z" />
+          </svg>
+        )}
+      </button>
+      <div className="relative min-w-0 flex-1 pt-8">
+        {currentFrame ? (
+          <div
+            className="pointer-events-none absolute top-0"
+            style={{ left: `${Math.min(Math.max(thumbPercent, 6), 94)}%` }}
+          >
+            <span
+              className={`inline-block -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums text-white shadow-sm ${
+                currentFrame.kind === 'obs' ? 'bg-slate-600' : 'bg-blue-600'
+              }`}
+            >
+              {currentFrame.kind === 'obs' ? '관측' : '예측'}{' '}
+              {formatHourMinute(currentFrame.validTime)}
+            </span>
+          </div>
+        ) : null}
+        <input
+          type="range"
+          min={-TIMELINE_RANGE_MINUTES}
+          max={TIMELINE_RANGE_MINUTES}
+          step={5}
+          value={currentOffset}
+          onChange={(event) => handleTimelineChange(Number(event.target.value))}
+          disabled={status !== 'ready'}
+          className={`w-full cursor-pointer appearance-none rounded-full accent-[#0033a0] ${broadcast ? 'h-2.5' : 'h-2'}`}
+          style={{ background: 'linear-gradient(to right, #64748b 50%, #2563eb 50%)' }}
+        />
+        <div className="relative mt-1 h-9">
+          {timelineTicks.map(({ hourOffset, position, isLabeled, label, dateLabel }) => (
+            <div
+              key={hourOffset}
+              className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
+              style={{ left: `${position}%` }}
+            >
+              <div
+                className={`w-px ${
+                  isLabeled
+                    ? `h-2 ${broadcast ? 'bg-white/60' : 'bg-slate-400'}`
+                    : `h-1.5 ${broadcast ? 'bg-white/35' : 'bg-slate-300'}`
+                }`}
+              />
+              {isLabeled ? (
+                <div
+                  className={`mt-0.5 whitespace-nowrap text-center text-[10px] font-medium tabular-nums ${
+                    hourOffset === 0
+                      ? `font-bold ${broadcast ? 'text-white' : 'text-slate-700'}`
+                      : broadcast
+                        ? 'text-white/75'
+                        : 'text-slate-400'
+                  }`}
+                >
+                  {label}
+                  {dateLabel ? (
+                    <div
+                      className={`text-[9px] font-semibold ${broadcast ? 'text-white/70' : 'text-slate-500'}`}
+                    >
+                      {dateLabel}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <section
@@ -793,25 +1051,38 @@ const RadarMapView = ({ refreshToken = 0 }) => {
           : 'rounded-3xl border border-slate-200 shadow-sm'
       }`}
     >
-      <div className="border-b border-slate-200 bg-slate-50 px-5 py-3 sm:px-6 sm:py-4">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="min-w-0 text-lg font-bold tracking-tight text-slate-900">
-            레이더 · 초단기예측
-          </h2>
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100"
-            aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
-          >
-            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            <span className="hidden sm:inline">{isFullscreen ? '전체화면 종료' : '전체화면'}</span>
-          </button>
+      {!isBroadcast ? (
+        <div className="border-b border-slate-200 bg-slate-50 px-5 py-3 sm:px-6 sm:py-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="min-w-0 text-lg font-bold tracking-tight text-slate-900">
+              레이더 · 초단기예측
+            </h2>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={enterBroadcastMode}
+                className="hidden shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 md:inline-flex"
+                aria-label="방송모드"
+              >
+                <MonitorPlay size={16} />
+                방송모드
+              </button>
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100"
+                aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
+              >
+                {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                <span className="hidden sm:inline">{isFullscreen ? '전체화면 종료' : '전체화면'}</span>
+              </button>
+            </div>
+          </div>
+          <div className={`mt-1 text-sm text-slate-500 ${isFullscreen ? 'hidden sm:block' : ''}`}>
+            기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
+          </div>
         </div>
-        <div className={`mt-1 text-sm text-slate-500 ${isFullscreen ? 'hidden sm:block' : ''}`}>
-          기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
-        </div>
-      </div>
+      ) : null}
 
       <div className={`relative ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
         <div
@@ -834,86 +1105,100 @@ const RadarMapView = ({ refreshToken = 0 }) => {
             {statusMessage || '레이더 자료를 불러오지 못했습니다.'}
           </div>
         ) : null}
-      </div>
 
-      <div className="space-y-3 border-t border-slate-200 px-5 py-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setIsPlaying((previous) => !previous)}
-            disabled={status !== 'ready'}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:opacity-40"
-            aria-label={isPlaying ? '일시정지' : '재생'}
-          >
-            {isPlaying ? (
-              <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
-                <rect x="3" y="2" width="3.5" height="12" rx="1" />
-                <rect x="9.5" y="2" width="3.5" height="12" rx="1" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
-                <path d="M4.5 2.7a1 1 0 0 1 1.53-.85l8 5.3a1 1 0 0 1 0 1.7l-8 5.3a1 1 0 0 1-1.53-.85V2.7Z" />
-              </svg>
-            )}
-          </button>
-          <div className="relative min-w-0 flex-1 pt-8">
-            {currentFrame ? (
-              <div
-                className="pointer-events-none absolute top-0"
-                style={{ left: `${Math.min(Math.max(thumbPercent, 6), 94)}%` }}
-              >
-                <span
-                  className={`inline-block -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums text-white shadow-sm ${
-                    currentFrame.kind === 'obs' ? 'bg-slate-600' : 'bg-blue-600'
-                  }`}
-                >
-                  {currentFrame.kind === 'obs' ? '관측' : '예측'}{' '}
-                  {formatHourMinute(currentFrame.validTime)}
-                </span>
+        {isBroadcast ? (
+          <>
+            {/* 좌상단: 타이틀 밴드 + 현재 프레임 날짜·시각 */}
+            <div className="pointer-events-none absolute left-5 top-5 z-20 flex items-center gap-3">
+              <div className="flex items-stretch overflow-hidden rounded-md shadow-lg">
+                <div className="flex flex-col justify-center bg-[#0a2f7c] px-3 py-2">
+                  <span className="text-[11px] font-extrabold leading-none tracking-[0.2em] text-white">
+                    KBS
+                  </span>
+                  <span className="mt-1 text-[8px] font-bold leading-none tracking-[0.14em] text-white/85">
+                    WEATHER
+                  </span>
+                </div>
+                <div className="flex items-center bg-gradient-to-r from-[#1257c9] to-[#3f8ef7] px-5">
+                  <span className="text-2xl font-extrabold tracking-tight text-white">
+                    레이더 영상
+                  </span>
+                </div>
               </div>
-            ) : null}
-            <input
-              type="range"
-              min={-TIMELINE_RANGE_MINUTES}
-              max={TIMELINE_RANGE_MINUTES}
-              step={5}
-              value={currentOffset}
-              onChange={(event) => handleTimelineChange(Number(event.target.value))}
-              disabled={status !== 'ready'}
-              className="h-2 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0]"
-              style={{ background: 'linear-gradient(to right, #64748b 50%, #2563eb 50%)' }}
-            />
-            <div className="relative mt-1 h-9">
-              {timelineTicks.map(({ hourOffset, position, isLabeled, label, dateLabel }) => (
-                <div
-                  key={hourOffset}
-                  className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
-                  style={{ left: `${position}%` }}
-                >
-                  <div
-                    className={`w-px ${isLabeled ? 'h-2 bg-slate-400' : 'h-1.5 bg-slate-300'}`}
-                  />
-                  {isLabeled ? (
-                    <div
-                      className={`mt-0.5 whitespace-nowrap text-center text-[10px] font-medium tabular-nums ${
-                        hourOffset === 0 ? 'font-bold text-slate-700' : 'text-slate-400'
-                      }`}
-                    >
-                      {label}
-                      {dateLabel ? (
-                        <div className="text-[9px] font-semibold text-slate-500">{dateLabel}</div>
-                      ) : null}
-                    </div>
+              {currentFrame ? (
+                <div className="flex items-baseline gap-2 rounded-md bg-slate-900/55 px-4 py-2 shadow-lg backdrop-blur-sm">
+                  <span className="text-3xl font-extrabold leading-none tabular-nums text-white">
+                    {formatHourMinute(currentFrame.validTime)}
+                  </span>
+                  <span className="text-base font-semibold text-white/90">
+                    {formatBroadcastDate(currentFrame.validTime)}
+                  </span>
+                  {currentFrame.kind === 'fct' ? (
+                    <span className="rounded bg-blue-500 px-1.5 py-0.5 text-xs font-bold text-white">
+                      예측
+                    </span>
                   ) : null}
                 </div>
-              ))}
+              ) : null}
             </div>
+
+            {/* 종료 버튼 */}
+            <button
+              type="button"
+              onClick={exitBroadcastMode}
+              className="absolute right-14 top-4 z-20 inline-flex items-center gap-1.5 rounded-full bg-slate-900/55 px-3 py-2 text-sm font-semibold text-white backdrop-blur-sm transition hover:bg-slate-900/75"
+              aria-label="방송모드 종료"
+            >
+              <X size={16} />
+              종료
+            </button>
+
+            {/* 좌측 세로 강수 스케일 */}
+            <div className="pointer-events-none absolute left-5 top-1/2 z-20 -translate-y-1/2 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm">
+              <div className="flex h-52">
+                <div className="flex w-2.5 flex-col-reverse overflow-hidden rounded-sm">
+                  {RAIN_PALETTE.map(({ min, color }) => (
+                    <div
+                      key={min}
+                      className="w-full flex-1"
+                      style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
+                    />
+                  ))}
+                </div>
+                <div className="relative ml-1.5 w-6">
+                  {BROADCAST_LEGEND_LABELS.map((value) => {
+                    const paletteIndex = RAIN_PALETTE.findIndex((item) => item.min === value);
+                    return (
+                      <span
+                        key={value}
+                        className="absolute translate-y-1/2 text-[10px] font-semibold leading-none text-white"
+                        style={{ bottom: `${(paletteIndex / RAIN_PALETTE.length) * 100}%` }}
+                      >
+                        {value}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="mt-1.5 text-center text-[9px] font-semibold text-white/80">mm/h</div>
+            </div>
+
+            {/* 하단 반투명 컨트롤바 */}
+            <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent px-8 pb-4 pt-10">
+              {renderTimeline(true)}
+            </div>
+          </>
+        ) : null}
+      </div>
+
+      {!isBroadcast ? (
+        <div className="space-y-3 border-t border-slate-200 px-5 py-4 sm:px-6">
+          {renderTimeline(false)}
+          <div className="pb-3">
+            <RadarLegend />
           </div>
         </div>
-        <div className="pb-3">
-          <RadarLegend />
-        </div>
-      </div>
+      ) : null}
     </section>
   );
 };
