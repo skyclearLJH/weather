@@ -516,11 +516,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       maxPitch: 45,
       attributionControl: false,
       localIdeographFontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
-      dragRotate: true,
+      dragRotate: false,
       pitchWithRotate: true,
       touchPitch: true,
     });
-    // 터치에서는 북쪽 방향을 유지하면서 두 손가락 위아래 드래그로 기울기만 조절한다.
+    // MapLibre는 마우스 피치와 회전을 함께 노출하므로 피치 핸들러만 선택적으로 켠다.
+    map.dragRotate._mousePitch?.enable();
+    // 터치에서도 북쪽 방향을 유지하면서 두 손가락 위아래 드래그로 기울기만 조절한다.
     map.touchZoomRotate.disableRotation();
     const navControl = new maplibregl.NavigationControl({ showCompass: false });
     map.addControl(navControl, 'top-right');
