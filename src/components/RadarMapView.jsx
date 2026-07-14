@@ -34,8 +34,8 @@ const NEARBY_PREFETCH_RADIUS = 3;
 const QPF_EF_MINUTES = Array.from({ length: 36 }, (_, index) => (index + 1) * 10);
 const PLAY_INTERVAL_MS = 450;
 
-// KBS 총국·을지국 소재 도시 전체
-const BROADCAST_CITIES = [
+// 일반 지도에 표시하는 KBS 총국·을지국 소재 도시. 방송모드에서는 VWorld 지명으로 대체한다.
+const PORTAL_CITIES = [
   { name: '서울', lon: 126.978, lat: 37.566 },
   { name: '인천', lon: 126.705, lat: 37.456 },
   { name: '춘천', lon: 127.73, lat: 37.881 },
@@ -57,6 +57,13 @@ const BROADCAST_CITIES = [
   { name: '진주', lon: 128.108, lat: 35.18 },
   { name: '제주', lon: 126.531, lat: 33.499 },
 ];
+
+const VWORLD_API_KEY = import.meta.env.VITE_VWORLD_API_KEY?.trim();
+const VWORLD_HYBRID_TILES = VWORLD_API_KEY
+  ? [`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_API_KEY}/Hybrid/{z}/{y}/{x}.png`]
+  : [];
+const VWORLD_SOURCE_ID = 'vworld-hybrid-labels';
+const VWORLD_LAYER_ID = 'vworld-hybrid-labels-layer';
 
 const MAP_STYLE = {
   version: 8,
@@ -288,6 +295,8 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   const frameCacheRef = useRef(new Map());
   const pendingRef = useRef(new Map());
   const renderTokenRef = useRef(0);
+  const portalCityMarkersRef = useRef([]);
+  const isBroadcastRef = useRef(false);
 
   const [frames, setFrames] = useState([]);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -303,6 +312,8 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
+  const navControlRef = useRef(null);
+  const navControlAddedRef = useRef(false);
   // 주기적 자동 갱신(눈금·'현재'가 실제 시간을 따라가도록)
   const [autoRefreshTick, setAutoRefreshTick] = useState(0);
   const lastRefreshTokenRef = useRef(refreshToken);
@@ -332,7 +343,10 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       pitchWithRotate: false,
     });
     map.touchZoomRotate.disableRotation();
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    const navControl = new maplibregl.NavigationControl({ showCompass: false });
+    map.addControl(navControl, 'top-right');
+    navControlRef.current = navControl;
+    navControlAddedRef.current = true;
     mapRef.current = map;
     if (import.meta.env.DEV) {
       window.__radarMap = map;
@@ -373,13 +387,35 @@ const RadarMapView = ({ refreshToken = 0 }) => {
         'province-border',
       );
 
-      BROADCAST_CITIES.forEach(({ name, lon, lat }) => {
+      if (VWORLD_HYBRID_TILES.length > 0 && !map.getSource(VWORLD_SOURCE_ID)) {
+        map.addSource(VWORLD_SOURCE_ID, {
+          type: 'raster',
+          tiles: VWORLD_HYBRID_TILES,
+          tileSize: 256,
+          minzoom: 5,
+          maxzoom: 18,
+          attribution: '공간정보 오픈플랫폼 VWorld',
+        });
+        map.addLayer({
+          id: VWORLD_LAYER_ID,
+          type: 'raster',
+          source: VWORLD_SOURCE_ID,
+          layout: { visibility: isBroadcastRef.current ? 'visible' : 'none' },
+          paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 },
+        });
+      }
+
+      PORTAL_CITIES.forEach(({ name, lon, lat }) => {
         const element = document.createElement('div');
         element.className = 'pointer-events-none select-none text-center';
         element.innerHTML =
           '<div class="mx-auto h-1.5 w-1.5 rounded-full bg-slate-600"></div>' +
           `<div class="mt-0.5 text-[11px] font-semibold leading-none text-slate-700" style="text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">${name}</div>`;
-        new maplibregl.Marker({ element, anchor: 'top' }).setLngLat([lon, lat]).addTo(map);
+        element.style.display = isBroadcastRef.current ? 'none' : '';
+        const marker = new maplibregl.Marker({ element, anchor: 'top' })
+          .setLngLat([lon, lat])
+          .addTo(map);
+        portalCityMarkersRef.current.push(marker);
       });
     };
 
@@ -395,8 +431,11 @@ const RadarMapView = ({ refreshToken = 0 }) => {
 
     return () => {
       window.clearInterval(setupTimer);
+      portalCityMarkersRef.current = [];
       map.remove();
       mapRef.current = null;
+      navControlRef.current = null;
+      navControlAddedRef.current = false;
     };
   }, [canvasHeight]);
 
@@ -862,6 +901,25 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [isFullscreen, isBroadcast]);
 
+  // 방송모드에서만 VWorld 행정 지명을 표시하고, 일반 지도용 KBS 거점 마커는 숨긴다.
+  useEffect(() => {
+    isBroadcastRef.current = isBroadcast;
+    const map = mapRef.current;
+
+    portalCityMarkersRef.current.forEach((marker) => {
+      marker.getElement().style.display = isBroadcast ? 'none' : '';
+    });
+
+    if (!map) {
+      return;
+    }
+
+    map.setMaxZoom(isBroadcast ? 16 : 10);
+    if (map.getLayer(VWORLD_LAYER_ID)) {
+      map.setLayoutProperty(VWORLD_LAYER_ID, 'visibility', isBroadcast ? 'visible' : 'none');
+    }
+  }, [isBroadcast]);
+
   // 방송모드 진입·해제 시 각 모드의 기본 구도로 화면을 다시 잡는다.
   // 전체화면 상태 갱신과 렌더가 겹쳐도 취소되지 않도록 isBroadcast에만 반응하고,
   // 전환 완료 시점이 브라우저마다 달라 두 번(멱등) 적용해 최종 크기에서 확정한다.
@@ -1271,6 +1329,12 @@ const RadarMapView = ({ refreshToken = 0 }) => {
             <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent px-8 pb-4 pt-10">
               {renderTimeline(true)}
             </div>
+
+            {VWORLD_HYBRID_TILES.length > 0 ? (
+              <div className="pointer-events-none absolute bottom-[5.25rem] right-3 z-20 rounded bg-white/70 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 backdrop-blur-sm">
+                공간정보 오픈플랫폼 VWorld
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>
