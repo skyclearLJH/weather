@@ -152,8 +152,17 @@ const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 �
 // --- 방송모드 ---
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
 const BROADCAST_CACHE_LIMIT = 130; // 전 구간 재생을 위해 모든 프레임을 캐시
-const BROADCAST_LEGEND_LABELS = [1, 5, 10, 30, 70, 150];
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
+
+// 기본(포털) 초기 화면: 남한 전체. 방송모드: 서해 상 접근 강수까지 보이는 광역 구도.
+const KOREA_MAP_BOUNDS = [
+  [125.0, 32.9],
+  [129.8, 38.7],
+];
+const BROADCAST_MAP_BOUNDS = [
+  [118.8, 31.6],
+  [136.2, 41.3],
+];
 
 const formatBroadcastDate = (time) =>
   `${time.getMonth() + 1}/${time.getDate()} (${WEEKDAY_LABELS[time.getDay()]})`;
@@ -313,10 +322,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       container: mapContainerRef.current,
       style: MAP_STYLE,
       // 화면 비율과 무관하게 남한 전체(제주 포함)가 들어오도록 영역 기준으로 맞춘다.
-      bounds: [
-        [125.0, 32.9],
-        [129.8, 38.7],
-      ],
+      bounds: KOREA_MAP_BOUNDS,
       fitBoundsOptions: { padding: 12 },
       minZoom: 4.5,
       maxZoom: 10,
@@ -847,11 +853,31 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞춘다.
+  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞추고,
+  // 방송모드 진입·해제 시에는 각 모드의 기본 구도로 화면을 다시 잡는다.
+  const previousBroadcastRef = useRef(false);
   useEffect(() => {
+    const broadcastChanged = previousBroadcastRef.current !== isBroadcast;
+    previousBroadcastRef.current = isBroadcast;
+
     const timers = [120, 400].map((delay) =>
       window.setTimeout(() => mapRef.current?.resize(), delay),
     );
+    if (broadcastChanged) {
+      timers.push(
+        window.setTimeout(() => {
+          const map = mapRef.current;
+          if (!map) {
+            return;
+          }
+          if (isBroadcast) {
+            map.fitBounds(BROADCAST_MAP_BOUNDS, { padding: 0, duration: 0 });
+          } else {
+            map.fitBounds(KOREA_MAP_BOUNDS, { padding: 12, duration: 0 });
+          }
+        }, 450),
+      );
+    }
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [isFullscreen, isBroadcast]);
 
@@ -1191,31 +1217,43 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               종료
             </button>
 
-            {/* 좌측 세로 강수 스케일 */}
+            {/* 좌측 세로 강수 스케일 (일반 모드 범례와 동일한 6등분 구성) */}
             <div className="pointer-events-none absolute left-5 top-1/2 z-20 -translate-y-1/2 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm">
               <div className="flex h-[46vh] min-h-[280px]">
                 <div className="flex w-2.5 flex-col-reverse overflow-hidden rounded-sm">
-                  {RAIN_PALETTE.map(({ min, color }) => (
-                    <div
-                      key={min}
-                      className="w-full flex-1"
-                      style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
-                    />
+                  {LEGEND_SEGMENTS.map((segment) => (
+                    <div key={segment.key} className="flex flex-1 flex-col-reverse">
+                      {segment.values.map((value) => {
+                        const color = getPaletteColorByValue(value);
+                        return (
+                          <div
+                            key={value}
+                            className="w-full flex-1"
+                            style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
+                          />
+                        );
+                      })}
+                    </div>
                   ))}
                 </div>
                 <div className="relative ml-1.5 w-6">
-                  {BROADCAST_LEGEND_LABELS.map((value) => {
-                    const paletteIndex = RAIN_PALETTE.findIndex((item) => item.min === value);
-                    return (
-                      <span
-                        key={value}
-                        className="absolute translate-y-1/2 text-[10px] font-semibold leading-none text-white"
-                        style={{ bottom: `${(paletteIndex / RAIN_PALETTE.length) * 100}%` }}
-                      >
-                        {value}
-                      </span>
-                    );
-                  })}
+                  {[
+                    [0, 0],
+                    [1, 1],
+                    [5, 2],
+                    [10, 3],
+                    [30, 4],
+                    [70, 5],
+                    [150, 6],
+                  ].map(([value, boundary]) => (
+                    <span
+                      key={value}
+                      className="absolute translate-y-1/2 text-[10px] font-semibold leading-none text-white"
+                      style={{ bottom: `${(boundary / 6) * 100}%` }}
+                    >
+                      {value}
+                    </span>
+                  ))}
                 </div>
               </div>
               <div className="mt-1.5 text-center text-[9px] font-semibold text-white/80">mm/h</div>
