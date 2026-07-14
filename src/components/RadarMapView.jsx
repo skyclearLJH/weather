@@ -726,11 +726,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         const progress = Math.min(1, (timestamp - startedAt) / durationMs);
         const easedProgress = progress * progress * (3 - 2 * progress);
         context.clearRect(0, 0, canvas.width, canvas.height);
+        context.globalCompositeOperation = 'source-over';
         context.globalAlpha = 1 - easedProgress;
         context.drawImage(fromCanvas, 0, 0);
+        // 가중 합성으로 반투명 에코의 중간 밝기가 꺼지는 플래시를 방지한다.
+        context.globalCompositeOperation = 'lighter';
         context.globalAlpha = easedProgress;
         context.drawImage(toCanvas, 0, 0);
         context.globalAlpha = 1;
+        context.globalCompositeOperation = 'source-over';
         mapRef.current?.triggerRepaint();
 
         if (progress < 1) {
