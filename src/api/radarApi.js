@@ -90,23 +90,56 @@ const rainBucket = (mmPerHour) => {
   return bucket;
 };
 
-// QPF 색상 → 팔레트 버킷 역매핑 (정확히 같은 RGB로 그려짐)
+// QPF 색상 → 팔레트 버킷 역매핑. vapi 오버레이는 가장자리가 안티에일리어싱
+// 되어 있어, 정확 일치가 없으면 가장 가까운 팔레트 색으로 양자화한다(메모이즈).
 const QPF_COLOR_TO_BUCKET = new Map(
   RAIN_PALETTE.map(({ color }, index) => [(color[0] << 16) | (color[1] << 8) | color[2], index + 1]),
 );
+const QPF_NEAREST_BUCKET_CACHE = new Map();
+const QPF_NEAREST_DISTANCE_LIMIT = 100 * 100;
 
-// --- QPF 분포도 이미지의 지리 정합 ---
-// 835×820 PNG에서 지도영역은 x 1..798, y 21..818 (798×798).
-// 해안선 자동 정합(경계점 4,472개 중 99% 일치)으로 산출한 LCC 경계(km).
-export const QPF_IMAGE = {
-  cropX: 1,
-  cropY: 21,
-  cropSize: 798,
-  lccXMin: -437.82,
-  lccXMax: 584.82,
-  lccYMin: -768.32,
-  lccYMax: 254.32,
+const quantizeQpfColor = (r, g, b) => {
+  const key = (r << 16) | (g << 8) | b;
+  let bucket = QPF_COLOR_TO_BUCKET.get(key);
+  if (bucket !== undefined) {
+    return bucket;
+  }
+  bucket = QPF_NEAREST_BUCKET_CACHE.get(key);
+  if (bucket !== undefined) {
+    return bucket;
+  }
+
+  let best = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < RAIN_PALETTE.length; index++) {
+    const [pr, pg, pb] = RAIN_PALETTE[index].color;
+    const distance = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = index + 1;
+    }
+  }
+  bucket = bestDistance <= QPF_NEAREST_DISTANCE_LIMIT ? best : 0;
+  QPF_NEAREST_BUCKET_CACHE.set(key, bucket);
+  return bucket;
 };
+
+// --- 초단기 예측(QPF) 오버레이의 지리 정합 ---
+// 날씨누리가 쓰는 vapi.kma.go.kr의 투명 PNG(1453×1453)를 그대로 사용한다.
+// 2025-06-24부터 AI 결합 산출물로 전환된 현행 초단기 강수예측이다.
+// 도메인은 날씨누리 지도 정의(LCC, lat_0=0) extent를 우리 LCC(lat_0=38)로
+// 환산한 값: x −440~584km, y −770~254km (1,024km 정사각).
+export const QPF_IMAGE = {
+  cropX: 0,
+  cropY: 0,
+  cropSize: 1453,
+  lccXMin: -440.0,
+  lccXMax: 584.0,
+  lccYMin: -770.0,
+  lccYMax: 254.0,
+};
+
+const VAPI_IMAGE_BASE = 'https://vapi.kma.go.kr/BUFD/';
 
 // --- 시각 유틸 (KST 기준 문자열) ---
 const pad2 = (value) => String(value).padStart(2, '0');
@@ -194,34 +227,38 @@ export const fetchRadarFrame = async (tm) => {
 };
 
 // --- 초단기 예측(QPF) 프레임 ---
-// 분포도 PNG의 지도영역에서 강수 색 픽셀만 버킷 배열로 추출한다.
+// 날씨누리와 동일한 vapi의 사전 렌더링 투명 오버레이(CORS 개방)에서 강수
+// 픽셀을 버킷 배열로 추출한다. 배경지도·범례가 없어 색 추출이 오염되지 않는다.
 export const fetchQpfFrame = async (tm, efMinutes) => {
-  const url = `${KMA_PROXY_BASE}api/typ03/cgi/rdr/nph-qpf_ana_img?tm=${tm}&qpf=B&ef=${efMinutes}`;
+  const efLabel = String(efMinutes).padStart(3, '0');
+  const url = `${VAPI_IMAGE_BASE}qpf_ana_img_${tm}_m${efLabel}_1453.png`;
   const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) {
     throw new Error(`예측강수 자료 요청 실패 (${response.status})`);
   }
 
   const blob = await response.blob();
-  if (blob.size < 4000) {
+  if (blob.size < 1000 || !(response.headers.get('content-type') ?? '').includes('image')) {
     throw new Error('예측강수 자료가 아직 준비되지 않았습니다.');
   }
 
   const bitmap = await createImageBitmap(blob);
-  const { cropX, cropY, cropSize } = QPF_IMAGE;
+  const { cropSize } = QPF_IMAGE;
   const canvas = document.createElement('canvas');
   canvas.width = cropSize;
   canvas.height = cropSize;
   const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.drawImage(bitmap, cropX, cropY, cropSize, cropSize, 0, 0, cropSize, cropSize);
+  context.drawImage(bitmap, 0, 0, cropSize, cropSize);
   bitmap.close();
 
   const { data } = context.getImageData(0, 0, cropSize, cropSize);
   const buckets = new Uint8Array(cropSize * cropSize);
   for (let index = 0; index < buckets.length; index++) {
     const offset = index * 4;
-    const key = (data[offset] << 16) | (data[offset + 1] << 8) | data[offset + 2];
-    buckets[index] = QPF_COLOR_TO_BUCKET.get(key) ?? 0;
+    if (data[offset + 3] < 128) {
+      continue; // 투명 = 무강수
+    }
+    buckets[index] = quantizeQpfColor(data[offset], data[offset + 1], data[offset + 2]);
   }
 
   return { tm, ef: efMinutes, size: cropSize, buckets };
