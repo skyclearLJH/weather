@@ -3,6 +3,7 @@ import { Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
+import interKoreanSeam from '../data/map/interKoreanSeam.json';
 import neighborCoasts from '../data/map/neighborCoasts.json';
 import {
   RADAR_GRID,
@@ -254,6 +255,7 @@ const MAP_STYLE = {
   sources: {
     provinces: { type: 'geojson', data: krProvinces },
     neighbors: { type: 'geojson', data: neighborCoasts },
+    interKoreanSeam: { type: 'geojson', data: interKoreanSeam },
   },
   layers: [
     { id: 'sea', type: 'background', paint: { 'background-color': '#dbe6ef' } },
@@ -262,6 +264,12 @@ const MAP_STYLE = {
       type: 'fill',
       source: 'neighbors',
       paint: { 'fill-color': '#eceae6' },
+    },
+    {
+      id: 'inter-korean-seam',
+      type: 'fill',
+      source: 'interKoreanSeam',
+      paint: { 'fill-color': '#eceae6', 'fill-opacity': 0 },
     },
     {
       id: 'neighbor-coast',
@@ -367,6 +375,7 @@ const MAP_COLOR_THEMES = {
     neighborCoast: '#c3c8ce',
     land: '#ffffff',
     provinceBorder: '#a5aeb9',
+    interKoreanSeamOpacity: 0,
   },
   broadcast: {
     sea: '#46536a',
@@ -374,6 +383,7 @@ const MAP_COLOR_THEMES = {
     neighborCoast: '#5d6879',
     land: '#eef0f2',
     provinceBorder: '#4a5568',
+    interKoreanSeamOpacity: 1,
   },
 };
 
@@ -1211,6 +1221,12 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       try {
         map.setPaintProperty('sea', 'background-color', theme.sea);
         map.setPaintProperty('neighbor-land', 'fill-color', theme.neighborLand);
+        map.setPaintProperty('inter-korean-seam', 'fill-color', theme.neighborLand);
+        map.setPaintProperty(
+          'inter-korean-seam',
+          'fill-opacity',
+          theme.interKoreanSeamOpacity,
+        );
         map.setPaintProperty('neighbor-coast', 'line-color', theme.neighborCoast);
         map.setPaintProperty('land', 'fill-color', theme.land);
         map.setPaintProperty('province-border', 'line-color', theme.provinceBorder);
