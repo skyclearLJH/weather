@@ -1437,71 +1437,74 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               style={{ left: '4.4%', top: '14%' }}
             >
               <div
-                className="flex items-stretch overflow-hidden rounded-md border border-white/20 shadow-2xl"
+                className="relative flex items-center overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 shadow-2xl"
                 style={{
                   width: 'clamp(430px, 29vw, 700px)',
                   height: 'clamp(58px, 7.4vh, 96px)',
+                  paddingLeft: '1.3vw',
+                  paddingRight: '1.2vw',
+                  gap: '1.1vw',
                 }}
               >
-                <div
-                  className="flex min-w-0 flex-1 items-center bg-gradient-to-r from-[#082b5c]/95 via-[#0e4d8e]/95 to-[#1769aa]/95"
-                  style={{ paddingLeft: '1.3vw', paddingRight: '1.2vw', gap: '1.1vw' }}
-                >
-                  <div className="relative flex flex-col leading-none text-white">
-                    <span
-                      className="font-black tracking-[0.18em]"
-                      style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
-                    >
-                      KBS
-                    </span>
-                    <span
-                      className="mt-[0.2em] font-bold tracking-[0.1em] text-white/80"
-                      style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
-                    >
-                      WEATHER
-                    </span>
-                    <svg
-                      viewBox="0 0 12 12"
-                      className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-[#f4c542]"
-                      aria-hidden="true"
-                    >
-                      <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
-                    </svg>
-                  </div>
+                <div className="relative flex flex-col leading-none text-white">
                   <span
-                    className="whitespace-nowrap font-black tracking-tight text-white"
-                    style={{
-                      fontSize: 'clamp(26px, 2.1vw, 46px)',
-                      textShadow: '0 2px 6px rgba(0,0,0,0.35)',
-                    }}
+                    className="font-black tracking-[0.18em]"
+                    style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
                   >
-                    레이더 영상
+                    KBS
                   </span>
+                  <span
+                    className="mt-[0.2em] font-bold tracking-[0.1em] text-white/80"
+                    style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
+                  >
+                    WEATHER
+                  </span>
+                  <svg
+                    viewBox="0 0 12 12"
+                    className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-[#f4c542]"
+                    aria-hidden="true"
+                  >
+                    <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
+                  </svg>
                 </div>
+                <span
+                  className="whitespace-nowrap font-black tracking-tight text-white"
+                  style={{
+                    fontSize: 'clamp(26px, 2.1vw, 46px)',
+                    textShadow: '0 2px 6px rgba(0,0,0,0.35)',
+                  }}
+                >
+                  레이더 영상
+                </span>
                 {currentFrame ? (
                   <div
-                    className="flex shrink-0 items-center gap-2 whitespace-nowrap bg-[#f4c542]/95 text-[#102a43]"
-                    style={{ paddingLeft: '1.1vw', paddingRight: '1.2vw' }}
+                    className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap"
+                    style={{ gap: '0.6vw' }}
                   >
+                    <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
                     <span
-                      className="font-black leading-none tabular-nums"
-                      style={{ fontSize: 'clamp(22px, 1.7vw, 38px)' }}
+                      className="font-black leading-none tabular-nums text-white"
+                      style={{
+                        fontSize: 'clamp(22px, 1.7vw, 38px)',
+                        textShadow: '0 2px 5px rgba(0,0,0,0.3)',
+                      }}
                     >
                       {formatHourMinute(currentFrame.validTime)}
                     </span>
                     <span
-                      className="font-bold text-[#29435c]"
+                      className="font-semibold text-[#bdd6fb]"
                       style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
                     >
                       {formatBroadcastDate(currentFrame.validTime)}
                     </span>
                     {currentFrame.kind === 'fct' ? (
-                      <span className="rounded bg-[#0b3a70] px-1.5 py-0.5 text-xs font-bold text-white">
+                      <span className="rounded bg-[#f4c542] px-1.5 py-0.5 text-xs font-black text-[#102a43]">
                         예측
                       </span>
                     ) : null}
                   </div>
                 ) : null}
+                <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
               </div>
             </div>
 
