@@ -76,7 +76,6 @@ const BROADCAST_ADMIN_LAYER_IDS = [
   'broadcast-sgg-label',
   'broadcast-emd-label',
   'broadcast-dokdo-dot',
-  'broadcast-dokdo-label',
 ];
 
 const SIDO_SHORT_NAME = [
@@ -123,7 +122,7 @@ const DOKDO_GEOJSON = {
     {
       type: 'Feature',
       properties: { name: '독도' },
-      geometry: { type: 'Point', coordinates: [131.8693, 37.2398] },
+      geometry: { type: 'Point', coordinates: [131.86956, 37.24078] },
     },
   ],
 };
@@ -149,17 +148,17 @@ const ensureBroadcastAdminLayers = (map) => {
       id: 'broadcast-sgg-border',
       type: 'line',
       source: 'broadcast-sgg',
-      minzoom: 5.1,
-      paint: { 'line-color': '#6b7280', 'line-width': ['interpolate', ['linear'], ['zoom'], 5.1, 0.45, 9, 1] },
+      minzoom: 6.8,
+      paint: { 'line-color': '#6b7280', 'line-width': ['interpolate', ['linear'], ['zoom'], 6.8, 0.45, 10, 1] },
     },
     {
       id: 'broadcast-sido-label',
       type: 'symbol',
       source: 'broadcast-sido-labels',
-      maxzoom: 6.1,
+      maxzoom: 7,
       layout: {
         'text-field': SIDO_SHORT_NAME,
-        'text-size': ['interpolate', ['linear'], ['zoom'], 4.5, 12, 6.1, 16],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 4.5, 12, 7, 17],
         'text-font': ['Open Sans Bold'],
         'text-allow-overlap': false,
         'text-padding': 4,
@@ -170,11 +169,11 @@ const ensureBroadcastAdminLayers = (map) => {
       id: 'broadcast-sgg-label',
       type: 'symbol',
       source: 'broadcast-sgg-labels',
-      minzoom: 5.35,
-      maxzoom: 9.2,
+      minzoom: 6.9,
+      maxzoom: 10,
       layout: {
         'text-field': ['get', 'sggnm'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 5.35, 9, 8.5, 14],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 6.9, 9, 9.5, 14],
         'text-font': ['Open Sans Semibold'],
         'text-allow-overlap': false,
         'text-padding': 2,
@@ -186,25 +185,11 @@ const ensureBroadcastAdminLayers = (map) => {
       type: 'circle',
       source: 'broadcast-dokdo',
       paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 3.2, 8, 5.5],
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 1.1, 8, 1.5, 12, 2],
         'circle-color': '#f8fafc',
         'circle-stroke-color': '#263244',
-        'circle-stroke-width': 1.4,
+        'circle-stroke-width': 0.6,
       },
-    },
-    {
-      id: 'broadcast-dokdo-label',
-      type: 'symbol',
-      source: 'broadcast-dokdo',
-      minzoom: 5.2,
-      layout: {
-        'text-field': ['get', 'name'],
-        'text-size': 11,
-        'text-font': ['Open Sans Semibold'],
-        'text-offset': [0.8, 0],
-        'text-anchor': 'left',
-      },
-      paint: { 'text-color': '#263244', 'text-halo-color': 'rgba(255,255,255,0.92)', 'text-halo-width': 1.3 },
     },
   ];
 
@@ -227,17 +212,17 @@ const ensureBroadcastEmdLayers = (map) => {
       id: 'broadcast-emd-border',
       type: 'line',
       source: 'broadcast-emd',
-      minzoom: 8.1,
+      minzoom: 9.55,
       paint: { 'line-color': '#9ca3af', 'line-width': 0.55, 'line-opacity': 0.9 },
     },
     {
       id: 'broadcast-emd-label',
       type: 'symbol',
       source: 'broadcast-emd-labels',
-      minzoom: 8.35,
+      minzoom: 9.8,
       layout: {
         'text-field': ['get', 'label'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 8.35, 9, 12, 13],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 9.8, 9, 12, 13],
         'text-font': ['Open Sans Regular'],
         'text-allow-overlap': false,
         'text-padding': 1,
@@ -1103,13 +1088,13 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     const applyVisibility = () => {
       map.setMaxZoom(isBroadcast ? 16 : 10);
       setBroadcastAdminVisibility(map, isBroadcast);
-      if (isBroadcast && map.getZoom() >= 8) {
+      if (isBroadcast && map.getZoom() >= 9.4) {
         ensureBroadcastEmdLayers(map);
       }
     };
 
     const handleBroadcastZoom = () => {
-      if (isBroadcast && map.getZoom() >= 8) {
+      if (isBroadcast && map.getZoom() >= 9.4) {
         ensureBroadcastEmdLayers(map);
       }
     };
