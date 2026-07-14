@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, Minimize2, MonitorPlay, X } from 'lucide-react';
+import { Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
@@ -500,7 +500,9 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   const navControlAddedRef = useRef(false);
   // 주기적 자동 갱신(눈금·'현재'가 실제 시간을 따라가도록)
   const [autoRefreshTick, setAutoRefreshTick] = useState(0);
+  const [manualRefreshTick, setManualRefreshTick] = useState(0);
   const lastRefreshTokenRef = useRef(refreshToken);
+  const lastManualRefreshTickRef = useRef(0);
   const lastBuildSignatureRef = useRef('');
   const framesRef = useRef([]);
   const frameIndexRef = useRef(0);
@@ -720,8 +722,11 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     let isActive = true;
 
     const initialize = async () => {
-      const isManualRefresh = refreshToken !== lastRefreshTokenRef.current;
+      const isExternalRefresh = refreshToken !== lastRefreshTokenRef.current;
+      const isLocalRefresh = manualRefreshTick !== lastManualRefreshTickRef.current;
+      const isManualRefresh = isExternalRefresh || isLocalRefresh;
       lastRefreshTokenRef.current = refreshToken;
+      lastManualRefreshTickRef.current = manualRefreshTick;
 
       if (isManualRefresh) {
         frameCacheRef.current.clear();
@@ -845,7 +850,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => {
       isActive = false;
     };
-  }, [loadFrameData, rememberFrameBuckets, refreshToken, autoRefreshTick]);
+  }, [loadFrameData, rememberFrameBuckets, refreshToken, autoRefreshTick, manualRefreshTick]);
 
   // 시간이 흐르면 '현재'와 눈금도 따라가야 하므로 주기적으로 최신 발표를 확인한다.
   // 모바일은 화면이 꺼지면 타이머가 멈추므로, 탭 복귀 시에도 즉시 확인한다.
@@ -1007,6 +1012,10 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     setFrameIndex(nearestIndex);
   };
 
+  const handleRadarRefresh = useCallback(() => {
+    setManualRefreshTick((tick) => tick + 1);
+  }, []);
+
   const timelineTicks = useMemo(() => {
     if (baseTimeMs === null) {
       return [];
@@ -1160,6 +1169,36 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       setIsBroadcast(false);
     }
   }, [isFullscreen]);
+
+  // CSS 대체 전체화면에서도 Esc 키로 방송모드를 빠져나올 수 있게 한다.
+  useEffect(() => {
+    if (!isBroadcast) {
+      return undefined;
+    }
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        exitBroadcastMode();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isBroadcast, exitBroadcastMode]);
+
+  // 방송모드에서는 +/− 줌 버튼을 숨긴다(터치스크린 두 손가락 줌 사용).
+  useEffect(() => {
+    const map = mapRef.current;
+    const navControl = navControlRef.current;
+    if (!map || !navControl) {
+      return;
+    }
+    if (isBroadcast && navControlAddedRef.current) {
+      map.removeControl(navControl);
+      navControlAddedRef.current = false;
+    } else if (!isBroadcast && !navControlAddedRef.current) {
+      map.addControl(navControl, 'top-right');
+      navControlAddedRef.current = true;
+    }
+  }, [isBroadcast]);
 
   // 방송모드 지도 배색 전환 (스타일 로딩 전이면 준비되는 대로 적용)
   useEffect(() => {
@@ -1379,7 +1418,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
                 'h-[calc(100dvh-31rem)] min-h-[280px] w-full sm:h-[60vh] sm:min-h-[420px]'
           }
         />
-        {status === 'loading' ? (
+        {status === 'loading' && frames.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-sm font-medium text-slate-500">
             레이더 자료를 불러오는 중입니다…
           </div>
@@ -1398,64 +1437,66 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               style={{ left: '4.4%', top: '14%' }}
             >
               <div
-                className="flex items-center rounded-sm bg-gradient-to-r from-[#15449f]/95 via-[#2563c9]/95 to-[#3f83e8]/90 shadow-xl"
+                className="flex items-stretch overflow-hidden rounded-md border border-white/20 shadow-2xl"
                 style={{
                   width: 'clamp(430px, 29vw, 700px)',
                   height: 'clamp(58px, 7.4vh, 96px)',
-                  paddingLeft: '1.3vw',
-                  paddingRight: '1.3vw',
-                  gap: '1.1vw',
                 }}
               >
-                <div className="relative flex flex-col leading-none text-white">
-                  <span
-                    className="font-black tracking-[0.18em]"
-                    style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
-                  >
-                    KBS
-                  </span>
-                  <span
-                    className="mt-[0.2em] font-bold tracking-[0.1em] text-white/90"
-                    style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
-                  >
-                    WEATHER
-                  </span>
-                  <svg
-                    viewBox="0 0 12 12"
-                    className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-white/90"
-                    aria-hidden="true"
-                  >
-                    <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
-                  </svg>
-                </div>
-                <span
-                  className="whitespace-nowrap font-black tracking-tight text-white"
-                  style={{
-                    fontSize: 'clamp(26px, 2.1vw, 46px)',
-                    textShadow: '0 2px 6px rgba(0,0,0,0.35)',
-                  }}
+                <div
+                  className="flex min-w-0 flex-1 items-center bg-gradient-to-r from-[#082b5c]/95 via-[#0e4d8e]/95 to-[#1769aa]/95"
+                  style={{ paddingLeft: '1.3vw', paddingRight: '1.2vw', gap: '1.1vw' }}
                 >
-                  레이더 영상
-                </span>
-                {currentFrame ? (
-                  <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
+                  <div className="relative flex flex-col leading-none text-white">
                     <span
-                      className="font-extrabold leading-none tabular-nums text-white"
-                      style={{
-                        fontSize: 'clamp(22px, 1.7vw, 38px)',
-                        textShadow: '0 2px 5px rgba(0,0,0,0.3)',
-                      }}
+                      className="font-black tracking-[0.18em]"
+                      style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
+                    >
+                      KBS
+                    </span>
+                    <span
+                      className="mt-[0.2em] font-bold tracking-[0.1em] text-white/80"
+                      style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
+                    >
+                      WEATHER
+                    </span>
+                    <svg
+                      viewBox="0 0 12 12"
+                      className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-[#f4c542]"
+                      aria-hidden="true"
+                    >
+                      <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
+                    </svg>
+                  </div>
+                  <span
+                    className="whitespace-nowrap font-black tracking-tight text-white"
+                    style={{
+                      fontSize: 'clamp(26px, 2.1vw, 46px)',
+                      textShadow: '0 2px 6px rgba(0,0,0,0.35)',
+                    }}
+                  >
+                    레이더 영상
+                  </span>
+                </div>
+                {currentFrame ? (
+                  <div
+                    className="flex shrink-0 items-center gap-2 whitespace-nowrap bg-[#f4c542]/95 text-[#102a43]"
+                    style={{ paddingLeft: '1.1vw', paddingRight: '1.2vw' }}
+                  >
+                    <span
+                      className="font-black leading-none tabular-nums"
+                      style={{ fontSize: 'clamp(22px, 1.7vw, 38px)' }}
                     >
                       {formatHourMinute(currentFrame.validTime)}
                     </span>
                     <span
-                      className="font-semibold text-white/90"
+                      className="font-bold text-[#29435c]"
                       style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
                     >
                       {formatBroadcastDate(currentFrame.validTime)}
                     </span>
                     {currentFrame.kind === 'fct' ? (
-                      <span className="rounded bg-white/25 px-1.5 py-0.5 text-xs font-bold text-white">
+                      <span className="rounded bg-[#0b3a70] px-1.5 py-0.5 text-xs font-bold text-white">
                         예측
                       </span>
                     ) : null}
@@ -1463,17 +1504,6 @@ const RadarMapView = ({ refreshToken = 0 }) => {
                 ) : null}
               </div>
             </div>
-
-            {/* 종료 버튼 */}
-            <button
-              type="button"
-              onClick={exitBroadcastMode}
-              className="absolute right-14 top-4 z-20 inline-flex items-center gap-1.5 rounded-full bg-slate-900/55 px-3 py-2 text-sm font-semibold text-white backdrop-blur-sm transition hover:bg-slate-900/75"
-              aria-label="방송모드 종료"
-            >
-              <X size={16} />
-              종료
-            </button>
 
             {/* 좌측 세로 강수 스케일 (일반 모드 범례와 동일한 6등분 구성) */}
             <div className="pointer-events-none absolute left-5 top-1/2 z-20 -translate-y-1/2 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm">
@@ -1522,9 +1552,17 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               {renderTimeline(true)}
             </div>
 
-            <div className="pointer-events-none absolute bottom-[5.25rem] right-3 z-20 rounded bg-white/70 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 backdrop-blur-sm">
-              경계: 통계청 SGIS · vuski/admdongkor (CC BY 4.0)
-            </div>
+            <button
+              type="button"
+              onClick={handleRadarRefresh}
+              disabled={status === 'loading'}
+              className="absolute bottom-[5.35rem] right-6 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
+              aria-label="레이더 영상 새로고침"
+              title="레이더 영상 새로고침"
+            >
+              <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
+            </button>
+
           </>
         ) : null}
       </div>
