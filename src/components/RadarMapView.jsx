@@ -319,7 +319,13 @@ const RadarMapView = ({ refreshToken = 0 }) => {
         ],
       });
       map.addLayer(
-        { id: 'radar-overlay', type: 'raster', source: 'radar-overlay', paint: { 'raster-opacity': 1, 'raster-resampling': 'nearest' } },
+        {
+          id: 'radar-overlay',
+          type: 'raster',
+          source: 'radar-overlay',
+          // linear 리샘플링: 확대 시 에코 경계가 계단식이 아니라 부드럽게 보간된다.
+          paint: { 'raster-opacity': 1, 'raster-resampling': 'linear' },
+        },
         'province-border',
       );
 
