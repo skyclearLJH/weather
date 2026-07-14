@@ -1567,7 +1567,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               {renderTimeline(true)}
             </div>
 
-            <div className="absolute bottom-[5.35rem] right-6 z-20 flex items-center gap-2">
+            <div className="absolute bottom-[8.5rem] right-6 z-20 flex items-center gap-2">
               <select
                 value={playDurationSec}
                 onChange={(event) => setPlayDurationSec(Number(event.target.value))}
