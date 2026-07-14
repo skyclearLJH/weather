@@ -1074,6 +1074,10 @@ const normalizeWarningCityCountyName = (detail = '', broadRegion = '') => {
     return '광주';
   }
 
+  if (broadRegion === '경북' && /(?:울릉도|독도)/.test(normalizedDetail)) {
+    return '울릉군';
+  }
+
   const cityCountyMatch = normalizedDetail.match(/^(.+?(?:시|군))/);
   return cityCountyMatch?.[1] ?? '';
 };
