@@ -334,7 +334,6 @@ const KOREA_MAP_BOUNDS = [
   [125.0, 32.9],
   [129.8, 38.7],
 ];
-const MOBILE_FULLSCREEN_ZOOM_BOOST = 0.45;
 // 16:9 화면에서 위도 범위가 기준: 남한(제주 포함)이 화면 세로의 약 70%를 차지한다.
 const BROADCAST_MAP_BOUNDS = [
   [121.5, 32.1],
@@ -1123,7 +1122,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  // 모바일 전체화면은 가로 폭 기준 fitBounds보다 한 단계 더 확대해 남한이 세로 화면을 채우게 한다.
+  // 모바일 전체화면은 컨테이너 변경 후 남한 전체 경계를 다시 맞춰 위아래 구도를 채운다.
   useEffect(() => {
     const timers = [120, 500].map((delay) =>
       window.setTimeout(() => {
@@ -1138,9 +1137,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
 
         map.fitBounds(KOREA_MAP_BOUNDS, { padding: isFullscreen ? 0 : 12, duration: 0 });
-        if (isFullscreen) {
-          map.setZoom(Math.min(map.getZoom() + MOBILE_FULLSCREEN_ZOOM_BOOST, map.getMaxZoom()));
-        }
       }, delay),
     );
     return () => timers.forEach((timer) => window.clearTimeout(timer));
