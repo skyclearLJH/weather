@@ -35,30 +35,6 @@ const NEARBY_PREFETCH_RADIUS = 3;
 const QPF_EF_MINUTES = Array.from({ length: 36 }, (_, index) => (index + 1) * 10);
 const PLAY_INTERVAL_MS = 450;
 
-// 일반 지도에 표시하는 KBS 총국·을지국 소재 도시. 방송모드에서는 행정구역 지명으로 대체한다.
-const PORTAL_CITIES = [
-  { name: '서울', lon: 126.978, lat: 37.566 },
-  { name: '인천', lon: 126.705, lat: 37.456 },
-  { name: '춘천', lon: 127.73, lat: 37.881 },
-  { name: '원주', lon: 127.92, lat: 37.342 },
-  { name: '강릉', lon: 128.876, lat: 37.752 },
-  { name: '청주', lon: 127.489, lat: 36.642 },
-  { name: '충주', lon: 127.926, lat: 36.991 },
-  { name: '대전', lon: 127.385, lat: 36.35 },
-  { name: '전주', lon: 127.148, lat: 35.824 },
-  { name: '광주', lon: 126.852, lat: 35.16 },
-  { name: '목포', lon: 126.392, lat: 34.812 },
-  { name: '순천', lon: 127.487, lat: 34.951 },
-  { name: '대구', lon: 128.601, lat: 35.871 },
-  { name: '안동', lon: 128.726, lat: 36.568 },
-  { name: '포항', lon: 129.343, lat: 36.019 },
-  { name: '울산', lon: 129.311, lat: 35.539 },
-  { name: '부산', lon: 129.075, lat: 35.18 },
-  { name: '창원', lon: 128.681, lat: 35.228 },
-  { name: '진주', lon: 128.108, lat: 35.18 },
-  { name: '제주', lon: 126.531, lat: 33.499 },
-];
-
 const BROADCAST_ADMIN_SOURCES = {
   'broadcast-sido': '/data/map/kr-sido-20260701.geojson',
   'broadcast-sgg': '/data/map/kr-sgg-20260701.geojson',
@@ -492,9 +468,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const frameCacheRef = useRef(new Map());
   const pendingRef = useRef(new Map());
   const renderTokenRef = useRef(0);
-  const portalCityMarkersRef = useRef([]);
-  const isBroadcastRef = useRef(false);
-
   const [frames, setFrames] = useState([]);
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -596,22 +569,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         'province-border',
       );
 
-      if (isBroadcastRef.current) {
-        ensureBroadcastAdminLayers(map);
-      }
-
-      PORTAL_CITIES.forEach(({ name, lon, lat }) => {
-        const element = document.createElement('div');
-        element.className = 'pointer-events-none select-none text-center';
-        element.innerHTML =
-          '<div class="mx-auto h-1.5 w-1.5 rounded-full bg-slate-600"></div>' +
-          `<div class="mt-0.5 text-[11px] font-semibold leading-none text-slate-700" style="text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">${name}</div>`;
-        element.style.display = isBroadcastRef.current ? 'none' : '';
-        const marker = new maplibregl.Marker({ element, anchor: 'top' })
-          .setLngLat([lon, lat])
-          .addTo(map);
-        portalCityMarkersRef.current.push(marker);
-      });
+      ensureBroadcastAdminLayers(map);
     };
 
     map.on('load', setupOverlay);
@@ -629,7 +587,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       if (transitionAnimationRef.current !== null) {
         cancelAnimationFrame(transitionAnimationRef.current);
       }
-      portalCityMarkersRef.current = [];
       map.remove();
       mapRef.current = null;
       overlayCanvasRef.current = null;
@@ -1168,42 +1125,37 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [isFullscreen, isBroadcast]);
 
-  // 방송모드에서만 행정경계·지명을 지연 로딩하고, 일반 지도용 KBS 거점 마커는 숨긴다.
+  // 두 모드 모두 같은 줌 단계별 행정경계·지명을 사용한다. 무거운 읍면동 자료만 확대 시 불러온다.
   useEffect(() => {
-    isBroadcastRef.current = isBroadcast;
     const map = mapRef.current;
-
-    portalCityMarkersRef.current.forEach((marker) => {
-      marker.getElement().style.display = isBroadcast ? 'none' : '';
-    });
 
     if (!map) {
       return;
     }
 
     const applyVisibility = () => {
-      map.setMaxZoom(isBroadcast ? 16 : 10);
-      setBroadcastAdminVisibility(map, isBroadcast);
-      if (isBroadcast && map.getZoom() >= 9.4) {
+      map.setMaxZoom(16);
+      setBroadcastAdminVisibility(map, true);
+      if (map.getZoom() >= 9.4) {
         ensureBroadcastEmdLayers(map);
       }
     };
 
-    const handleBroadcastZoom = () => {
-      if (isBroadcast && map.getZoom() >= 9.4) {
+    const handleAdminZoom = () => {
+      if (map.getZoom() >= 9.4) {
         ensureBroadcastEmdLayers(map);
       }
     };
-    map.on('zoomend', handleBroadcastZoom);
+    map.on('zoomend', handleAdminZoom);
 
     if (map.isStyleLoaded()) {
       applyVisibility();
-      return () => map.off('zoomend', handleBroadcastZoom);
+      return () => map.off('zoomend', handleAdminZoom);
     }
     map.once('load', applyVisibility);
     return () => {
       map.off('load', applyVisibility);
-      map.off('zoomend', handleBroadcastZoom);
+      map.off('zoomend', handleAdminZoom);
     };
   }, [isBroadcast]);
 
@@ -1307,7 +1259,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         map.setPaintProperty('neighbor-coast', 'line-color', theme.neighborCoast);
         map.setPaintProperty('land', 'fill-color', theme.land);
         map.setPaintProperty('province-border', 'line-color', theme.provinceBorder);
-        map.setPaintProperty('province-border', 'line-opacity', isBroadcast ? 0 : 1);
+        map.setPaintProperty('province-border', 'line-opacity', 0);
         return true;
       } catch {
         return false;
