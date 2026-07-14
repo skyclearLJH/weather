@@ -62,6 +62,9 @@ const BROADCAST_ADMIN_SOURCES = {
   'broadcast-sido': '/data/map/kr-sido-20260701.geojson',
   'broadcast-sgg': '/data/map/kr-sgg-20260701.geojson',
   'broadcast-emd': '/data/map/kr-emd-20260701.geojson',
+  'broadcast-sido-labels': '/data/map/kr-sido-labels-20260701.geojson',
+  'broadcast-sgg-labels': '/data/map/kr-sgg-labels-20260701.geojson',
+  'broadcast-emd-labels': '/data/map/kr-emd-labels-20260701.geojson',
 };
 const BROADCAST_ADMIN_LAYER_IDS = [
   'broadcast-sido-border',
@@ -157,7 +160,7 @@ const ensureBroadcastAdminLayers = (map) => {
     {
       id: 'broadcast-sido-label',
       type: 'symbol',
-      source: 'broadcast-sido',
+      source: 'broadcast-sido-labels',
       maxzoom: 6.1,
       layout: {
         'text-field': SIDO_SHORT_NAME,
@@ -171,7 +174,7 @@ const ensureBroadcastAdminLayers = (map) => {
     {
       id: 'broadcast-sgg-label',
       type: 'symbol',
-      source: 'broadcast-sgg',
+      source: 'broadcast-sgg-labels',
       minzoom: 5.35,
       maxzoom: 9.2,
       layout: {
@@ -186,7 +189,7 @@ const ensureBroadcastAdminLayers = (map) => {
     {
       id: 'broadcast-emd-label',
       type: 'symbol',
-      source: 'broadcast-emd',
+      source: 'broadcast-emd-labels',
       minzoom: 8.35,
       layout: {
         'text-field': ['get', 'label'],

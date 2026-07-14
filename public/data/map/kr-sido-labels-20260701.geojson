@@ -1,0 +1,18 @@
+{"type":"FeatureCollection", "features": [
+{"type":"Feature","geometry":{"type":"Point","coordinates":[127.00598784627238,37.554926556909976]},"properties":{"sido":"11","sidonm":"서울특별시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[129.06271261876248,35.197213138378466]},"properties":{"sido":"26","sidonm":"부산광역시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[128.6223865164181,35.88040398069307]},"properties":{"sido":"27","sidonm":"대구광역시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[126.69374093294715,37.447031459215765]},"properties":{"sido":"28","sidonm":"인천광역시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[126.87715777933161,34.993225677729626]},"properties":{"sido":"12","sidonm":"전남광주통합특별시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[127.40433841804925,36.36046005674614]},"properties":{"sido":"30","sidonm":"대전광역시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[129.2382571710923,35.542919596243095]},"properties":{"sido":"31","sidonm":"울산광역시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[127.27261577516599,36.50934541392906]},"properties":{"sido":"36","sidonm":"세종특별자치시"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[127.41553862509355,37.33950603576767]},"properties":{"sido":"41","sidonm":"경기도"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[128.29771257535972,37.73832340866844]},"properties":{"sido":"51","sidonm":"강원특별자치도"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[127.70723325279597,36.8521251326445]},"properties":{"sido":"43","sidonm":"충청북도"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[126.84402971484155,36.52748856654421]},"properties":{"sido":"44","sidonm":"충청남도"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[128.87946459263733,36.62515966915411]},"properties":{"sido":"47","sidonm":"경상북도"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[128.189267371838,35.349359824910664]},"properties":{"sido":"48","sidonm":"경상남도"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[126.55389347182187,33.38156019002528]},"properties":{"sido":"50","sidonm":"제주특별자치도"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[127.26132361752087,35.71270835694606]},"properties":{"sido":"52","sidonm":"전북특별자치도"}}
+]}
