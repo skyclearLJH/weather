@@ -1116,7 +1116,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               <div
                 className="flex items-center rounded-sm bg-gradient-to-r from-[#15449f]/95 via-[#2563c9]/95 to-[#3f83e8]/90 shadow-xl"
                 style={{
-                  width: 'clamp(340px, 23.5vw, 560px)',
+                  width: 'clamp(430px, 29vw, 700px)',
                   height: 'clamp(58px, 7.4vh, 96px)',
                   paddingLeft: '1.3vw',
                   paddingRight: '1.3vw',
@@ -1153,28 +1153,31 @@ const RadarMapView = ({ refreshToken = 0 }) => {
                 >
                   레이더 영상
                 </span>
-              </div>
-              {currentFrame ? (
-                <div className="flex items-baseline gap-2 rounded-md bg-slate-900/55 px-4 py-2 shadow-lg backdrop-blur-sm">
-                  <span
-                    className="font-extrabold leading-none tabular-nums text-white"
-                    style={{ fontSize: 'clamp(24px, 1.9vw, 42px)' }}
-                  >
-                    {formatHourMinute(currentFrame.validTime)}
-                  </span>
-                  <span
-                    className="font-semibold text-white/90"
-                    style={{ fontSize: 'clamp(14px, 1vw, 22px)' }}
-                  >
-                    {formatBroadcastDate(currentFrame.validTime)}
-                  </span>
-                  {currentFrame.kind === 'fct' ? (
-                    <span className="rounded bg-blue-500 px-1.5 py-0.5 text-xs font-bold text-white">
-                      예측
+                {currentFrame ? (
+                  <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
+                    <span
+                      className="font-extrabold leading-none tabular-nums text-white"
+                      style={{
+                        fontSize: 'clamp(22px, 1.7vw, 38px)',
+                        textShadow: '0 2px 5px rgba(0,0,0,0.3)',
+                      }}
+                    >
+                      {formatHourMinute(currentFrame.validTime)}
                     </span>
-                  ) : null}
-                </div>
-              ) : null}
+                    <span
+                      className="font-semibold text-white/90"
+                      style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
+                    >
+                      {formatBroadcastDate(currentFrame.validTime)}
+                    </span>
+                    {currentFrame.kind === 'fct' ? (
+                      <span className="rounded bg-white/25 px-1.5 py-0.5 text-xs font-bold text-white">
+                        예측
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             {/* 종료 버튼 */}
