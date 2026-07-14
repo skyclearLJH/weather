@@ -34,7 +34,7 @@ const NEARBY_PREFETCH_RADIUS = 3;
 const QPF_EF_MINUTES = Array.from({ length: 36 }, (_, index) => (index + 1) * 10);
 const PLAY_INTERVAL_MS = 450;
 
-// 일반 지도에 표시하는 KBS 총국·을지국 소재 도시. 방송모드에서는 VWorld 지명으로 대체한다.
+// 일반 지도에 표시하는 KBS 총국·을지국 소재 도시. 방송모드에서는 행정구역 지명으로 대체한다.
 const PORTAL_CITIES = [
   { name: '서울', lon: 126.978, lat: 37.566 },
   { name: '인천', lon: 126.705, lat: 37.456 },
@@ -58,12 +58,189 @@ const PORTAL_CITIES = [
   { name: '제주', lon: 126.531, lat: 33.499 },
 ];
 
-const VWORLD_API_KEY = import.meta.env.VITE_VWORLD_API_KEY?.trim();
-const VWORLD_HYBRID_TILES = VWORLD_API_KEY
-  ? [`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_API_KEY}/Hybrid/{z}/{y}/{x}.png`]
-  : [];
-const VWORLD_SOURCE_ID = 'vworld-hybrid-labels';
-const VWORLD_LAYER_ID = 'vworld-hybrid-labels-layer';
+const BROADCAST_ADMIN_SOURCES = {
+  'broadcast-sido': '/data/map/kr-sido-20260701.geojson',
+  'broadcast-sgg': '/data/map/kr-sgg-20260701.geojson',
+  'broadcast-emd': '/data/map/kr-emd-20260701.geojson',
+};
+const BROADCAST_ADMIN_LAYER_IDS = [
+  'broadcast-sido-border',
+  'broadcast-sgg-border',
+  'broadcast-emd-border',
+  'broadcast-sido-label',
+  'broadcast-sgg-label',
+  'broadcast-emd-label',
+  'broadcast-dokdo-dot',
+  'broadcast-dokdo-label',
+];
+
+const SIDO_SHORT_NAME = [
+  'match',
+  ['get', 'sidonm'],
+  '서울특별시',
+  '서울',
+  '부산광역시',
+  '부산',
+  '대구광역시',
+  '대구',
+  '인천광역시',
+  '인천',
+  '대전광역시',
+  '대전',
+  '울산광역시',
+  '울산',
+  '세종특별자치시',
+  '세종',
+  '경기도',
+  '경기',
+  '강원특별자치도',
+  '강원',
+  '충청북도',
+  '충북',
+  '충청남도',
+  '충남',
+  '전북특별자치도',
+  '전북',
+  '전남광주통합특별시',
+  '전남광주',
+  '경상북도',
+  '경북',
+  '경상남도',
+  '경남',
+  '제주특별자치도',
+  '제주',
+  ['get', 'sidonm'],
+];
+
+const DOKDO_GEOJSON = {
+  type: 'FeatureCollection',
+  features: [
+    {
+      type: 'Feature',
+      properties: { name: '독도' },
+      geometry: { type: 'Point', coordinates: [131.8693, 37.2398] },
+    },
+  ],
+};
+
+const ensureBroadcastAdminLayers = (map) => {
+  Object.entries(BROADCAST_ADMIN_SOURCES).forEach(([id, data]) => {
+    if (!map.getSource(id)) {
+      map.addSource(id, { type: 'geojson', data });
+    }
+  });
+  if (!map.getSource('broadcast-dokdo')) {
+    map.addSource('broadcast-dokdo', { type: 'geojson', data: DOKDO_GEOJSON });
+  }
+
+  const layers = [
+    {
+      id: 'broadcast-sido-border',
+      type: 'line',
+      source: 'broadcast-sido',
+      paint: { 'line-color': '#364152', 'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.2, 8, 2] },
+    },
+    {
+      id: 'broadcast-sgg-border',
+      type: 'line',
+      source: 'broadcast-sgg',
+      minzoom: 5.1,
+      paint: { 'line-color': '#6b7280', 'line-width': ['interpolate', ['linear'], ['zoom'], 5.1, 0.45, 9, 1] },
+    },
+    {
+      id: 'broadcast-emd-border',
+      type: 'line',
+      source: 'broadcast-emd',
+      minzoom: 8.1,
+      paint: { 'line-color': '#9ca3af', 'line-width': 0.55, 'line-opacity': 0.9 },
+    },
+    {
+      id: 'broadcast-sido-label',
+      type: 'symbol',
+      source: 'broadcast-sido',
+      maxzoom: 6.1,
+      layout: {
+        'text-field': SIDO_SHORT_NAME,
+        'text-size': ['interpolate', ['linear'], ['zoom'], 4.5, 12, 6.1, 16],
+        'text-font': ['Open Sans Bold'],
+        'text-allow-overlap': false,
+        'text-padding': 4,
+      },
+      paint: { 'text-color': '#263244', 'text-halo-color': 'rgba(255,255,255,0.92)', 'text-halo-width': 1.5 },
+    },
+    {
+      id: 'broadcast-sgg-label',
+      type: 'symbol',
+      source: 'broadcast-sgg',
+      minzoom: 5.35,
+      maxzoom: 9.2,
+      layout: {
+        'text-field': ['get', 'sggnm'],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 5.35, 9, 8.5, 14],
+        'text-font': ['Open Sans Semibold'],
+        'text-allow-overlap': false,
+        'text-padding': 2,
+      },
+      paint: { 'text-color': '#2f3b4d', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.25 },
+    },
+    {
+      id: 'broadcast-emd-label',
+      type: 'symbol',
+      source: 'broadcast-emd',
+      minzoom: 8.35,
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 8.35, 9, 12, 13],
+        'text-font': ['Open Sans Regular'],
+        'text-allow-overlap': false,
+        'text-padding': 1,
+      },
+      paint: { 'text-color': '#3b4657', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.1 },
+    },
+    {
+      id: 'broadcast-dokdo-dot',
+      type: 'circle',
+      source: 'broadcast-dokdo',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 3.2, 8, 5.5],
+        'circle-color': '#f8fafc',
+        'circle-stroke-color': '#263244',
+        'circle-stroke-width': 1.4,
+      },
+    },
+    {
+      id: 'broadcast-dokdo-label',
+      type: 'symbol',
+      source: 'broadcast-dokdo',
+      minzoom: 5.2,
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-size': 11,
+        'text-font': ['Open Sans Semibold'],
+        'text-offset': [0.8, 0],
+        'text-anchor': 'left',
+      },
+      paint: { 'text-color': '#263244', 'text-halo-color': 'rgba(255,255,255,0.92)', 'text-halo-width': 1.3 },
+    },
+  ];
+
+  layers.forEach((layer) => {
+    if (!map.getLayer(layer.id)) {
+      map.addLayer({ ...layer, layout: { visibility: 'visible', ...layer.layout } });
+    }
+  });
+};
+
+const setBroadcastAdminVisibility = (map, visible) => {
+  if (visible) {
+    ensureBroadcastAdminLayers(map);
+  }
+  BROADCAST_ADMIN_LAYER_IDS.forEach((id) => {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+    }
+  });
+};
 
 const MAP_STYLE = {
   version: 8,
@@ -339,6 +516,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       minZoom: 4.5,
       maxZoom: 10,
       attributionControl: false,
+      localIdeographFontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
       dragRotate: false,
       pitchWithRotate: false,
     });
@@ -387,22 +565,8 @@ const RadarMapView = ({ refreshToken = 0 }) => {
         'province-border',
       );
 
-      if (VWORLD_HYBRID_TILES.length > 0 && !map.getSource(VWORLD_SOURCE_ID)) {
-        map.addSource(VWORLD_SOURCE_ID, {
-          type: 'raster',
-          tiles: VWORLD_HYBRID_TILES,
-          tileSize: 256,
-          minzoom: 5,
-          maxzoom: 18,
-          attribution: '공간정보 오픈플랫폼 VWorld',
-        });
-        map.addLayer({
-          id: VWORLD_LAYER_ID,
-          type: 'raster',
-          source: VWORLD_SOURCE_ID,
-          layout: { visibility: isBroadcastRef.current ? 'visible' : 'none' },
-          paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 },
-        });
+      if (isBroadcastRef.current) {
+        ensureBroadcastAdminLayers(map);
       }
 
       PORTAL_CITIES.forEach(({ name, lon, lat }) => {
@@ -901,7 +1065,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [isFullscreen, isBroadcast]);
 
-  // 방송모드에서만 VWorld 행정 지명을 표시하고, 일반 지도용 KBS 거점 마커는 숨긴다.
+  // 방송모드에서만 행정경계·지명을 지연 로딩하고, 일반 지도용 KBS 거점 마커는 숨긴다.
   useEffect(() => {
     isBroadcastRef.current = isBroadcast;
     const map = mapRef.current;
@@ -914,10 +1078,17 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       return;
     }
 
-    map.setMaxZoom(isBroadcast ? 16 : 10);
-    if (map.getLayer(VWORLD_LAYER_ID)) {
-      map.setLayoutProperty(VWORLD_LAYER_ID, 'visibility', isBroadcast ? 'visible' : 'none');
+    const applyVisibility = () => {
+      map.setMaxZoom(isBroadcast ? 16 : 10);
+      setBroadcastAdminVisibility(map, isBroadcast);
+    };
+
+    if (map.isStyleLoaded()) {
+      applyVisibility();
+      return undefined;
     }
+    map.once('load', applyVisibility);
+    return () => map.off('load', applyVisibility);
   }, [isBroadcast]);
 
   // 방송모드 진입·해제 시 각 모드의 기본 구도로 화면을 다시 잡는다.
@@ -984,6 +1155,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
         map.setPaintProperty('neighbor-coast', 'line-color', theme.neighborCoast);
         map.setPaintProperty('land', 'fill-color', theme.land);
         map.setPaintProperty('province-border', 'line-color', theme.provinceBorder);
+        map.setPaintProperty('province-border', 'line-opacity', isBroadcast ? 0 : 1);
         return true;
       } catch {
         return false;
@@ -1330,11 +1502,9 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               {renderTimeline(true)}
             </div>
 
-            {VWORLD_HYBRID_TILES.length > 0 ? (
-              <div className="pointer-events-none absolute bottom-[5.25rem] right-3 z-20 rounded bg-white/70 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 backdrop-blur-sm">
-                공간정보 오픈플랫폼 VWorld
-              </div>
-            ) : null}
+            <div className="pointer-events-none absolute bottom-[5.25rem] right-3 z-20 rounded bg-white/70 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 backdrop-blur-sm">
+              경계: 통계청 SGIS · vuski/admdongkor (CC BY 4.0)
+            </div>
           </>
         ) : null}
       </div>
