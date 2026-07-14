@@ -593,12 +593,22 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   }, [loadFrameData, rememberFrameBuckets, refreshToken, autoRefreshTick]);
 
   // 시간이 흐르면 '현재'와 눈금도 따라가야 하므로 주기적으로 최신 발표를 확인한다.
+  // 모바일은 화면이 꺼지면 타이머가 멈추므로, 탭 복귀 시에도 즉시 확인한다.
   useEffect(() => {
     const timer = window.setInterval(
       () => setAutoRefreshTick((tick) => tick + 1),
       AUTO_REFRESH_INTERVAL_MS,
     );
-    return () => window.clearInterval(timer);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setAutoRefreshTick((tick) => tick + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   // 현재 프레임 렌더링
