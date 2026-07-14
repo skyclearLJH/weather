@@ -505,6 +505,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   const [isBroadcast, setIsBroadcast] = useState(false);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
+  const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
   const navControlRef = useRef(null);
   const navControlAddedRef = useRef(false);
@@ -935,21 +936,19 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
-  // 재생. 방송모드에서는 전체 타임라인을 선택한 재생 길이에 맞춰 진행한다.
+  // 방송모드는 선택 지점부터 목표 지점까지를 설정한 재생 길이에 맞춰 진행한다.
   useEffect(() => {
     if (!isPlaying || frames.length === 0) {
       return undefined;
     }
-    const intervalMs = isBroadcast
-      ? Math.max(45, Math.round((playDurationSec * 1000) / frames.length))
-      : PLAY_INTERVAL_MS;
+    const intervalMs = isBroadcast ? playIntervalMs : PLAY_INTERVAL_MS;
     const timer = window.setInterval(() => {
       setFrameIndex((previous) =>
         isBroadcast ? Math.min(previous + 1, frames.length - 1) : (previous + 1) % frames.length,
       );
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [isPlaying, frames.length, isBroadcast, playDurationSec]);
+  }, [isPlaying, frames.length, isBroadcast, playIntervalMs]);
 
   // 방송모드 재생은 목표 지점(현재 또는 예측 끝)에 도달하면 멈춘다.
   useEffect(() => {
@@ -958,7 +957,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     }
   }, [isBroadcast, isPlaying, playTarget, frameIndex]);
 
-  // 재생 버튼: 방송모드에서는 ① 관측 시작→현재 ② 현재→예측 끝 두 단계로 나눠 재생한다.
+  // 관측 프레임은 선택 지점→현재, 예측 프레임은 선택 지점→예측 끝으로 재생한다.
   const handlePlayButton = () => {
     if (isPlaying) {
       setIsPlaying(false);
@@ -976,12 +975,18 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       return;
     }
 
-    if (frameIndex === latestObsIndex && frames.length - 1 > latestObsIndex) {
-      setPlayTarget(frames.length - 1);
-    } else {
-      setFrameIndex(0);
-      setPlayTarget(latestObsIndex);
+    const currentKind = frames[frameIndex]?.kind;
+    let nextTarget = latestObsIndex;
+    if (currentKind === 'fct' || frameIndex === latestObsIndex) {
+      nextTarget = frames.length - 1;
     }
+    if (nextTarget <= frameIndex) {
+      return;
+    }
+
+    const transitionCount = nextTarget - frameIndex;
+    setPlayTarget(nextTarget);
+    setPlayIntervalMs(Math.max(45, Math.round((playDurationSec * 1000) / transitionCount)));
     setIsPlaying(true);
   };
 
@@ -1019,6 +1024,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       }
     });
     setIsPlaying(false);
+    setPlayTarget(null);
     setFrameIndex(nearestIndex);
   };
 
@@ -1281,25 +1287,13 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   // 컨트롤바(재생 버튼 + 슬라이더 + 눈금). 방송모드에서는 어두운 배경 위에 얹는다.
   const renderTimeline = (broadcast) => (
     <div className="flex items-center gap-3">
-      {broadcast ? (
-        <select
-          value={playDurationSec}
-          onChange={(event) => setPlayDurationSec(Number(event.target.value))}
-          className="h-9 shrink-0 cursor-pointer rounded-full border-0 bg-white/25 px-2.5 text-sm font-semibold text-white outline-none backdrop-blur-sm"
-          aria-label="재생 길이"
-        >
-          {BROADCAST_PLAY_DURATIONS.map((seconds) => (
-            <option key={seconds} value={seconds} className="text-slate-900">
-              {seconds}초
-            </option>
-          ))}
-        </select>
-      ) : null}
       <button
         type="button"
         onClick={handlePlayButton}
         disabled={status !== 'ready'}
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:opacity-40"
+        className={`flex shrink-0 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:opacity-40 ${
+          broadcast ? 'h-12 w-12 -translate-x-1/2' : 'h-10 w-10'
+        }`}
         aria-label={isPlaying ? '일시정지' : '재생'}
       >
         {isPlaying ? (
@@ -1337,7 +1331,9 @@ const RadarMapView = ({ refreshToken = 0 }) => {
           value={currentOffset}
           onChange={(event) => handleTimelineChange(Number(event.target.value))}
           disabled={status !== 'ready'}
-          className={`w-full cursor-pointer appearance-none rounded-full accent-[#0033a0] ${broadcast ? 'h-2.5' : 'h-2'}`}
+          className={`relative z-10 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0] ${
+            broadcast ? 'broadcast-radar-range h-2.5' : 'h-2'
+          }`}
           style={{ background: 'linear-gradient(to right, #64748b 50%, #2563eb 50%)' }}
         />
         <div className="relative mt-1 h-9">
@@ -1567,20 +1563,34 @@ const RadarMapView = ({ refreshToken = 0 }) => {
             </div>
 
             {/* 하단 반투명 컨트롤바 */}
-            <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent px-8 pb-4 pt-10">
+            <div className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
               {renderTimeline(true)}
             </div>
 
-            <button
-              type="button"
-              onClick={handleRadarRefresh}
-              disabled={status === 'loading'}
-              className="absolute bottom-[5.35rem] right-6 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
-              aria-label="레이더 영상 새로고침"
-              title="레이더 영상 새로고침"
-            >
-              <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
-            </button>
+            <div className="absolute bottom-[5.35rem] right-6 z-20 flex items-center gap-2">
+              <select
+                value={playDurationSec}
+                onChange={(event) => setPlayDurationSec(Number(event.target.value))}
+                className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
+                aria-label="재생 길이"
+              >
+                {BROADCAST_PLAY_DURATIONS.map((seconds) => (
+                  <option key={seconds} value={seconds} className="text-slate-900">
+                    {seconds}초
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleRadarRefresh}
+                disabled={status === 'loading'}
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
+                aria-label="레이더 영상 새로고침"
+                title="레이더 영상 새로고침"
+              >
+                <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
+              </button>
+            </div>
 
           </>
         ) : null}
