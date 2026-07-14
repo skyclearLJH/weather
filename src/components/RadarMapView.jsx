@@ -282,6 +282,13 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       attributionControl: false,
       dragRotate: false,
       pitchWithRotate: false,
+      // 한 손가락 드래그는 페이지 스크롤, 두 손가락으로 지도 이동(모바일 스크롤 갇힘 방지)
+      cooperativeGestures: true,
+      locale: {
+        'CooperativeGesturesHandler.WindowsHelpText': 'Ctrl 키를 누른 채 스크롤하면 지도가 확대·축소됩니다',
+        'CooperativeGesturesHandler.MacHelpText': '⌘ 키를 누른 채 스크롤하면 지도가 확대·축소됩니다',
+        'CooperativeGesturesHandler.MobileHelpText': '두 손가락으로 지도를 움직일 수 있습니다',
+      },
     });
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
@@ -749,8 +756,18 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞춘다.
+  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞추고,
+  // 전체화면에서는 한 손가락으로도 지도를 움직일 수 있게 한다.
   useEffect(() => {
+    const gestures = mapRef.current?.cooperativeGestures;
+    if (gestures) {
+      if (isFullscreen) {
+        gestures.disable();
+      } else {
+        gestures.enable();
+      }
+    }
+
     const timers = [120, 400].map((delay) =>
       window.setTimeout(() => mapRef.current?.resize(), delay),
     );
@@ -766,28 +783,36 @@ const RadarMapView = ({ refreshToken = 0 }) => {
           : 'rounded-3xl border border-slate-200 shadow-sm'
       }`}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-5 py-3 sm:px-6 sm:py-4">
-        <div className="min-w-0">
-          <h2 className="text-lg font-bold tracking-tight text-slate-900">레이더 · 초단기예측</h2>
-          <div className={`mt-1 text-sm text-slate-500 ${isFullscreen ? 'hidden sm:block' : ''}`}>
-            기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
-          </div>
+      <div className="border-b border-slate-200 bg-slate-50 px-5 py-3 sm:px-6 sm:py-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="min-w-0 text-lg font-bold tracking-tight text-slate-900">
+            레이더 · 초단기예측
+          </h2>
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100"
+            aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
+          >
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            <span className="hidden sm:inline">{isFullscreen ? '전체화면 종료' : '전체화면'}</span>
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={toggleFullscreen}
-          className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100"
-          aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
-        >
-          {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          <span className="hidden sm:inline">{isFullscreen ? '전체화면 종료' : '전체화면'}</span>
-        </button>
+        <div className={`mt-1 text-sm text-slate-500 ${isFullscreen ? 'hidden sm:block' : ''}`}>
+          기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
+        </div>
       </div>
 
       <div className={`relative ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
         <div
           ref={mapContainerRef}
-          className={isFullscreen ? 'h-full w-full' : 'h-[60vh] min-h-[420px] w-full'}
+          className={
+            isFullscreen
+              ? 'h-full w-full'
+              : // 모바일에서는 카드 전체(헤더+지도+컨트롤바)가 한 화면에 들어오도록
+                // 지도 높이를 화면 높이에서 나머지 UI 높이를 뺀 값으로 잡는다.
+                'h-[calc(100dvh-31rem)] min-h-[280px] w-full sm:h-[60vh] sm:min-h-[420px]'
+          }
         />
         {status === 'loading' ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-sm font-medium text-slate-500">
@@ -852,31 +877,21 @@ const RadarMapView = ({ refreshToken = 0 }) => {
               {timelineTicks.map(({ hourOffset, position, isLabeled, label, dateLabel }) => (
                 <div
                   key={hourOffset}
-                  className="absolute top-0"
+                  className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
                   style={{ left: `${position}%` }}
                 >
                   <div
-                    className={`mx-auto w-px -translate-x-1/2 ${
-                      isLabeled ? 'h-2 bg-slate-400' : 'h-1.5 bg-slate-300'
-                    }`}
+                    className={`w-px ${isLabeled ? 'h-2 bg-slate-400' : 'h-1.5 bg-slate-300'}`}
                   />
                   {isLabeled ? (
                     <div
-                      className={`mt-0.5 whitespace-nowrap text-[10px] font-medium tabular-nums ${
+                      className={`mt-0.5 whitespace-nowrap text-center text-[10px] font-medium tabular-nums ${
                         hourOffset === 0 ? 'font-bold text-slate-700' : 'text-slate-400'
-                      } ${
-                        position <= 2
-                          ? ''
-                          : position >= 98
-                            ? '-translate-x-full'
-                            : '-translate-x-1/2'
                       }`}
                     >
                       {label}
                       {dateLabel ? (
-                        <div className="text-center text-[9px] font-semibold text-slate-500">
-                          {dateLabel}
-                        </div>
+                        <div className="text-[9px] font-semibold text-slate-500">{dateLabel}</div>
                       ) : null}
                     </div>
                   ) : null}
