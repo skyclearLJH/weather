@@ -159,9 +159,10 @@ const KOREA_MAP_BOUNDS = [
   [125.0, 32.9],
   [129.8, 38.7],
 ];
+// 16:9 화면에서 위도 범위가 기준이 되어 참고 그래픽과 같은 줌(경도 약 118~136E)이 나온다.
 const BROADCAST_MAP_BOUNDS = [
-  [118.8, 31.6],
-  [136.2, 41.3],
+  [120.0, 32.2],
+  [134.0, 40.2],
 ];
 
 const formatBroadcastDate = (time) =>
