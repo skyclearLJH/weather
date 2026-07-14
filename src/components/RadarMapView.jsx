@@ -480,7 +480,7 @@ const RadarLegend = () => (
   </div>
 );
 
-const RadarMapView = ({ refreshToken = 0 }) => {
+const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const overlayCanvasRef = useRef(null);
@@ -499,10 +499,10 @@ const RadarMapView = ({ refreshToken = 0 }) => {
   const [statusMessage, setStatusMessage] = useState('');
   // 전체화면: 지원 브라우저는 네이티브 API, 미지원(iOS 사파리 등)은 CSS 오버레이로 대체
   const sectionRef = useRef(null);
-  const [fullscreenMode, setFullscreenMode] = useState(null); // null | 'native' | 'css'
+  const [fullscreenMode, setFullscreenMode] = useState(initialBroadcast ? 'css' : null); // null | 'native' | 'css'
   const isFullscreen = fullscreenMode !== null;
   // 방송모드: 전체화면 + 방송 그래픽 레이아웃 (PC 전용)
-  const [isBroadcast, setIsBroadcast] = useState(false);
+  const [isBroadcast, setIsBroadcast] = useState(initialBroadcast);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);

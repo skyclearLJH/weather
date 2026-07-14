@@ -44,6 +44,15 @@ const RANKING_EXPANDED_LIMIT = 30;
 const TROPICAL_NIGHT_AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const PRECIPITATION_MAX_WARMUP_INTERVAL_MS = 65 * 1000;
 
+const getInitialView = () => {
+  const params = new URLSearchParams(window.location.search);
+  const isRadarView = params.get('view') === 'radar';
+  return {
+    selectedTab: isRadarView ? 'radar' : 'forecast',
+    isBroadcast: isRadarView && params.get('mode') === 'broadcast',
+  };
+};
+
 const padZero = (value) => value.toString().padStart(2, '0');
 
 const getKstNow = () => new Date(Date.now() + KST_OFFSET_MS);
@@ -91,8 +100,9 @@ const buildObservationTimeOptions = (baseDate, selectedValue = LATEST_OBSERVATIO
 };
 
 function App() {
+  const [initialView] = useState(getInitialView);
   const [selectedRegion, setSelectedRegion] = useState('all');
-  const [selectedTab, setSelectedTab] = useState('forecast');
+  const [selectedTab, setSelectedTab] = useState(initialView.selectedTab);
   const [selectedSubMenu, setSelectedSubMenu] = useState(SUB_MENUS.forecast[0].id);
   const [apiData, setApiData] = useState([]);
   const [docApiData, setDocApiData] = useState([]);
@@ -527,7 +537,12 @@ function App() {
 
   const renderContent = () => {
     if (selectedTab === 'radar') {
-      return <RadarMapView refreshToken={refreshTrigger} />;
+      return (
+        <RadarMapView
+          refreshToken={refreshTrigger}
+          initialBroadcast={initialView.isBroadcast}
+        />
+      );
     }
 
     if (selectedTab === 'minTemp') {
