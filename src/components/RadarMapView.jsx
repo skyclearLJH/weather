@@ -513,7 +513,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       fitBoundsOptions: { padding: 12 },
       minZoom: 4.5,
       maxZoom: 10,
-      maxPitch: 45,
+      maxPitch: 60,
       attributionControl: false,
       localIdeographFontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
       dragRotate: false,
