@@ -159,10 +159,10 @@ const KOREA_MAP_BOUNDS = [
   [125.0, 32.9],
   [129.8, 38.7],
 ];
-// 16:9 화면에서 위도 범위가 기준이 되어 참고 그래픽과 같은 줌(경도 약 118~136E)이 나온다.
+// 16:9 화면에서 위도 범위가 기준: 남한(제주 포함)이 화면 세로의 약 70%를 차지한다.
 const BROADCAST_MAP_BOUNDS = [
-  [120.0, 32.2],
-  [134.0, 40.2],
+  [121.5, 32.1],
+  [133.5, 39.5],
 ];
 
 const formatBroadcastDate = (time) =>
@@ -854,33 +854,40 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞추고,
-  // 방송모드 진입·해제 시에는 각 모드의 기본 구도로 화면을 다시 잡는다.
-  const previousBroadcastRef = useRef(false);
+  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞춘다.
   useEffect(() => {
-    const broadcastChanged = previousBroadcastRef.current !== isBroadcast;
-    previousBroadcastRef.current = isBroadcast;
-
     const timers = [120, 400].map((delay) =>
       window.setTimeout(() => mapRef.current?.resize(), delay),
     );
-    if (broadcastChanged) {
-      timers.push(
-        window.setTimeout(() => {
-          const map = mapRef.current;
-          if (!map) {
-            return;
-          }
-          if (isBroadcast) {
-            map.fitBounds(BROADCAST_MAP_BOUNDS, { padding: 0, duration: 0 });
-          } else {
-            map.fitBounds(KOREA_MAP_BOUNDS, { padding: 12, duration: 0 });
-          }
-        }, 450),
-      );
-    }
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [isFullscreen, isBroadcast]);
+
+  // 방송모드 진입·해제 시 각 모드의 기본 구도로 화면을 다시 잡는다.
+  // 전체화면 상태 갱신과 렌더가 겹쳐도 취소되지 않도록 isBroadcast에만 반응하고,
+  // 전환 완료 시점이 브라우저마다 달라 두 번(멱등) 적용해 최종 크기에서 확정한다.
+  const previousBroadcastRef = useRef(false);
+  useEffect(() => {
+    if (previousBroadcastRef.current === isBroadcast) {
+      return undefined;
+    }
+    previousBroadcastRef.current = isBroadcast;
+
+    const timers = [500, 1300].map((delay) =>
+      window.setTimeout(() => {
+        const map = mapRef.current;
+        if (!map) {
+          return;
+        }
+        map.resize();
+        if (isBroadcast) {
+          map.fitBounds(BROADCAST_MAP_BOUNDS, { padding: 0, duration: 0 });
+        } else {
+          map.fitBounds(KOREA_MAP_BOUNDS, { padding: 12, duration: 0 });
+        }
+      }, delay),
+    );
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [isBroadcast]);
 
   const enterBroadcastMode = useCallback(() => {
     setIsBroadcast(true);
