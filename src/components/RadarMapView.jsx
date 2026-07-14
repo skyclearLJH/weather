@@ -286,13 +286,6 @@ const RadarMapView = ({ refreshToken = 0 }) => {
       attributionControl: false,
       dragRotate: false,
       pitchWithRotate: false,
-      // 한 손가락 드래그는 페이지 스크롤, 두 손가락으로 지도 이동(모바일 스크롤 갇힘 방지)
-      cooperativeGestures: true,
-      locale: {
-        'CooperativeGesturesHandler.WindowsHelpText': 'Ctrl 키를 누른 채 스크롤하면 지도가 확대·축소됩니다',
-        'CooperativeGesturesHandler.MacHelpText': '⌘ 키를 누른 채 스크롤하면 지도가 확대·축소됩니다',
-        'CooperativeGesturesHandler.MobileHelpText': '두 손가락으로 지도를 움직일 수 있습니다',
-      },
     });
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
@@ -482,7 +475,9 @@ const RadarMapView = ({ refreshToken = 0 }) => {
 
       try {
         const [radarLatest, qpfLatest] = await Promise.all([
-          probeLatestRadarTm(new Date(), OBS_HISTORY_HOURS * 60),
+          probeLatestRadarTm(new Date(), OBS_HISTORY_HOURS * 60, ({ tm, frame }) =>
+            rememberFrameBuckets(`obs-${tm}`, frame.buckets),
+          ),
           probeLatestQpfTm().catch(() => null),
         ]);
         if (!isActive) {
@@ -770,18 +765,8 @@ const RadarMapView = ({ refreshToken = 0 }) => {
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞추고,
-  // 전체화면에서는 한 손가락으로도 지도를 움직일 수 있게 한다.
+  // 전체화면 전환 시 지도 캔버스 크기를 컨테이너에 맞춘다.
   useEffect(() => {
-    const gestures = mapRef.current?.cooperativeGestures;
-    if (gestures) {
-      if (isFullscreen) {
-        gestures.disable();
-      } else {
-        gestures.enable();
-      }
-    }
-
     const timers = [120, 400].map((delay) =>
       window.setTimeout(() => mapRef.current?.resize(), delay),
     );

@@ -157,7 +157,7 @@ const gunzipToArrayBuffer = async (response) => {
 // HSP 격자를 내려받아 1/2 축소(최댓값 유지) 버킷 배열로 변환한다.
 export const fetchRadarFrame = async (tm) => {
   const url = `${KMA_PROXY_BASE}api/typ04/url/rdr_cmp_file.php?tm=${tm}&data=bin&cmp=hsp`;
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) {
     throw new Error(`레이더 자료 요청 실패 (${response.status})`);
   }
@@ -197,7 +197,7 @@ export const fetchRadarFrame = async (tm) => {
 // 분포도 PNG의 지도영역에서 강수 색 픽셀만 버킷 배열로 추출한다.
 export const fetchQpfFrame = async (tm, efMinutes) => {
   const url = `${KMA_PROXY_BASE}api/typ03/cgi/rdr/nph-qpf_ana_img?tm=${tm}&qpf=B&ef=${efMinutes}`;
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) {
     throw new Error(`예측강수 자료 요청 실패 (${response.status})`);
   }
@@ -228,17 +228,36 @@ export const fetchQpfFrame = async (tm, efMinutes) => {
 };
 
 // 최신 자료 시각 탐색: 후보 시각을 최신부터 시도해 처음 성공하는 프레임을 쓴다.
-export const probeLatestRadarTm = async (now = new Date(), lookbackMinutes = 30) => {
+// 순차 시도는 발표 전 시각마다 원 서버 응답을 기다려 초기 로딩이 길어지므로
+// 후보 시각을 몇 개씩 병렬로 시도하고 가장 최신 성공을 쓴다.
+const PROBE_BATCH_SIZE = 3;
+
+export const probeLatestRadarTm = async (now = new Date(), lookbackMinutes = 30, onExtraFrame) => {
   const base = floorToFiveMinutes(now);
   const maxSteps = Math.floor(lookbackMinutes / 5) + 1;
-  for (let step = 0; step < maxSteps; step++) {
-    const candidate = new Date(base.getTime() - step * 5 * 60 * 1000);
-    const tm = formatRadarTm(candidate);
-    try {
-      const frame = await fetchRadarFrame(tm);
-      return { tm, frame };
-    } catch {
-      // 다음 후보 시각으로
+
+  for (let start = 0; start < maxSteps; start += PROBE_BATCH_SIZE) {
+    const steps = [];
+    for (let step = start; step < Math.min(start + PROBE_BATCH_SIZE, maxSteps); step++) {
+      steps.push(step);
+    }
+
+    const results = await Promise.all(
+      steps.map(async (step) => {
+        const tm = formatRadarTm(new Date(base.getTime() - step * 5 * 60 * 1000));
+        try {
+          return { tm, frame: await fetchRadarFrame(tm) };
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    const successes = results.filter(Boolean);
+    if (successes.length > 0) {
+      // 최신 성공을 돌려주고, 함께 받아진 과거 프레임도 캐시에 보탠다.
+      successes.slice(1).forEach((item) => onExtraFrame?.(item));
+      return successes[0];
     }
   }
   throw new Error('최근 레이더 자료를 찾지 못했습니다.');
@@ -246,14 +265,28 @@ export const probeLatestRadarTm = async (now = new Date(), lookbackMinutes = 30)
 
 export const probeLatestQpfTm = async (now = new Date()) => {
   const base = floorToTenMinutes(now);
-  for (let step = 0; step < 6; step++) {
-    const candidate = new Date(base.getTime() - step * 10 * 60 * 1000);
-    const tm = formatRadarTm(candidate);
-    try {
-      const frame = await fetchQpfFrame(tm, 10);
-      return { tm, frame };
-    } catch {
-      // 다음 후보 시각으로
+  const maxSteps = 6;
+
+  for (let start = 0; start < maxSteps; start += PROBE_BATCH_SIZE) {
+    const steps = [];
+    for (let step = start; step < Math.min(start + PROBE_BATCH_SIZE, maxSteps); step++) {
+      steps.push(step);
+    }
+
+    const results = await Promise.all(
+      steps.map(async (step) => {
+        const tm = formatRadarTm(new Date(base.getTime() - step * 10 * 60 * 1000));
+        try {
+          return { tm, frame: await fetchQpfFrame(tm, 10) };
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    const success = results.find(Boolean);
+    if (success) {
+      return success;
     }
   }
   throw new Error('최근 예측강수 자료를 찾지 못했습니다.');
