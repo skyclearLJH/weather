@@ -1108,29 +1108,64 @@ const RadarMapView = ({ refreshToken = 0 }) => {
 
         {isBroadcast ? (
           <>
-            {/* 좌상단: 타이틀 밴드 + 현재 프레임 날짜·시각 */}
-            <div className="pointer-events-none absolute left-5 top-5 z-20 flex items-center gap-3">
-              <div className="flex items-stretch overflow-hidden rounded-md shadow-lg">
-                <div className="flex flex-col justify-center bg-[#0a2f7c] px-3 py-2">
-                  <span className="text-[11px] font-extrabold leading-none tracking-[0.2em] text-white">
+            {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}
+            <div
+              className="pointer-events-none absolute z-20 flex items-center gap-[1vw]"
+              style={{ left: '4.4%', top: '14%' }}
+            >
+              <div
+                className="flex items-center rounded-sm bg-gradient-to-r from-[#15449f]/95 via-[#2563c9]/95 to-[#3f83e8]/90 shadow-xl"
+                style={{
+                  width: 'clamp(340px, 23.5vw, 560px)',
+                  height: 'clamp(58px, 7.4vh, 96px)',
+                  paddingLeft: '1.3vw',
+                  paddingRight: '1.3vw',
+                  gap: '1.1vw',
+                }}
+              >
+                <div className="relative flex flex-col leading-none text-white">
+                  <span
+                    className="font-black tracking-[0.18em]"
+                    style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
+                  >
                     KBS
                   </span>
-                  <span className="mt-1 text-[8px] font-bold leading-none tracking-[0.14em] text-white/85">
+                  <span
+                    className="mt-[0.2em] font-bold tracking-[0.1em] text-white/90"
+                    style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
+                  >
                     WEATHER
                   </span>
+                  <svg
+                    viewBox="0 0 12 12"
+                    className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-white/90"
+                    aria-hidden="true"
+                  >
+                    <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
+                  </svg>
                 </div>
-                <div className="flex items-center bg-gradient-to-r from-[#1257c9] to-[#3f8ef7] px-5">
-                  <span className="text-2xl font-extrabold tracking-tight text-white">
-                    레이더 영상
-                  </span>
-                </div>
+                <span
+                  className="whitespace-nowrap font-black tracking-tight text-white"
+                  style={{
+                    fontSize: 'clamp(26px, 2.1vw, 46px)',
+                    textShadow: '0 2px 6px rgba(0,0,0,0.35)',
+                  }}
+                >
+                  레이더 영상
+                </span>
               </div>
               {currentFrame ? (
                 <div className="flex items-baseline gap-2 rounded-md bg-slate-900/55 px-4 py-2 shadow-lg backdrop-blur-sm">
-                  <span className="text-3xl font-extrabold leading-none tabular-nums text-white">
+                  <span
+                    className="font-extrabold leading-none tabular-nums text-white"
+                    style={{ fontSize: 'clamp(24px, 1.9vw, 42px)' }}
+                  >
                     {formatHourMinute(currentFrame.validTime)}
                   </span>
-                  <span className="text-base font-semibold text-white/90">
+                  <span
+                    className="font-semibold text-white/90"
+                    style={{ fontSize: 'clamp(14px, 1vw, 22px)' }}
+                  >
                     {formatBroadcastDate(currentFrame.validTime)}
                   </span>
                   {currentFrame.kind === 'fct' ? (
@@ -1155,7 +1190,7 @@ const RadarMapView = ({ refreshToken = 0 }) => {
 
             {/* 좌측 세로 강수 스케일 */}
             <div className="pointer-events-none absolute left-5 top-1/2 z-20 -translate-y-1/2 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm">
-              <div className="flex h-52">
+              <div className="flex h-[46vh] min-h-[280px]">
                 <div className="flex w-2.5 flex-col-reverse overflow-hidden rounded-sm">
                   {RAIN_PALETTE.map(({ min, color }) => (
                     <div
