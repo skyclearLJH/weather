@@ -34,22 +34,27 @@ const NEARBY_PREFETCH_RADIUS = 3;
 const QPF_EF_MINUTES = Array.from({ length: 36 }, (_, index) => (index + 1) * 10);
 const PLAY_INTERVAL_MS = 450;
 
+// KBS 총국·을지국 소재 도시 전체
 const BROADCAST_CITIES = [
   { name: '서울', lon: 126.978, lat: 37.566 },
   { name: '인천', lon: 126.705, lat: 37.456 },
   { name: '춘천', lon: 127.73, lat: 37.881 },
+  { name: '원주', lon: 127.92, lat: 37.342 },
   { name: '강릉', lon: 128.876, lat: 37.752 },
   { name: '청주', lon: 127.489, lat: 36.642 },
+  { name: '충주', lon: 127.926, lat: 36.991 },
   { name: '대전', lon: 127.385, lat: 36.35 },
   { name: '전주', lon: 127.148, lat: 35.824 },
   { name: '광주', lon: 126.852, lat: 35.16 },
   { name: '목포', lon: 126.392, lat: 34.812 },
+  { name: '순천', lon: 127.487, lat: 34.951 },
   { name: '대구', lon: 128.601, lat: 35.871 },
   { name: '안동', lon: 128.726, lat: 36.568 },
   { name: '포항', lon: 129.343, lat: 36.019 },
   { name: '울산', lon: 129.311, lat: 35.539 },
   { name: '부산', lon: 129.075, lat: 35.18 },
   { name: '창원', lon: 128.681, lat: 35.228 },
+  { name: '진주', lon: 128.108, lat: 35.18 },
   { name: '제주', lon: 126.531, lat: 33.499 },
 ];
 
