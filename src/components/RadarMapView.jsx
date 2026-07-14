@@ -484,6 +484,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const overlayCanvasRef = useRef(null);
+  const transitionFromCanvasRef = useRef(null);
+  const transitionToCanvasRef = useRef(null);
+  const transitionAnimationRef = useRef(null);
   const mappingsRef = useRef(null);
   const imageDataRef = useRef(null);
   const frameCacheRef = useRef(new Map());
@@ -518,6 +521,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const framesRef = useRef([]);
   const frameIndexRef = useRef(0);
   const isPlayingRef = useRef(false);
+  const playIntervalRef = useRef(PLAY_INTERVAL_MS);
+  const hasRenderedFrameRef = useRef(false);
 
   const canvasHeight = useMemo(() => {
     const xSpan = VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin;
@@ -554,6 +559,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     canvas.width = CANVAS_WIDTH;
     canvas.height = canvasHeight;
     overlayCanvasRef.current = canvas;
+    [transitionFromCanvasRef, transitionToCanvasRef].forEach((canvasRef) => {
+      const transitionCanvas = document.createElement('canvas');
+      transitionCanvas.width = CANVAS_WIDTH;
+      transitionCanvas.height = canvasHeight;
+      canvasRef.current = transitionCanvas;
+    });
 
     // 백그라운드 탭에서는 rAF가 멈춰 'load'가 늦게(또는 보일 때) 발화하므로,
     // 스타일 로딩 완료를 폴링으로도 감지해 소스·라벨을 붙인다.
@@ -615,9 +626,16 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
     return () => {
       window.clearInterval(setupTimer);
+      if (transitionAnimationRef.current !== null) {
+        cancelAnimationFrame(transitionAnimationRef.current);
+      }
       portalCityMarkersRef.current = [];
       map.remove();
       mapRef.current = null;
+      overlayCanvasRef.current = null;
+      transitionFromCanvasRef.current = null;
+      transitionToCanvasRef.current = null;
+      transitionAnimationRef.current = null;
       navControlRef.current = null;
       navControlAddedRef.current = false;
     };
@@ -648,12 +666,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const renderFrame = useCallback(
     (frame) => {
       const canvas = overlayCanvasRef.current;
+      const fromCanvas = transitionFromCanvasRef.current;
+      const toCanvas = transitionToCanvasRef.current;
       const mappings = mappingsRef.current;
-      if (!canvas || !mappings || !frame) {
+      if (!canvas || !fromCanvas || !toCanvas || !mappings || !frame) {
         return;
       }
 
       const context = canvas.getContext('2d');
+      const toContext = toCanvas.getContext('2d');
       if (!imageDataRef.current) {
         imageDataRef.current = context.createImageData(canvas.width, canvas.height);
       }
@@ -677,8 +698,51 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
       }
 
-      context.putImageData(imageData, 0, 0);
-      refreshOverlaySource();
+      toContext.putImageData(imageData, 0, 0);
+
+      if (transitionAnimationRef.current !== null) {
+        cancelAnimationFrame(transitionAnimationRef.current);
+        transitionAnimationRef.current = null;
+      }
+
+      if (!isPlayingRef.current || !hasRenderedFrameRef.current) {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(toCanvas, 0, 0);
+        hasRenderedFrameRef.current = true;
+        refreshOverlaySource();
+        return;
+      }
+
+      const fromContext = fromCanvas.getContext('2d');
+      fromContext.clearRect(0, 0, fromCanvas.width, fromCanvas.height);
+      fromContext.drawImage(canvas, 0, 0);
+
+      const durationMs = Math.min(220, Math.max(55, playIntervalRef.current * 0.72));
+      const source = mapRef.current?.getSource('radar-overlay');
+      source?.play();
+      const startedAt = performance.now();
+
+      const dissolve = (timestamp) => {
+        const progress = Math.min(1, (timestamp - startedAt) / durationMs);
+        const easedProgress = progress * progress * (3 - 2 * progress);
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.globalAlpha = 1 - easedProgress;
+        context.drawImage(fromCanvas, 0, 0);
+        context.globalAlpha = easedProgress;
+        context.drawImage(toCanvas, 0, 0);
+        context.globalAlpha = 1;
+        mapRef.current?.triggerRepaint();
+
+        if (progress < 1) {
+          transitionAnimationRef.current = requestAnimationFrame(dissolve);
+          return;
+        }
+        transitionAnimationRef.current = null;
+        source?.pause();
+        mapRef.current?.triggerRepaint();
+      };
+
+      transitionAnimationRef.current = requestAnimationFrame(dissolve);
     },
     [refreshOverlaySource],
   );
@@ -935,6 +999,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+  useEffect(() => {
+    playIntervalRef.current = isBroadcast ? playIntervalMs : PLAY_INTERVAL_MS;
+  }, [isBroadcast, playIntervalMs]);
 
   // 방송모드는 선택 지점부터 목표 지점까지를 설정한 재생 길이에 맞춰 진행한다.
   useEffect(() => {
