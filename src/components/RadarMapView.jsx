@@ -499,11 +499,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
-  // 누적 강수량 뷰 (방송 운영 보호를 위해 URL에 ?accum=1이 있을 때만 버튼 노출)
-  const showAccumFeature = useMemo(
-    () => new URLSearchParams(window.location.search).has('accum'),
-    [],
-  );
   const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'accum'
   const [accumDays, setAccumDays] = useState(1);
   const [accumHours, setAccumHours] = useState([]);
@@ -520,7 +515,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const accumRenderTokenRef = useRef(0);
   const accumWas3dRef = useRef(false);
   const accumPreviousPitchRef = useRef(0);
-  const isAccumView = isBroadcast && broadcastView === 'accum' && showAccumFeature;
+  const isAccumView = isBroadcast && broadcastView === 'accum';
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
   const navControlRef = useRef(null);
   const navControlAddedRef = useRef(false);
@@ -2362,38 +2357,36 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             </div>
 
             <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
-              {showAccumFeature ? (
-                <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
-                  {[
-                    { id: 'radar', label: '레이더 영상' },
-                    { id: 'accum', label: '누적 강수량' },
-                  ].map(({ id, label }) => {
-                    const isActive = broadcastView === id;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => {
-                          if (!isActive) {
-                            setIsPlaying(false);
-                            setBroadcastView(id);
-                          }
-                        }}
-                        className={`h-10 rounded-lg px-4 text-sm font-black tracking-tight transition ${
-                          isActive
-                            ? id === 'accum'
-                              ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30'
-                              : 'bg-cyan-400 text-slate-950 shadow-md shadow-cyan-950/30'
-                            : 'text-white/75 hover:bg-white/10 hover:text-white'
-                        }`}
-                        aria-pressed={isActive}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
+              <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
+                {[
+                  { id: 'radar', label: '레이더 영상' },
+                  { id: 'accum', label: '누적 강수량' },
+                ].map(({ id, label }) => {
+                  const isActive = broadcastView === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        if (!isActive) {
+                          setIsPlaying(false);
+                          setBroadcastView(id);
+                        }
+                      }}
+                      className={`h-10 rounded-lg px-4 text-sm font-black tracking-tight transition ${
+                        isActive
+                          ? id === 'accum'
+                            ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30'
+                            : 'bg-cyan-400 text-slate-950 shadow-md shadow-cyan-950/30'
+                          : 'text-white/75 hover:bg-white/10 hover:text-white'
+                      }`}
+                      aria-pressed={isActive}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
               <div className="flex items-center gap-2">
                 {isAccumView ? (
                   <>
