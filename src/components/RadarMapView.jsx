@@ -2100,7 +2100,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                 style={{
                   left: '4.4%',
                   top: 'calc(14% + clamp(58px, 7.4vh, 96px) + 14px)',
-                  width: 'clamp(270px, 18vw, 400px)',
+                  width: 'clamp(320px, 22vw, 500px)',
                 }}
               >
                 <div className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm">
@@ -2108,8 +2108,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     {accumTop5.map((row, index) => (
                       <div
                         key={row.id}
-                        className="flex items-center gap-2 px-4 py-[0.45vh]"
-                        style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
+                        className="flex items-center gap-2.5 px-5 py-[0.9vh]"
+                        style={{ fontSize: 'clamp(16px, 1.25vw, 26px)' }}
                       >
                         <span className="w-[1.2em] shrink-0 font-black text-[#f4c542]">
                           {index + 1}

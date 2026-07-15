@@ -134,7 +134,20 @@ const SIDO_SHORT_LABELS = {
 };
 
 export const formatStationLabel = (station) => {
-  const tokens = (station.address ?? '').split(/\s+/).filter(Boolean);
+  // 주소 앞에 붙는 '(산)' 같은 산지 표기·괄호 주석을 걷어낸 뒤,
+  // 알려진 시도명이 나오는 지점부터 파싱한다.
+  const rawTokens = (station.address ?? '')
+    .split(/\s+/)
+    .map((token) => token.replace(/^\([^)]*\)/, '').trim())
+    .filter(Boolean);
+  let sidoIndex = rawTokens.findIndex((token) => SIDO_SHORT_LABELS[token] !== undefined);
+  if (sidoIndex < 0) {
+    sidoIndex = rawTokens.findIndex((token) =>
+      /(특별자치도|특별자치시|특별시|광역시|도)$/.test(token),
+    );
+  }
+  const tokens = sidoIndex >= 0 ? rawTokens.slice(sidoIndex) : rawTokens;
+
   const sidoRaw = tokens[0] ?? '';
   const sido = SIDO_SHORT_LABELS[sidoRaw] ?? sidoRaw.slice(0, 2);
   const isMetro = /(특별시|광역시|특별자치시)$/.test(sidoRaw);
