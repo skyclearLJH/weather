@@ -2222,61 +2222,82 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               {renderTimeline(true)}
             </div>
 
-            <div className="absolute bottom-[8.5rem] right-6 z-20 flex items-center gap-2">
+            <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
               {showAccumFeature ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsPlaying(false);
-                    setBroadcastView((view) => (view === 'radar' ? 'accum' : 'radar'));
-                  }}
-                  className="flex h-10 items-center rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75"
-                  aria-label={broadcastView === 'radar' ? '누적 강수량 보기' : '레이더 영상 보기'}
-                >
-                  {broadcastView === 'radar' ? '누적 강수량' : '레이더 영상'}
-                </button>
+                <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
+                  {[
+                    { id: 'radar', label: '레이더 영상' },
+                    { id: 'accum', label: '누적 강수량' },
+                  ].map(({ id, label }) => {
+                    const isActive = broadcastView === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => {
+                          if (!isActive) {
+                            setIsPlaying(false);
+                            setBroadcastView(id);
+                          }
+                        }}
+                        className={`h-10 rounded-lg px-4 text-sm font-black tracking-tight transition ${
+                          isActive
+                            ? id === 'accum'
+                              ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30'
+                              : 'bg-cyan-400 text-slate-950 shadow-md shadow-cyan-950/30'
+                            : 'text-white/75 hover:bg-white/10 hover:text-white'
+                        }`}
+                        aria-pressed={isActive}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
               ) : null}
-              {isAccumView ? (
+              <div className="flex items-center gap-2">
+                {isAccumView ? (
+                  <select
+                    value={accumDays}
+                    onChange={(event) => {
+                      setIsPlaying(false);
+                      setAccumDays(Number(event.target.value));
+                    }}
+                    className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
+                    aria-label="누적 일수"
+                  >
+                    {[1, 2, 3, 4, 5].map((days) => (
+                      <option key={days} value={days} className="text-slate-900">
+                        {days}일
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
                 <select
-                  value={accumDays}
-                  onChange={(event) => {
-                    setIsPlaying(false);
-                    setAccumDays(Number(event.target.value));
-                  }}
+                  value={playDurationSec}
+                  onChange={(event) => setPlayDurationSec(Number(event.target.value))}
                   className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
-                  aria-label="누적 일수"
+                  aria-label="재생 길이"
                 >
-                  {[1, 2, 3, 4, 5].map((days) => (
-                    <option key={days} value={days} className="text-slate-900">
-                      {days}일
+                  {BROADCAST_PLAY_DURATIONS.map((seconds) => (
+                    <option key={seconds} value={seconds} className="text-slate-900">
+                      {seconds}초
                     </option>
                   ))}
                 </select>
-              ) : null}
-              <select
-                value={playDurationSec}
-                onChange={(event) => setPlayDurationSec(Number(event.target.value))}
-                className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
-                aria-label="재생 길이"
-              >
-                {BROADCAST_PLAY_DURATIONS.map((seconds) => (
-                  <option key={seconds} value={seconds} className="text-slate-900">
-                    {seconds}초
-                  </option>
-                ))}
-              </select>
-              {!isAccumView ? (
-                <button
-                  type="button"
-                  onClick={handleRadarRefresh}
-                  disabled={status === 'loading'}
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
-                  aria-label="레이더 영상 새로고침"
-                  title="레이더 영상 새로고침"
-                >
-                  <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
-                </button>
-              ) : null}
+                {!isAccumView ? (
+                  <button
+                    type="button"
+                    onClick={handleRadarRefresh}
+                    disabled={status === 'loading'}
+                    className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
+                    aria-label="레이더 영상 새로고침"
+                    title="레이더 영상 새로고침"
+                  >
+                    <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
+                  </button>
+                ) : null}
+              </div>
             </div>
 
           </>
