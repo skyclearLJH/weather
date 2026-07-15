@@ -133,7 +133,7 @@ const SIDO_SHORT_LABELS = {
   제주도: '제주',
 };
 
-export const formatStationLabel = (station) => {
+const getStationAddressTokens = (station) => {
   // 주소 앞에 붙는 '(산)' 같은 산지 표기·괄호 주석을 걷어낸 뒤,
   // 알려진 시도명이 나오는 지점부터 파싱한다.
   const rawTokens = (station.address ?? '')
@@ -146,7 +146,34 @@ export const formatStationLabel = (station) => {
       /(특별자치도|특별자치시|특별시|광역시|도)$/.test(token),
     );
   }
-  const tokens = sidoIndex >= 0 ? rawTokens.slice(sidoIndex) : rawTokens;
+  return sidoIndex >= 0 ? rawTokens.slice(sidoIndex) : rawTokens;
+};
+
+export const isJejuStation = (station) => {
+  const sido = getStationAddressTokens(station)[0] ?? '';
+  return sido === '제주특별자치도' || sido === '제주도';
+};
+
+// 제주 집중호우 때 순위 전체가 제주 지점으로 채워지지 않도록 최고 지점 하나만 허용한다.
+export const selectAccumTopStations = (ranked, limit = 5) => {
+  const selected = [];
+  let hasJeju = false;
+  for (const row of ranked) {
+    const isJeju = isJejuStation(row.station);
+    if (isJeju && hasJeju) {
+      continue;
+    }
+    selected.push(row);
+    hasJeju ||= isJeju;
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+  return selected;
+};
+
+export const formatStationLabel = (station) => {
+  const tokens = getStationAddressTokens(station);
 
   const sidoRaw = tokens[0] ?? '';
   const sido = SIDO_SHORT_LABELS[sidoRaw] ?? sidoRaw.slice(0, 2);

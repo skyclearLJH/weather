@@ -29,6 +29,7 @@ import {
   fetchDailyRnTotal,
   formatAccumHourTm,
   formatStationLabel,
+  selectAccumTopStations,
 } from '../api/accumApi';
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
@@ -1437,7 +1438,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         });
         ranked.sort((left, right) => right.total - left.total);
         setAccumTop5(
-          ranked.slice(0, 5).map(({ station, total }) => ({
+          selectAccumTopStations(ranked).map(({ station, total }) => ({
             id: station.id,
             label: formatStationLabel(station),
             mm: Math.round(total * 10) / 10,
