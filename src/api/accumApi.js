@@ -108,7 +108,7 @@ export const fetchAwsStationCoords = () => {
 };
 
 // '광역 시군(지점명)' 표기: 경기도 성남시 분당구 + 분당 → '경기 성남(분당)',
-// 서울특별시 도봉구 + 도봉 → '서울(도봉)'
+// 서울특별시 도봉구 + 도봉 → '서울(도봉)', 인천광역시 강화군 + 양도 → '인천 강화(양도)'
 const SIDO_SHORT_LABELS = {
   서울특별시: '서울',
   부산광역시: '부산',
@@ -153,10 +153,11 @@ export const formatStationLabel = (station) => {
   const isMetro = /(특별시|광역시|특별자치시)$/.test(sidoRaw);
   const sigunToken = tokens[1] ?? '';
   const sigun = /(시|군)$/.test(sigunToken) ? sigunToken.replace(/(시|군)$/, '') : '';
+  const isMetroCounty = isMetro && /군$/.test(sigunToken);
   if (!sido) {
     return station.name;
   }
-  if (isMetro || !sigun) {
+  if ((isMetro && !isMetroCounty) || !sigun) {
     return `${sido}(${station.name})`;
   }
   return `${sido} ${sigun}(${station.name})`;
