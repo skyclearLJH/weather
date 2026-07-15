@@ -320,7 +320,7 @@ const buildPixelMappings = (width, height) => {
   return { radarMap, qpfMap };
 };
 
-const TIMELINE_RANGE_MINUTES = 360; // 관측 -6시간 ~ 예측 +6시간 (현재가 정중앙)
+const OBS_TIMELINE_RANGE_MINUTES = 360;
 const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 맞춘 자동 갱신
 
 // --- 방송모드 ---
@@ -1017,8 +1017,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
   const currentFrame = frames[frameIndex];
 
-  // 타임라인은 프레임 개수가 아니라 시간에 비례한다. 기준(0분) = 최신 관측
-  // 시각이며, 관측 -6시간 ~ 예측 +6시간이라 '현재'가 정확히 가운데에 온다.
+  // 타임라인은 프레임 개수가 아니라 시간에 비례한다. 왼쪽은 관측 6시간,
+  // 오른쪽은 기상청이 실제 제공한 마지막 예측시각까지만 표시한다.
   const baseTimeMs = useMemo(() => {
     const latestObs = frames.filter((frame) => frame.kind === 'obs').at(-1);
     return latestObs ? latestObs.validTime.getTime() : null;
@@ -1033,7 +1033,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   );
 
   const currentOffset = frameOffsets[frameIndex] ?? 0;
-  const thumbPercent = ((currentOffset + TIMELINE_RANGE_MINUTES) / (TIMELINE_RANGE_MINUTES * 2)) * 100;
+  const timelineMinOffset = -OBS_TIMELINE_RANGE_MINUTES;
+  const timelineMaxOffset = Math.max(0, frameOffsets.at(-1) ?? 0);
+  const timelineSpan = timelineMaxOffset - timelineMinOffset;
+  const thumbPercent = ((currentOffset - timelineMinOffset) / timelineSpan) * 100;
+  const currentPercent = ((0 - timelineMinOffset) / timelineSpan) * 100;
 
   const handleTimelineChange = (offsetMinutes) => {
     if (frameOffsets.length === 0) {
@@ -1062,15 +1066,22 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       return [];
     }
     let previousLabeledDate = null;
-    return Array.from({ length: 13 }, (_, index) => {
-      const hourOffset = index - 6;
-      const position = (index / 12) * 100;
-      const isLabeled = hourOffset % 2 === 0;
+    const offsets = [];
+    for (
+      let offsetMinutes = -OBS_TIMELINE_RANGE_MINUTES;
+      offsetMinutes <= timelineMaxOffset;
+      offsetMinutes += 60
+    ) {
+      offsets.push(offsetMinutes);
+    }
+    return offsets.map((offsetMinutes) => {
+      const position = ((offsetMinutes - timelineMinOffset) / timelineSpan) * 100;
+      const isLabeled = offsetMinutes % 120 === 0;
       let label = '';
       let dateLabel = '';
       if (isLabeled) {
-        const tickTime = new Date(baseTimeMs + hourOffset * 60 * 60 * 1000);
-        label = hourOffset === 0 ? '현재' : formatHourMinute(tickTime);
+        const tickTime = new Date(baseTimeMs + offsetMinutes * 60 * 1000);
+        label = offsetMinutes === 0 ? '현재' : formatHourMinute(tickTime);
         // 날짜가 바뀌는 첫 눈금에는 날짜를 함께 표시한다.
         const tickDate = `${tickTime.getMonth() + 1}.${tickTime.getDate()}`;
         if (previousLabeledDate !== null && tickDate !== previousLabeledDate) {
@@ -1078,9 +1089,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
         previousLabeledDate = tickDate;
       }
-      return { hourOffset, position, isLabeled, label, dateLabel };
+      return { offsetMinutes, position, isLabeled, label, dateLabel };
     });
-  }, [baseTimeMs]);
+  }, [baseTimeMs, timelineMaxOffset, timelineMinOffset, timelineSpan]);
 
   const toggleFullscreen = useCallback(async () => {
     if (fullscreenMode) {
@@ -1357,8 +1368,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         ) : null}
         <input
           type="range"
-          min={-TIMELINE_RANGE_MINUTES}
-          max={TIMELINE_RANGE_MINUTES}
+          min={timelineMinOffset}
+          max={timelineMaxOffset}
           step={5}
           value={currentOffset}
           onChange={(event) => handleTimelineChange(Number(event.target.value))}
@@ -1366,12 +1377,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           className={`relative z-10 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0] ${
             broadcast ? 'broadcast-radar-range h-2.5' : 'h-2'
           }`}
-          style={{ background: 'linear-gradient(to right, #64748b 50%, #2563eb 50%)' }}
+          style={{
+            background: `linear-gradient(to right, #64748b ${currentPercent}%, #2563eb ${currentPercent}%)`,
+          }}
         />
         <div className="relative mt-1 h-9">
-          {timelineTicks.map(({ hourOffset, position, isLabeled, label, dateLabel }) => (
+          {timelineTicks.map(({ offsetMinutes, position, isLabeled, label, dateLabel }) => (
             <div
-              key={hourOffset}
+              key={offsetMinutes}
               className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
               style={{ left: `${position}%` }}
             >
@@ -1385,7 +1398,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               {isLabeled ? (
                 <div
                   className={`mt-0.5 whitespace-nowrap text-center text-[10px] font-medium tabular-nums ${
-                    hourOffset === 0
+                    offsetMinutes === 0
                       ? `font-bold ${broadcast ? 'text-white' : 'text-slate-700'}`
                       : broadcast
                         ? 'text-white/75'
