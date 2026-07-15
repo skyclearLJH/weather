@@ -1,6 +1,6 @@
 // 방송모드 'n일 누적 강수량' 데이터 모듈.
 //
-// 데이터 구성: AWS 시간통계(awsh.php)의 RN_DAY(그날 0시~해당 정시 누적)와
+// 데이터 구성: AWS 매분자료(nph-aws2_min)의 RN_DAY(그날 0시~해당 정시 누적)와
 // 일자료(sfc_aws_day, rn_day)의 일합계를 조합한다. 기간 내 임의 정시 T의
 // 누적 = (T 이전 완결 일들의 일합계 합) + (T 시각의 RN_DAY).
 const KMA_PROXY_BASE = '/api/kma/';
@@ -190,20 +190,21 @@ export const formatStationLabel = (station) => {
   return `${sido} ${sigun}(${station.name})`;
 };
 
-// 특정 정시의 지점별 RN_DAY (그날 0시~해당 시각 누적, mm). -99 등 결측은 제외.
+// 특정 정시의 AWS 매분자료 RN_DAY (그날 0시~해당 시각 누적, mm). -99 등 결측은 제외.
 export const fetchHourlyRnDay = async (hourDate) => {
-  const lines = await fetchKmaLines('api/typ01/url/awsh.php', {
-    var: 'RN',
-    tm: formatAccumHourTm(hourDate),
-    help: 1,
+  const lines = await fetchKmaLines('api/typ01/cgi-bin/url/nph-aws2_min', {
+    tm2: formatAccumHourTm(hourDate),
+    stn: 0,
+    disp: 0,
+    help: 0,
   });
   const byStation = new Map();
   lines.forEach((line) => {
     const fields = line.split(/\s+/);
-    if (fields.length < 5 || !/^\d{12}$/.test(fields[0])) {
+    if (fields.length < 14 || !/^\d{12}$/.test(fields[0])) {
       return;
     }
-    const value = Number.parseFloat(fields[4]);
+    const value = Number.parseFloat(fields[13]);
     if (Number.isFinite(value) && value >= 0) {
       byStation.set(fields[1], value);
     }
