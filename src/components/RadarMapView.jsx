@@ -18,6 +18,7 @@ import {
   probeLatestRadarTm,
   probeLatestQpfTm,
   parseRadarTm,
+  parseQpfTm,
 } from '../api/radarApi';
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
@@ -812,7 +813,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
         const forecastFrames = [];
         if (qpfLatest) {
-          const anchorTime = parseRadarTm(qpfLatest.tm);
+          const anchorTime = parseQpfTm(qpfLatest.tm);
           QPF_EF_MINUTES.forEach((ef) => {
             const validTime = new Date(anchorTime.getTime() + ef * 60 * 1000);
             if (validTime > latestObsTime) {

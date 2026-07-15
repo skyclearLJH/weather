@@ -147,6 +147,10 @@ const pad2 = (value) => String(value).padStart(2, '0');
 export const formatRadarTm = (date) =>
   `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}${pad2(date.getHours())}${pad2(date.getMinutes())}`;
 
+// VAPI 초단기예측 이미지 파일명은 관측 API와 달리 UTC 시각을 사용한다.
+export const formatQpfTm = (date) =>
+  `${date.getUTCFullYear()}${pad2(date.getUTCMonth() + 1)}${pad2(date.getUTCDate())}${pad2(date.getUTCHours())}${pad2(date.getUTCMinutes())}`;
+
 export const parseRadarTm = (tm) =>
   new Date(
     Number(tm.slice(0, 4)),
@@ -154,6 +158,17 @@ export const parseRadarTm = (tm) =>
     Number(tm.slice(6, 8)),
     Number(tm.slice(8, 10)),
     Number(tm.slice(10, 12)),
+  );
+
+export const parseQpfTm = (tm) =>
+  new Date(
+    Date.UTC(
+      Number(tm.slice(0, 4)),
+      Number(tm.slice(4, 6)) - 1,
+      Number(tm.slice(6, 8)),
+      Number(tm.slice(8, 10)),
+      Number(tm.slice(10, 12)),
+    ),
   );
 
 export const floorToFiveMinutes = (date) => {
@@ -312,7 +327,7 @@ export const probeLatestQpfTm = async (now = new Date()) => {
 
     const results = await Promise.all(
       steps.map(async (step) => {
-        const tm = formatRadarTm(new Date(base.getTime() - step * 10 * 60 * 1000));
+        const tm = formatQpfTm(new Date(base.getTime() - step * 10 * 60 * 1000));
         try {
           return { tm, frame: await fetchQpfFrame(tm, 10) };
         } catch {
