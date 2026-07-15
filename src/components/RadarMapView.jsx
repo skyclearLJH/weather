@@ -19,6 +19,16 @@ import {
   probeLatestQpfTm,
   parseRadarTm,
 } from '../api/radarApi';
+import {
+  ACCUM_PALETTE,
+  ACCUM_MAJOR_BREAKS,
+  ACCUM_SCALE_TOP,
+  accumBucket,
+  fetchAwsStationCoords,
+  fetchHourlyRnDay,
+  fetchDailyRnTotal,
+  formatAccumHourTm,
+} from '../api/accumApi';
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
@@ -481,6 +491,24 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
+  // 누적 강수량 뷰 (방송 운영 보호를 위해 URL에 ?accum=1이 있을 때만 버튼 노출)
+  const showAccumFeature = useMemo(
+    () => new URLSearchParams(window.location.search).has('accum'),
+    [],
+  );
+  const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'accum'
+  const [accumDays, setAccumDays] = useState(1);
+  const [accumHours, setAccumHours] = useState([]);
+  const [accumIndex, setAccumIndex] = useState(0);
+  const [accumStatus, setAccumStatus] = useState('idle'); // idle | loading | ready | error
+  const [accumError, setAccumError] = useState('');
+  const accumHourlyCacheRef = useRef(new Map()); // 정시 tm → Map<지점, RN_DAY>
+  const accumBasesRef = useRef([]); // 기간 내 일 인덱스별 지점 누적 베이스 Map
+  const accumStationsRef = useRef(null);
+  const accumIdwRef = useRef(null);
+  const accumCanvasRef = useRef(null);
+  const accumRenderTokenRef = useRef(0);
+  const isAccumView = isBroadcast && broadcastView === 'accum' && showAccumFeature;
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
   const navControlRef = useRef(null);
   const navControlAddedRef = useRef(false);
@@ -904,8 +932,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
   }, []);
 
-  // 현재 프레임 렌더링
+  // 현재 프레임 렌더링 (누적 강수량 뷰에서는 레이더 렌더를 중단)
   useEffect(() => {
+    if (isAccumView) {
+      return;
+    }
     const frameDef = frames[frameIndex];
     if (!frameDef || status !== 'ready') {
       return;
@@ -919,7 +950,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
       })
       .catch(() => {});
-  }, [frames, frameIndex, status, renderFrame, loadFrameData]);
+  }, [frames, frameIndex, status, renderFrame, loadFrameData, isAccumView]);
 
   // 슬라이더 이동 시 바로 앞뒤 프레임만 가볍게 미리 받아 과거 6시간 탐색을 부드럽게 한다.
   useEffect(() => {
@@ -963,6 +994,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
   // 방송모드는 선택 지점부터 목표 지점까지를 설정한 재생 길이에 맞춰 진행한다.
   useEffect(() => {
+    if (isAccumView) {
+      return undefined; // 누적 뷰 재생은 별도 효과에서
+    }
     if (!isPlaying || frames.length === 0) {
       return undefined;
     }
@@ -973,19 +1007,47 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       );
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [isPlaying, frames.length, isBroadcast, playIntervalMs]);
+  }, [isPlaying, frames.length, isBroadcast, playIntervalMs, isAccumView]);
+
+  // 누적 강수량 뷰: 기간 처음→끝을 재생 길이에 맞춰 진행하고 끝에서 멈춘다.
+  useEffect(() => {
+    if (!isAccumView || !isPlaying || accumHours.length < 2) {
+      return undefined;
+    }
+    const intervalMs = Math.max(60, Math.round((playDurationSec * 1000) / accumHours.length));
+    const timer = window.setInterval(() => {
+      setAccumIndex((previous) => Math.min(previous + 1, accumHours.length - 1));
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [isAccumView, isPlaying, accumHours.length, playDurationSec]);
+
+  useEffect(() => {
+    if (isAccumView && isPlaying && accumIndex >= accumHours.length - 1) {
+      setIsPlaying(false);
+    }
+  }, [isAccumView, isPlaying, accumIndex, accumHours.length]);
 
   // 방송모드 재생은 목표 지점(현재 또는 예측 끝)에 도달하면 멈춘다.
   useEffect(() => {
-    if (isBroadcast && isPlaying && playTarget !== null && frameIndex >= playTarget) {
+    if (!isAccumView && isBroadcast && isPlaying && playTarget !== null && frameIndex >= playTarget) {
       setIsPlaying(false);
     }
-  }, [isBroadcast, isPlaying, playTarget, frameIndex]);
+  }, [isBroadcast, isPlaying, playTarget, frameIndex, isAccumView]);
 
   // 관측 프레임은 선택 지점→현재, 예측 프레임은 선택 지점→예측 끝으로 재생한다.
   const handlePlayButton = () => {
     if (isPlaying) {
       setIsPlaying(false);
+      return;
+    }
+    if (isAccumView) {
+      if (accumHours.length < 2 || accumStatus !== 'ready') {
+        return;
+      }
+      if (accumIndex >= accumHours.length - 1) {
+        setAccumIndex(0);
+      }
+      setIsPlaying(true);
       return;
     }
     if (!isBroadcast) {
@@ -1060,6 +1122,352 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const handleRadarRefresh = useCallback(() => {
     setManualRefreshTick((tick) => tick + 1);
   }, []);
+
+  // ---------- 누적 강수량 뷰 ----------
+  // 관측소 점 자료를 IDW(역거리가중)로 색면 보간해 오버레이 캔버스에 그린다.
+  const buildAccumIdw = useCallback(
+    (stations) => {
+      const STEP = 3;
+      const width = CANVAS_WIDTH;
+      const height = canvasHeight;
+      const latticeW = Math.ceil(width / STEP);
+      const latticeH = Math.ceil(height / STEP);
+      const yTop = mercatorY(VIEW_BOUNDS.latMax);
+      const yBottom = mercatorY(VIEW_BOUNDS.latMin);
+
+      const stationX = new Float32Array(stations.length);
+      const stationY = new Float32Array(stations.length);
+      stations.forEach((station, index) => {
+        stationX[index] =
+          ((station.lon - VIEW_BOUNDS.lonMin) / (VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin)) * width;
+        stationY[index] = ((yTop - mercatorY(station.lat)) / (yTop - yBottom)) * height;
+      });
+
+      // 공간 해시로 근접 지점 탐색을 가속한다.
+      const CELL = 32;
+      const gridW = Math.ceil(width / CELL);
+      const gridH = Math.ceil(height / CELL);
+      const buckets = Array.from({ length: gridW * gridH }, () => []);
+      stations.forEach((_, index) => {
+        const cx = Math.min(gridW - 1, Math.max(0, Math.floor(stationX[index] / CELL)));
+        const cy = Math.min(gridH - 1, Math.max(0, Math.floor(stationY[index] / CELL)));
+        buckets[cy * gridW + cx].push(index);
+      });
+
+      const NEIGHBORS = 6;
+      const CUTOFF_PX = 38; // 캔버스 1px ≈ 1km
+      const neighborIdx = new Int16Array(latticeW * latticeH * NEIGHBORS).fill(-1);
+      const neighborW = new Float32Array(latticeW * latticeH * NEIGHBORS);
+
+      for (let ly = 0; ly < latticeH; ly++) {
+        const py = ly * STEP + STEP / 2;
+        for (let lx = 0; lx < latticeW; lx++) {
+          const px = lx * STEP + STEP / 2;
+          const candidates = [];
+          const cx = Math.floor(px / CELL);
+          const cy = Math.floor(py / CELL);
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+              const gx = cx + dx;
+              const gy = cy + dy;
+              if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) {
+                continue;
+              }
+              for (const index of buckets[gy * gridW + gx]) {
+                const d2 = (stationX[index] - px) ** 2 + (stationY[index] - py) ** 2;
+                if (d2 <= CUTOFF_PX * CUTOFF_PX) {
+                  candidates.push([d2, index]);
+                }
+              }
+            }
+          }
+          if (candidates.length === 0) {
+            continue;
+          }
+          candidates.sort((left, right) => left[0] - right[0]);
+          const base = (ly * latticeW + lx) * NEIGHBORS;
+          for (let k = 0; k < Math.min(NEIGHBORS, candidates.length); k++) {
+            neighborIdx[base + k] = candidates[k][1];
+            neighborW[base + k] = 1 / (candidates[k][0] + 4);
+          }
+        }
+      }
+
+      return { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW };
+    },
+    [canvasHeight],
+  );
+
+  const renderAccumFrame = useCallback(
+    (hourIndex) => {
+      const canvas = overlayCanvasRef.current;
+      const idw = accumIdwRef.current;
+      const stations = accumStationsRef.current;
+      const hour = accumHours[hourIndex];
+      if (!canvas || !idw || !stations || !hour) {
+        return;
+      }
+      const hourly = accumHourlyCacheRef.current.get(formatAccumHourTm(hour));
+      if (!hourly) {
+        return;
+      }
+
+      // 기간 시작일부터 해당 시각의 날 전까지의 일합계 베이스 + 그 시각 RN_DAY
+      const periodStart = accumHours[0];
+      const dayIndex = Math.round(
+        (new Date(hour).setHours(0, 0, 0, 0) - new Date(periodStart).setHours(0, 0, 0, 0)) /
+          86400000,
+      );
+      const base = accumBasesRef.current[dayIndex] ?? null;
+
+      const values = new Float32Array(stations.length).fill(-1);
+      stations.forEach((station, index) => {
+        const hourValue = hourly.get(station.id);
+        if (hourValue === undefined) {
+          return;
+        }
+        values[index] = hourValue + (base ? (base.get(station.id) ?? 0) : 0);
+      });
+
+      const { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW } = idw;
+      if (!accumCanvasRef.current) {
+        accumCanvasRef.current = document.createElement('canvas');
+        accumCanvasRef.current.width = latticeW;
+        accumCanvasRef.current.height = latticeH;
+      }
+      const latticeCanvas = accumCanvasRef.current;
+      const latticeContext = latticeCanvas.getContext('2d');
+      const image = latticeContext.createImageData(latticeW, latticeH);
+      const pixels = image.data;
+
+      for (let node = 0; node < latticeW * latticeH; node++) {
+        const baseIndex = node * NEIGHBORS;
+        let weightSum = 0;
+        let valueSum = 0;
+        for (let k = 0; k < NEIGHBORS; k++) {
+          const stationIndex = neighborIdx[baseIndex + k];
+          if (stationIndex < 0) {
+            break;
+          }
+          const value = values[stationIndex];
+          if (value < 0) {
+            continue;
+          }
+          weightSum += neighborW[baseIndex + k];
+          valueSum += neighborW[baseIndex + k] * value;
+        }
+        if (weightSum <= 0) {
+          continue;
+        }
+        const bucket = accumBucket(valueSum / weightSum);
+        if (bucket <= 0) {
+          continue; // 무강수는 투명
+        }
+        const [r, g, b] = ACCUM_PALETTE[bucket - 1].color;
+        const offset = node * 4;
+        pixels[offset] = r;
+        pixels[offset + 1] = g;
+        pixels[offset + 2] = b;
+        pixels[offset + 3] = OVERLAY_ALPHA;
+      }
+
+      latticeContext.putImageData(image, 0, 0);
+
+      if (transitionAnimationRef.current !== null) {
+        cancelAnimationFrame(transitionAnimationRef.current);
+        transitionAnimationRef.current = null;
+      }
+      const context = canvas.getContext('2d');
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(latticeCanvas, 0, 0, canvas.width, canvas.height);
+      refreshOverlaySource();
+    },
+    [accumHours, refreshOverlaySource],
+  );
+
+  // 누적 뷰 진입/일수 변경 시 시간축과 자료를 구성한다.
+  useEffect(() => {
+    if (!isAccumView) {
+      return undefined;
+    }
+    let isActive = true;
+    setIsPlaying(false);
+    setAccumStatus('loading');
+    setAccumError('');
+
+    (async () => {
+      try {
+        if (!accumStationsRef.current) {
+          accumStationsRef.current = await fetchAwsStationCoords();
+        }
+        if (!accumIdwRef.current) {
+          accumIdwRef.current = buildAccumIdw(accumStationsRef.current);
+        }
+        if (!isActive) {
+          return;
+        }
+
+        // 최신 발표 정시 탐색 (직전 정시부터 최대 3시간 소급)
+        const now = new Date();
+        now.setMinutes(0, 0, 0);
+        let latest = null;
+        for (let step = 0; step < 3 && !latest; step++) {
+          const candidate = new Date(now.getTime() - step * 3600000);
+          try {
+            const data = await fetchHourlyRnDay(candidate);
+            latest = { date: candidate, data };
+          } catch {
+            // 다음 후보
+          }
+        }
+        if (!latest) {
+          throw new Error('AWS 시간통계 자료를 찾지 못했습니다.');
+        }
+        if (!isActive) {
+          return;
+        }
+        accumHourlyCacheRef.current.set(formatAccumHourTm(latest.date), latest.data);
+
+        const start = new Date(latest.date);
+        start.setHours(0, 0, 0, 0);
+        start.setDate(start.getDate() - (accumDays - 1));
+
+        // 완결된 과거 일들의 일합계 → 일 인덱스별 누적 베이스
+        const bases = [new Map()];
+        for (let dayOffset = 0; dayOffset < accumDays - 1; dayOffset++) {
+          const day = new Date(start.getTime() + dayOffset * 86400000);
+          const daily = await fetchDailyRnTotal(day);
+          if (!isActive) {
+            return;
+          }
+          const previous = bases[dayOffset];
+          const next = new Map(previous);
+          daily.forEach((value, stationId) => {
+            next.set(stationId, (previous.get(stationId) ?? 0) + value);
+          });
+          bases.push(next);
+        }
+        accumBasesRef.current = bases;
+
+        const hours = [];
+        for (let t = start.getTime(); t <= latest.date.getTime(); t += 3600000) {
+          hours.push(new Date(t));
+        }
+        setAccumHours(hours);
+        setAccumIndex(hours.length - 1);
+        setAccumStatus('ready');
+
+        // 나머지 정시 프레임을 앞에서부터 순차 프리페치
+        let cursor = 0;
+        const pump = () => {
+          if (!isActive || cursor >= hours.length) {
+            return;
+          }
+          const hour = hours[cursor];
+          cursor += 1;
+          const tm = formatAccumHourTm(hour);
+          if (accumHourlyCacheRef.current.has(tm)) {
+            window.setTimeout(pump, 0);
+            return;
+          }
+          fetchHourlyRnDay(hour)
+            .then((data) => {
+              if (isActive) {
+                accumHourlyCacheRef.current.set(tm, data);
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              if (isActive) {
+                window.setTimeout(pump, 120);
+              }
+            });
+        };
+        pump();
+        pump();
+        pump();
+      } catch (error) {
+        if (isActive) {
+          setAccumStatus('error');
+          setAccumError(error.message);
+        }
+      }
+    })();
+
+    return () => {
+      isActive = false;
+    };
+  }, [isAccumView, accumDays, buildAccumIdw]);
+
+  // 누적 뷰 현재 프레임 렌더링 (자료 미도착 시 도착 후 렌더)
+  useEffect(() => {
+    if (!isAccumView || accumStatus !== 'ready') {
+      return;
+    }
+    const hour = accumHours[accumIndex];
+    if (!hour) {
+      return;
+    }
+    const token = ++accumRenderTokenRef.current;
+    const tm = formatAccumHourTm(hour);
+    if (accumHourlyCacheRef.current.has(tm)) {
+      renderAccumFrame(accumIndex);
+      return;
+    }
+    fetchHourlyRnDay(hour)
+      .then((data) => {
+        accumHourlyCacheRef.current.set(tm, data);
+        if (accumRenderTokenRef.current === token) {
+          renderAccumFrame(accumIndex);
+        }
+      })
+      .catch(() => {});
+  }, [isAccumView, accumStatus, accumHours, accumIndex, renderAccumFrame]);
+
+  // 뷰 전환 시 오버레이를 비워 이전 그림이 남지 않게 한다.
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    if (transitionAnimationRef.current !== null) {
+      cancelAnimationFrame(transitionAnimationRef.current);
+      transitionAnimationRef.current = null;
+    }
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    refreshOverlaySource();
+    setIsPlaying(false);
+  }, [isAccumView, refreshOverlaySource]);
+
+  const currentAccumHour = accumHours[accumIndex] ?? null;
+  const accumThumbPercent =
+    accumHours.length > 1 ? (accumIndex / (accumHours.length - 1)) * 100 : 50;
+
+  const accumTicks = useMemo(() => {
+    if (accumHours.length < 2) {
+      return [];
+    }
+    const span = accumHours.length - 1;
+    const tickEvery = accumHours.length <= 30 ? 3 : 6;
+    const labelEvery = accumHours.length <= 30 ? 6 : accumHours.length <= 80 ? 12 : 24;
+    return accumHours
+      .map((hour, index) => ({ hour, index }))
+      .filter(({ hour }) => hour.getHours() % tickEvery === 0)
+      .map(({ hour, index }) => {
+        const isLabeled = hour.getHours() % labelEvery === 0;
+        let label = '';
+        if (isLabeled) {
+          label =
+            hour.getHours() === 0
+              ? `${hour.getMonth() + 1}/${hour.getDate()}`
+              : `${hour.getHours()}시`;
+        }
+        return { key: index, position: (index / span) * 100, isLabeled, label, dateLabel: '' };
+      });
+  }, [accumHours]);
 
   const timelineTicks = useMemo(() => {
     if (baseTimeMs === null) {
@@ -1217,6 +1625,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     setIsBroadcast(false);
     setIsPlaying(false);
     setPlayTarget(null);
+    setBroadcastView('radar');
     if (fullscreenMode) {
       toggleFullscreen();
     }
@@ -1226,6 +1635,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   useEffect(() => {
     if (!isFullscreen) {
       setIsBroadcast(false);
+      setBroadcastView('radar');
     }
   }, [isFullscreen]);
 
@@ -1351,7 +1761,18 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         )}
       </button>
       <div className="relative min-w-0 flex-1 pt-8">
-        {currentFrame ? (
+        {isAccumView && currentAccumHour ? (
+          <div
+            className="pointer-events-none absolute top-0"
+            style={{ left: `${Math.min(Math.max(accumThumbPercent, 6), 94)}%` }}
+          >
+            <span className="inline-block -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-600 px-2.5 py-1 text-[11px] font-bold tabular-nums text-white shadow-sm">
+              {currentAccumHour.getMonth() + 1}/{currentAccumHour.getDate()}{' '}
+              {String(currentAccumHour.getHours()).padStart(2, '0')}:00
+            </span>
+          </div>
+        ) : null}
+        {!isAccumView && currentFrame ? (
           <div
             className="pointer-events-none absolute top-0"
             style={{ left: `${Math.min(Math.max(thumbPercent, 6), 94)}%` }}
@@ -1368,23 +1789,33 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         ) : null}
         <input
           type="range"
-          min={timelineMinOffset}
-          max={timelineMaxOffset}
-          step={5}
-          value={currentOffset}
-          onChange={(event) => handleTimelineChange(Number(event.target.value))}
-          disabled={status !== 'ready'}
+          min={isAccumView ? 0 : timelineMinOffset}
+          max={isAccumView ? Math.max(accumHours.length - 1, 1) : timelineMaxOffset}
+          step={isAccumView ? 1 : 5}
+          value={isAccumView ? accumIndex : currentOffset}
+          onChange={(event) => {
+            if (isAccumView) {
+              setIsPlaying(false);
+              setAccumIndex(Number(event.target.value));
+            } else {
+              handleTimelineChange(Number(event.target.value));
+            }
+          }}
+          disabled={isAccumView ? accumStatus !== 'ready' : status !== 'ready'}
           className={`relative z-10 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0] ${
             broadcast ? 'broadcast-radar-range h-2.5' : 'h-2'
           }`}
           style={{
-            background: `linear-gradient(to right, #64748b ${currentPercent}%, #2563eb ${currentPercent}%)`,
+            background: isAccumView
+              ? '#3b71b8'
+              : `linear-gradient(to right, #64748b ${currentPercent}%, #2563eb ${currentPercent}%)`,
           }}
         />
         <div className="relative mt-1 h-9">
-          {timelineTicks.map(({ offsetMinutes, position, isLabeled, label, dateLabel }) => (
+          {(isAccumView ? accumTicks : timelineTicks).map(
+            ({ offsetMinutes, key, position, isLabeled, label, dateLabel }) => (
             <div
-              key={offsetMinutes}
+              key={isAccumView ? key : offsetMinutes}
               className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
               style={{ left: `${position}%` }}
             >
@@ -1485,6 +1916,16 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             {statusMessage || '레이더 자료를 불러오지 못했습니다.'}
           </div>
         ) : null}
+        {isAccumView && accumStatus === 'loading' ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/35 text-sm font-semibold text-white backdrop-blur-[1px]">
+            누적 강수량 자료를 불러오는 중입니다…
+          </div>
+        ) : null}
+        {isAccumView && accumStatus === 'error' ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/45 px-6 text-center text-sm font-semibold text-red-200">
+            {accumError || '누적 강수량 자료를 불러오지 못했습니다.'}
+          </div>
+        ) : null}
 
         {isBroadcast ? (
           <>
@@ -1531,9 +1972,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     textShadow: '0 2px 6px rgba(0,0,0,0.35)',
                   }}
                 >
-                  레이더 영상
+                  {isAccumView ? `${accumDays}일 누적 강수량` : '레이더 영상'}
                 </span>
-                {currentFrame ? (
+                {(isAccumView ? currentAccumHour : currentFrame) ? (
                   <div
                     className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap"
                     style={{ gap: '0.6vw' }}
@@ -1546,15 +1987,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                         textShadow: '0 2px 5px rgba(0,0,0,0.3)',
                       }}
                     >
-                      {formatHourMinute(currentFrame.validTime)}
+                      {formatHourMinute(isAccumView ? currentAccumHour : currentFrame.validTime)}
                     </span>
                     <span
                       className="font-semibold text-[#bdd6fb]"
                       style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
                     >
-                      {formatBroadcastDate(currentFrame.validTime)}
+                      {formatBroadcastDate(isAccumView ? currentAccumHour : currentFrame.validTime)}
                     </span>
-                    {currentFrame.kind === 'fct' ? (
+                    {!isAccumView && currentFrame?.kind === 'fct' ? (
                       <span className="rounded bg-[#f4c542] px-1.5 py-0.5 text-xs font-black text-[#102a43]">
                         예측
                       </span>
@@ -1565,46 +2006,93 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               </div>
             </div>
 
-            {/* 좌측 세로 강수 스케일 (일반 모드 범례와 동일한 6등분 구성) */}
+            {/* 좌측 세로 스케일: 레이더(mm/h) 또는 누적 강수량(mm) */}
             <div className="pointer-events-none absolute left-5 top-1/2 z-20 -translate-y-1/2 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm">
-              <div className="flex h-[46vh] min-h-[280px]">
-                <div className="flex w-2.5 flex-col-reverse overflow-hidden rounded-sm">
-                  {LEGEND_SEGMENTS.map((segment) => (
-                    <div key={segment.key} className="flex flex-1 flex-col-reverse">
-                      {segment.values.map((value) => {
-                        const color = getPaletteColorByValue(value);
+              {isAccumView ? (
+                <>
+                  <div className="flex h-[46vh] min-h-[280px]">
+                    <div className="flex w-2.5 flex-col-reverse overflow-hidden rounded-sm">
+                      {ACCUM_PALETTE.map(({ min, color }) => (
+                        <div
+                          key={min}
+                          className="w-full flex-1"
+                          style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
+                        />
+                      ))}
+                    </div>
+                    <div className="relative ml-1.5 w-7">
+                      <span
+                        className="absolute translate-y-1/2 text-[10px] font-semibold leading-none text-white/80"
+                        style={{ bottom: '0%' }}
+                      >
+                        0
+                      </span>
+                      {ACCUM_MAJOR_BREAKS.map((value) => {
+                        const index = ACCUM_PALETTE.findIndex((item) => item.min === value);
                         return (
-                          <div
+                          <span
                             key={value}
-                            className="w-full flex-1"
-                            style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
-                          />
+                            className="absolute translate-y-1/2 text-[10px] font-bold leading-none text-white"
+                            style={{ bottom: `${(index / ACCUM_PALETTE.length) * 100}%` }}
+                          >
+                            {value}
+                          </span>
                         );
                       })}
+                      <span
+                        className="absolute translate-y-1/2 text-[10px] font-semibold leading-none text-white/80"
+                        style={{ bottom: '100%' }}
+                      >
+                        {ACCUM_SCALE_TOP}
+                      </span>
                     </div>
-                  ))}
-                </div>
-                <div className="relative ml-1.5 w-6">
-                  {[
-                    [0, 0],
-                    [1, 1],
-                    [5, 2],
-                    [10, 3],
-                    [30, 4],
-                    [70, 5],
-                    [150, 6],
-                  ].map(([value, boundary]) => (
-                    <span
-                      key={value}
-                      className="absolute translate-y-1/2 text-[10px] font-semibold leading-none text-white"
-                      style={{ bottom: `${(boundary / 6) * 100}%` }}
-                    >
-                      {value}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="mt-1.5 text-center text-[9px] font-semibold text-white/80">mm/h</div>
+                  </div>
+                  <div className="mt-1.5 text-center text-[9px] font-semibold text-white/80">mm</div>
+                </>
+              ) : (
+                <>
+                  <div className="flex h-[46vh] min-h-[280px]">
+                    <div className="flex w-2.5 flex-col-reverse overflow-hidden rounded-sm">
+                      {LEGEND_SEGMENTS.map((segment) => (
+                        <div key={segment.key} className="flex flex-1 flex-col-reverse">
+                          {segment.values.map((value) => {
+                            const color = getPaletteColorByValue(value);
+                            return (
+                              <div
+                                key={value}
+                                className="w-full flex-1"
+                                style={{ backgroundColor: `rgb(${color[0]},${color[1]},${color[2]})` }}
+                              />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="relative ml-1.5 w-6">
+                      {[
+                        [0, 0],
+                        [1, 1],
+                        [5, 2],
+                        [10, 3],
+                        [30, 4],
+                        [70, 5],
+                        [150, 6],
+                      ].map(([value, boundary]) => (
+                        <span
+                          key={value}
+                          className="absolute translate-y-1/2 text-[10px] font-semibold leading-none text-white"
+                          style={{ bottom: `${(boundary / 6) * 100}%` }}
+                        >
+                          {value}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-1.5 text-center text-[9px] font-semibold text-white/80">
+                    mm/h
+                  </div>
+                </>
+              )}
             </div>
 
             {/* 하단 반투명 컨트롤바 */}
@@ -1613,6 +2101,36 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             </div>
 
             <div className="absolute bottom-[8.5rem] right-6 z-20 flex items-center gap-2">
+              {showAccumFeature ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPlaying(false);
+                    setBroadcastView((view) => (view === 'radar' ? 'accum' : 'radar'));
+                  }}
+                  className="flex h-10 items-center rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75"
+                  aria-label={broadcastView === 'radar' ? '누적 강수량 보기' : '레이더 영상 보기'}
+                >
+                  {broadcastView === 'radar' ? '누적 강수량' : '레이더 영상'}
+                </button>
+              ) : null}
+              {isAccumView ? (
+                <select
+                  value={accumDays}
+                  onChange={(event) => {
+                    setIsPlaying(false);
+                    setAccumDays(Number(event.target.value));
+                  }}
+                  className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
+                  aria-label="누적 일수"
+                >
+                  {[1, 2, 3, 4, 5].map((days) => (
+                    <option key={days} value={days} className="text-slate-900">
+                      {days}일
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               <select
                 value={playDurationSec}
                 onChange={(event) => setPlayDurationSec(Number(event.target.value))}
@@ -1625,16 +2143,18 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                onClick={handleRadarRefresh}
-                disabled={status === 'loading'}
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
-                aria-label="레이더 영상 새로고침"
-                title="레이더 영상 새로고침"
-              >
-                <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
-              </button>
+              {!isAccumView ? (
+                <button
+                  type="button"
+                  onClick={handleRadarRefresh}
+                  disabled={status === 'loading'}
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
+                  aria-label="레이더 영상 새로고침"
+                  title="레이더 영상 새로고침"
+                >
+                  <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
+                </button>
+              ) : null}
             </div>
 
           </>

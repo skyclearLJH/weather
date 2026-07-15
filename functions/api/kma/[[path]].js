@@ -100,7 +100,7 @@ export async function onRequestOptions() {
 // HTTP 200 + "file not exist" 텍스트를 돌려준다. 이걸 그대로 오래 캐시하면
 // 실제 파일이 나온 뒤에도 한동안 '없음'으로 고정되므로(타임라인 멈춤 현상),
 // 본문이 진짜 자료(gzip/PNG)일 때만 엣지 캐시에 저장한다.
-const VALIDATED_CACHE_PATHS = ['/rdr_cmp_file.php', '/nph-qpf_ana_img'];
+const VALIDATED_CACHE_PATHS = ['/rdr_cmp_file.php', '/nph-qpf_ana_img', '/awsh.php'];
 const VALIDATED_CACHE_TTL_SECONDS = 3600; // 발표시각별 자료는 불변
 
 const isValidRadarPayload = (bytes) => {
@@ -115,6 +115,19 @@ const isValidRadarPayload = (bytes) => {
     bytes[3] === 0x47
   ) {
     return true; // PNG 분포도 (오류·빈 이미지는 작아서 걸러짐)
+  }
+  // AWS 시간통계 등 텍스트 자료: 지점 데이터 줄('\n' + 연도 '2')이 충분히
+  // 많으면 정상 발표분으로 본다. 미발표·오류 응답은 줄 수가 거의 없다.
+  if (bytes.length > 4096 && bytes[0] === 0x23) {
+    let dataLines = 0;
+    for (let index = 1; index < bytes.length; index++) {
+      if (bytes[index - 1] === 0x0a && bytes[index] === 0x32) {
+        dataLines++;
+        if (dataLines >= 200) {
+          return true;
+        }
+      }
+    }
   }
   return false;
 };
