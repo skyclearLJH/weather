@@ -28,6 +28,7 @@ import {
   fetchHourlyRnDay,
   fetchDailyRnTotal,
   formatAccumHourTm,
+  formatStationLabel,
 } from '../api/accumApi';
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
@@ -502,6 +503,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [accumIndex, setAccumIndex] = useState(0);
   const [accumStatus, setAccumStatus] = useState('idle'); // idle | loading | ready | error
   const [accumError, setAccumError] = useState('');
+  const [accumTop5, setAccumTop5] = useState([]);
   const accumHourlyCacheRef = useRef(new Map()); // 정시 tm → Map<지점, RN_DAY>
   const accumBasesRef = useRef([]); // 기간 내 일 인덱스별 지점 누적 베이스 Map
   const accumStationsRef = useRef(null);
@@ -1155,9 +1157,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       });
 
       const NEIGHBORS = 6;
-      const CUTOFF_PX = 38; // 캔버스 1px ≈ 1km
+      // 고립 지점(도서)의 표출 반경이 과대해지지 않도록 커버 반경을 울릉도
+      // 규모(~13km)로 제한하고, 가장자리는 페이드시켜 자연스럽게 마감한다.
+      const CUTOFF_PX = 13; // 캔버스 1px ≈ 1km
+      const FADE_START_PX = 9;
       const neighborIdx = new Int16Array(latticeW * latticeH * NEIGHBORS).fill(-1);
       const neighborW = new Float32Array(latticeW * latticeH * NEIGHBORS);
+      const nodeAlpha = new Uint8Array(latticeW * latticeH);
 
       for (let ly = 0; ly < latticeH; ly++) {
         const py = ly * STEP + STEP / 2;
@@ -1166,8 +1172,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           const candidates = [];
           const cx = Math.floor(px / CELL);
           const cy = Math.floor(py / CELL);
-          for (let dy = -2; dy <= 2; dy++) {
-            for (let dx = -2; dx <= 2; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
               const gx = cx + dx;
               const gy = cy + dy;
               if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) {
@@ -1185,15 +1191,22 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             continue;
           }
           candidates.sort((left, right) => left[0] - right[0]);
-          const base = (ly * latticeW + lx) * NEIGHBORS;
+          const node = ly * latticeW + lx;
+          const base = node * NEIGHBORS;
           for (let k = 0; k < Math.min(NEIGHBORS, candidates.length); k++) {
             neighborIdx[base + k] = candidates[k][1];
             neighborW[base + k] = 1 / (candidates[k][0] + 4);
           }
+          const nearest = Math.sqrt(candidates[0][0]);
+          const fade =
+            nearest <= FADE_START_PX
+              ? 1
+              : Math.max(0, 1 - (nearest - FADE_START_PX) / (CUTOFF_PX - FADE_START_PX));
+          nodeAlpha[node] = Math.round(OVERLAY_ALPHA * fade);
         }
       }
 
-      return { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW };
+      return { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW, nodeAlpha };
     },
     [canvasHeight],
   );
@@ -1229,7 +1242,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         values[index] = hourValue + (base ? (base.get(station.id) ?? 0) : 0);
       });
 
-      const { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW } = idw;
+      const { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW, nodeAlpha } = idw;
       if (!accumCanvasRef.current) {
         accumCanvasRef.current = document.createElement('canvas');
         accumCanvasRef.current.width = latticeW;
@@ -1268,7 +1281,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         pixels[offset] = r;
         pixels[offset + 1] = g;
         pixels[offset + 2] = b;
-        pixels[offset + 3] = OVERLAY_ALPHA;
+        pixels[offset + 3] = nodeAlpha[node];
       }
 
       latticeContext.putImageData(image, 0, 0);
@@ -1358,6 +1371,28 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         setAccumHours(hours);
         setAccumIndex(hours.length - 1);
         setAccumStatus('ready');
+
+        // 기간 전체(최신 시각 기준) 최다 강수 5개 지점
+        const latestBase = bases[accumDays - 1] ?? new Map();
+        const ranked = [];
+        accumStationsRef.current.forEach((station) => {
+          const hourValue = latest.data.get(station.id);
+          if (hourValue === undefined) {
+            return;
+          }
+          const total = hourValue + (latestBase.get(station.id) ?? 0);
+          if (total >= 0.1) {
+            ranked.push({ station, total });
+          }
+        });
+        ranked.sort((left, right) => right.total - left.total);
+        setAccumTop5(
+          ranked.slice(0, 5).map(({ station, total }) => ({
+            id: station.id,
+            label: formatStationLabel(station),
+            mm: Math.round(total * 10) / 10,
+          })),
+        );
 
         // 나머지 정시 프레임을 앞에서부터 순차 프리페치
         let cursor = 0;
@@ -1972,7 +2007,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     textShadow: '0 2px 6px rgba(0,0,0,0.35)',
                   }}
                 >
-                  {isAccumView ? `${accumDays}일 누적 강수량` : '레이더 영상'}
+                  {isAccumView ? '누적 강수량' : '레이더 영상'}
                 </span>
                 {(isAccumView ? currentAccumHour : currentFrame) ? (
                   <div
@@ -2005,6 +2040,41 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                 <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
               </div>
             </div>
+
+            {/* 누적 강수량: 기간 최다 강수 5개 지점 */}
+            {isAccumView && accumTop5.length > 0 ? (
+              <div
+                className="pointer-events-none absolute z-20"
+                style={{
+                  left: '4.4%',
+                  top: 'calc(14% + clamp(58px, 7.4vh, 96px) + 14px)',
+                  width: 'clamp(270px, 18vw, 400px)',
+                }}
+              >
+                <div className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm">
+                  <div className="divide-y divide-white/10">
+                    {accumTop5.map((row, index) => (
+                      <div
+                        key={row.id}
+                        className="flex items-center gap-2 px-4 py-[0.45vh]"
+                        style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
+                      >
+                        <span className="w-[1.2em] shrink-0 font-black text-[#f4c542]">
+                          {index + 1}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate font-semibold text-white">
+                          {row.label}
+                        </span>
+                        <span className="shrink-0 font-black tabular-nums text-white">
+                          {row.mm.toFixed(1)}
+                          <span className="ml-0.5 font-semibold text-white/70">mm</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {/* 좌측 세로 스케일: 레이더(mm/h) 또는 누적 강수량(mm) */}
             <div className="pointer-events-none absolute left-5 top-1/2 z-20 -translate-y-1/2 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm">

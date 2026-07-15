@@ -64,7 +64,8 @@ const fetchKmaLines = async (path, params) => {
     .filter((line) => line && !line.startsWith('#'));
 };
 
-// AWS 지점 좌표 (STN_ID, LON, LAT가 앞 세 컬럼)
+// AWS 지점 좌표·지점명·법정동 주소 (STN_ID, LON, LAT가 앞 세 컬럼,
+// STN_KO가 9번째, 주소 문자열이 14번째부터 — weatherApi와 동일한 배치)
 let stationCoordsPromise = null;
 export const fetchAwsStationCoords = () => {
   if (!stationCoordsPromise) {
@@ -84,7 +85,13 @@ export const fetchAwsStationCoords = () => {
           const lon = Number.parseFloat(fields[1]);
           const lat = Number.parseFloat(fields[2]);
           if (Number.isFinite(lon) && Number.isFinite(lat) && lon > 100 && lat > 20) {
-            stations.push({ id: fields[0], lon, lat });
+            stations.push({
+              id: fields[0],
+              lon,
+              lat,
+              name: fields[8] ?? fields[0],
+              address: fields.length > 13 ? fields.slice(13).join(' ') : '',
+            });
           }
         });
         if (stations.length < 100) {
@@ -98,6 +105,48 @@ export const fetchAwsStationCoords = () => {
       });
   }
   return stationCoordsPromise;
+};
+
+// '광역 시군(지점명)' 표기: 경기도 성남시 분당구 + 분당 → '경기 성남(분당)',
+// 서울특별시 도봉구 + 도봉 → '서울(도봉)'
+const SIDO_SHORT_LABELS = {
+  서울특별시: '서울',
+  부산광역시: '부산',
+  대구광역시: '대구',
+  인천광역시: '인천',
+  광주광역시: '광주',
+  대전광역시: '대전',
+  울산광역시: '울산',
+  세종특별자치시: '세종',
+  경기도: '경기',
+  강원도: '강원',
+  강원특별자치도: '강원',
+  충청북도: '충북',
+  충청남도: '충남',
+  전라북도: '전북',
+  전북특별자치도: '전북',
+  전라남도: '전남',
+  전남광주통합특별시: '전남',
+  경상북도: '경북',
+  경상남도: '경남',
+  제주특별자치도: '제주',
+  제주도: '제주',
+};
+
+export const formatStationLabel = (station) => {
+  const tokens = (station.address ?? '').split(/\s+/).filter(Boolean);
+  const sidoRaw = tokens[0] ?? '';
+  const sido = SIDO_SHORT_LABELS[sidoRaw] ?? sidoRaw.slice(0, 2);
+  const isMetro = /(특별시|광역시|특별자치시)$/.test(sidoRaw);
+  const sigunToken = tokens[1] ?? '';
+  const sigun = /(시|군)$/.test(sigunToken) ? sigunToken.replace(/(시|군)$/, '') : '';
+  if (!sido) {
+    return station.name;
+  }
+  if (isMetro || !sigun) {
+    return `${sido}(${station.name})`;
+  }
+  return `${sido} ${sigun}(${station.name})`;
 };
 
 // 특정 정시의 지점별 RN_DAY (그날 0시~해당 시각 누적, mm). -99 등 결측은 제외.
