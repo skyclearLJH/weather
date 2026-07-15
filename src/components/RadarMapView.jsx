@@ -18,7 +18,6 @@ import {
   probeLatestRadarTm,
   probeLatestQpfTm,
   parseRadarTm,
-  parseQpfTm,
 } from '../api/radarApi';
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
@@ -33,7 +32,6 @@ const FRAME_CACHE_LIMIT = 48;
 const INITIAL_OBS_PREFETCH_COUNT = 18;
 const INITIAL_QPF_PREFETCH_COUNT = 18;
 const NEARBY_PREFETCH_RADIUS = 3;
-const QPF_EF_MINUTES = Array.from({ length: 36 }, (_, index) => (index + 1) * 10);
 const PLAY_INTERVAL_MS = 450;
 
 const BROADCAST_ADMIN_SOURCES = {
@@ -811,26 +809,19 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           });
         }
 
-        const forecastFrames = [];
-        if (qpfLatest) {
-          const anchorTime = parseQpfTm(qpfLatest.tm);
-          QPF_EF_MINUTES.forEach((ef) => {
-            const validTime = new Date(anchorTime.getTime() + ef * 60 * 1000);
-            if (validTime > latestObsTime) {
-              forecastFrames.push({
-                key: `fct-${qpfLatest.tm}-${ef}`,
-                kind: 'fct',
-                tm: qpfLatest.tm,
-                ef,
-                validTime,
-              });
-            }
-          });
-        }
+        const forecastFrames = (qpfLatest?.frames ?? [])
+          .filter(({ validTime }) => validTime > latestObsTime)
+          .map(({ tm, ef, validTime }) => ({
+            key: `fct-${tm}-${ef}`,
+            kind: 'fct',
+            tm,
+            ef,
+            validTime,
+          }));
 
         rememberFrameBuckets(`obs-${radarLatest.tm}`, radarLatest.frame.buckets);
         if (qpfLatest) {
-          rememberFrameBuckets(`fct-${qpfLatest.tm}-10`, qpfLatest.frame.buckets);
+          rememberFrameBuckets(`fct-${qpfLatest.tm}-${qpfLatest.ef}`, qpfLatest.frame.buckets);
         }
 
         const timeline = [...observationFrames, ...forecastFrames];

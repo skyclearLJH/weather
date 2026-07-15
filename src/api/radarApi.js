@@ -140,6 +140,8 @@ export const QPF_IMAGE = {
 };
 
 const VAPI_IMAGE_BASE = 'https://vapi.kma.go.kr/BUFD/';
+const VAPI_TIMELINE_URL = 'https://vapi.kma.go.kr/capi/url/vs_10minutes_rain_timeline.php';
+const VAPI_FRAME_INFO_URL = 'https://vapi.kma.go.kr/capi/url/vs_qpf_web_img.php';
 
 // --- 시각 유틸 (KST 기준 문자열) ---
 const pad2 = (value) => String(value).padStart(2, '0');
@@ -248,6 +250,22 @@ export const fetchQpfFrame = async (tm, efMinutes) => {
   const efLabel = String(efMinutes).padStart(3, '0');
   const url = `${VAPI_IMAGE_BASE}qpf_ana_img_${tm}_m${efLabel}_1453.png`;
   const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (response.status === 404) {
+    const sourceTm = formatQpfTm(parseRadarTm(tm));
+    const infoUrl = `${VAPI_FRAME_INFO_URL}?option=0&size=1453&zoom_level=0&zoom_x=0000000&zoom_y=0000000&disp=X&h_yn=Y&tm=${sourceTm}&ef=${efMinutes}`;
+    const infoResponse = await fetch(infoUrl, { signal: AbortSignal.timeout(15000) });
+    if (infoResponse.ok) {
+      const info = await infoResponse.json();
+      if (String(info?.data?.result?.nodata) === 'true') {
+        return {
+          tm,
+          ef: efMinutes,
+          size: QPF_IMAGE.cropSize,
+          buckets: new Uint8Array(QPF_IMAGE.cropSize * QPF_IMAGE.cropSize),
+        };
+      }
+    }
+  }
   if (!response.ok) {
     throw new Error(`예측강수 자료 요청 실패 (${response.status})`);
   }
@@ -315,30 +333,43 @@ export const probeLatestRadarTm = async (now = new Date(), lookbackMinutes = 30,
   throw new Error('최근 레이더 자료를 찾지 못했습니다.');
 };
 
+export const fetchQpfTimeline = async (now = new Date()) => {
+  const url = `${VAPI_TIMELINE_URL}?tm=${formatQpfTm(now)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!response.ok) {
+    throw new Error(`예측강수 타임라인 요청 실패 (${response.status})`);
+  }
+
+  const payload = await response.json();
+  const timeline = (payload?.data?.times ?? [])
+    .filter(([, , ef, exists]) => Number(exists) === 1 && Number(ef) > 0)
+    .map(([date, time, ef]) => {
+      const sourceTime = parseQpfTm(`${date}${time}`);
+      const forecastMinutes = Number(ef);
+      return {
+        // 공식 페이지와 동일하게 UTC 기준시각을 KST 파일명으로 변환한다.
+        tm: formatRadarTm(sourceTime),
+        ef: forecastMinutes,
+        validTime: new Date(sourceTime.getTime() + forecastMinutes * 60 * 1000),
+      };
+    });
+
+  if (timeline.length === 0) {
+    throw new Error('최근 예측강수 타임라인을 찾지 못했습니다.');
+  }
+
+  return timeline;
+};
+
 export const probeLatestQpfTm = async (now = new Date()) => {
-  const base = floorToTenMinutes(now);
-  const maxSteps = 6;
+  const timeline = await fetchQpfTimeline(now);
 
-  for (let start = 0; start < maxSteps; start += PROBE_BATCH_SIZE) {
-    const steps = [];
-    for (let step = start; step < Math.min(start + PROBE_BATCH_SIZE, maxSteps); step++) {
-      steps.push(step);
-    }
-
-    const results = await Promise.all(
-      steps.map(async (step) => {
-        const tm = formatQpfTm(new Date(base.getTime() - step * 10 * 60 * 1000));
-        try {
-          return { tm, frame: await fetchQpfFrame(tm, 10) };
-        } catch {
-          return null;
-        }
-      }),
-    );
-
-    const success = results.find(Boolean);
-    if (success) {
-      return success;
+  for (const frameDef of timeline.slice(0, 3)) {
+    try {
+      const frame = await fetchQpfFrame(frameDef.tm, frameDef.ef);
+      return { ...frameDef, frame, frames: timeline };
+    } catch {
+      // 타임라인 갱신 직후 파일 배포가 늦을 수 있어 다음 유효 프레임을 확인한다.
     }
   }
   throw new Error('최근 예측강수 자료를 찾지 못했습니다.');
