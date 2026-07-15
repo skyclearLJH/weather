@@ -1261,8 +1261,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       if (!canvas || !idw || !stations || !hour) {
         return;
       }
-      const hourly = accumHourlyCacheRef.current.get(formatAccumHourTm(hour));
-      if (!hourly) {
+      // KMA 시간통계에서 0시(tm=…0000)의 RN_DAY는 '전날 하루 전체 누적'이므로
+      // 자정 프레임은 완결된 날들의 합계(base)만 쓴다. 기간 시작 0시는 전부 0.
+      const isMidnight = hour.getHours() === 0;
+      const hourly = isMidnight ? null : accumHourlyCacheRef.current.get(formatAccumHourTm(hour));
+      if (!isMidnight && !hourly) {
         return;
       }
 
@@ -1276,6 +1279,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
       const values = new Float32Array(stations.length).fill(-1);
       stations.forEach((station, index) => {
+        if (isMidnight) {
+          values[index] = base ? (base.get(station.id) ?? 0) : 0;
+          return;
+        }
         const hourValue = hourly.get(station.id);
         if (hourValue === undefined) {
           return;
@@ -1413,15 +1420,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         setAccumIndex(hours.length - 1);
         setAccumStatus('ready');
 
-        // 기간 전체(최신 시각 기준) 최다 강수 5개 지점
+        // 기간 전체(최신 시각 기준) 최다 강수 5개 지점.
+        // 최신 시각이 자정이면 RN_DAY가 전날 누적이므로 일합계 베이스만 쓴다.
         const latestBase = bases[accumDays - 1] ?? new Map();
+        const latestIsMidnight = latest.date.getHours() === 0;
         const ranked = [];
         accumStationsRef.current.forEach((station) => {
           const hourValue = latest.data.get(station.id);
-          if (hourValue === undefined) {
+          if (!latestIsMidnight && hourValue === undefined) {
             return;
           }
-          const total = hourValue + (latestBase.get(station.id) ?? 0);
+          const total = (latestIsMidnight ? 0 : hourValue) + (latestBase.get(station.id) ?? 0);
           if (total >= 0.1) {
             ranked.push({ station, total });
           }
@@ -1444,7 +1453,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           const hour = hours[cursor];
           cursor += 1;
           const tm = formatAccumHourTm(hour);
-          if (accumHourlyCacheRef.current.has(tm)) {
+          // 자정 프레임은 시간통계를 쓰지 않으므로 프리페치도 건너뛴다.
+          if (hour.getHours() === 0 || accumHourlyCacheRef.current.has(tm)) {
             window.setTimeout(pump, 0);
             return;
           }
@@ -1488,7 +1498,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     }
     const token = ++accumRenderTokenRef.current;
     const tm = formatAccumHourTm(hour);
-    if (accumHourlyCacheRef.current.has(tm)) {
+    // 자정 프레임은 시간통계가 필요 없다(완결 일합계만 사용).
+    if (hour.getHours() === 0 || accumHourlyCacheRef.current.has(tm)) {
       renderAccumFrame(accumIndex);
       return;
     }
