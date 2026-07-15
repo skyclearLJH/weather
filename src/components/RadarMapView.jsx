@@ -36,6 +36,10 @@ import {
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
 const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
+const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
+const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
+const ACCUM_EXTRUSION_STRIDE = 5;
+const ACCUM_3D_DEFAULT_PITCH = 48;
 
 const OBS_HISTORY_HOURS = 6;
 const OBS_FRAME_INTERVAL_MINUTES = 5;
@@ -280,6 +284,8 @@ const MAP_STYLE = {
 };
 
 const mercatorY = (latDeg) => Math.log(Math.tan(Math.PI / 4 + (latDeg * Math.PI) / 360));
+const inverseMercatorY = (value) =>
+  ((2 * Math.atan(Math.exp(value)) - Math.PI / 2) * 180) / Math.PI;
 const mercatorYToLat = (y) => ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI;
 
 // 캔버스 픽셀(웹 머카토르 균등 격자) → 레이더/QPF 데이터 인덱스 매핑을
@@ -505,12 +511,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [accumStatus, setAccumStatus] = useState('idle'); // idle | loading | ready | error
   const [accumError, setAccumError] = useState('');
   const [accumTop5, setAccumTop5] = useState([]);
+  const [accumDisplayMode, setAccumDisplayMode] = useState('flat'); // 'flat' | '3d'
   const accumHourlyCacheRef = useRef(new Map()); // 정시 tm → Map<지점, RN_DAY>
   const accumBasesRef = useRef([]); // 기간 내 일 인덱스별 지점 누적 베이스 Map
   const accumStationsRef = useRef(null);
   const accumIdwRef = useRef(null);
   const accumCanvasRef = useRef(null);
   const accumRenderTokenRef = useRef(0);
+  const accumWas3dRef = useRef(false);
+  const accumPreviousPitchRef = useRef(0);
   const isAccumView = isBroadcast && broadcastView === 'accum' && showAccumFeature;
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
   const navControlRef = useRef(null);
@@ -600,6 +609,27 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           source: 'radar-overlay',
           // linear 리샘플링: 확대 시 에코 경계가 계단식이 아니라 부드럽게 보간된다.
           paint: { 'raster-opacity': 1, 'raster-resampling': 'linear' },
+        },
+        'province-border',
+      );
+
+      map.addSource(ACCUM_EXTRUSION_SOURCE_ID, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer(
+        {
+          id: ACCUM_EXTRUSION_LAYER_ID,
+          type: 'fill-extrusion',
+          source: ACCUM_EXTRUSION_SOURCE_ID,
+          layout: { visibility: 'none' },
+          paint: {
+            'fill-extrusion-base': 0,
+            'fill-extrusion-height': ['get', 'height'],
+            'fill-extrusion-color': ['get', 'color'],
+            'fill-extrusion-opacity': 0.9,
+            'fill-extrusion-vertical-gradient': true,
+          },
         },
         'province-border',
       );
@@ -1292,17 +1322,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       });
 
       const { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW, nodeAlpha } = idw;
-      if (!accumCanvasRef.current) {
-        accumCanvasRef.current = document.createElement('canvas');
-        accumCanvasRef.current.width = latticeW;
-        accumCanvasRef.current.height = latticeH;
-      }
-      const latticeCanvas = accumCanvasRef.current;
-      const latticeContext = latticeCanvas.getContext('2d');
-      const image = latticeContext.createImageData(latticeW, latticeH);
-      const pixels = image.data;
-
-      for (let node = 0; node < latticeW * latticeH; node++) {
+      const interpolateNodeValue = (node) => {
         const baseIndex = node * NEIGHBORS;
         let weightSum = 0;
         let valueSum = 0;
@@ -1318,10 +1338,95 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           weightSum += neighborW[baseIndex + k];
           valueSum += neighborW[baseIndex + k] * value;
         }
-        if (weightSum <= 0) {
+        return weightSum > 0 ? valueSum / weightSum : -1;
+      };
+
+      const extrusionSource = mapRef.current?.getSource(ACCUM_EXTRUSION_SOURCE_ID);
+      if (accumDisplayMode === '3d') {
+        const features = [];
+        const yTop = mercatorY(VIEW_BOUNDS.latMax);
+        const yBottom = mercatorY(VIEW_BOUNDS.latMin);
+        const halfCell = ACCUM_EXTRUSION_STRIDE * 0.42;
+        const lonAt = (x) =>
+          VIEW_BOUNDS.lonMin +
+          (Math.min(latticeW, Math.max(0, x)) / latticeW) *
+            (VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin);
+        const latAt = (y) =>
+          inverseMercatorY(
+            yTop +
+              (Math.min(latticeH, Math.max(0, y)) / latticeH) * (yBottom - yTop),
+          );
+
+        for (
+          let ly = Math.floor(ACCUM_EXTRUSION_STRIDE / 2);
+          ly < latticeH;
+          ly += ACCUM_EXTRUSION_STRIDE
+        ) {
+          for (
+            let lx = Math.floor(ACCUM_EXTRUSION_STRIDE / 2);
+            lx < latticeW;
+            lx += ACCUM_EXTRUSION_STRIDE
+          ) {
+            const node = ly * latticeW + lx;
+            if (nodeAlpha[node] === 0) {
+              continue;
+            }
+            const value = interpolateNodeValue(node);
+            const bucket = accumBucket(value);
+            if (bucket <= 0) {
+              continue;
+            }
+            const [r, g, b] = ACCUM_PALETTE[bucket - 1].color;
+            const west = lonAt(lx - halfCell);
+            const east = lonAt(lx + halfCell);
+            const north = latAt(ly - halfCell);
+            const south = latAt(ly + halfCell);
+            features.push({
+              type: 'Feature',
+              properties: {
+                value: Math.round(value * 10) / 10,
+                height: Math.min(45000, Math.max(900, Math.pow(value, 0.62) * 1200)),
+                color: `rgb(${r}, ${g}, ${b})`,
+              },
+              geometry: {
+                type: 'Polygon',
+                coordinates: [
+                  [
+                    [west, north],
+                    [east, north],
+                    [east, south],
+                    [west, south],
+                    [west, north],
+                  ],
+                ],
+              },
+            });
+          }
+        }
+        extrusionSource?.setData({ type: 'FeatureCollection', features });
+        const context = canvas.getContext('2d');
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        refreshOverlaySource();
+        return;
+      }
+
+      extrusionSource?.setData({ type: 'FeatureCollection', features: [] });
+      if (!accumCanvasRef.current) {
+        accumCanvasRef.current = document.createElement('canvas');
+        accumCanvasRef.current.width = latticeW;
+        accumCanvasRef.current.height = latticeH;
+      }
+      const latticeCanvas = accumCanvasRef.current;
+      const latticeContext = latticeCanvas.getContext('2d');
+      const image = latticeContext.createImageData(latticeW, latticeH);
+      const pixels = image.data;
+
+      for (let node = 0; node < latticeW * latticeH; node++) {
+        const value = interpolateNodeValue(node);
+        if (value < 0) {
           continue;
         }
-        const bucket = accumBucket(valueSum / weightSum);
+        const bucket = accumBucket(value);
         if (bucket <= 0) {
           continue; // 무강수는 투명
         }
@@ -1346,7 +1451,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       context.drawImage(latticeCanvas, 0, 0, canvas.width, canvas.height);
       refreshOverlaySource();
     },
-    [accumHours, refreshOverlaySource],
+    [accumDisplayMode, accumHours, refreshOverlaySource],
   );
 
   // 누적 뷰 진입/일수 변경 시 시간축과 자료를 구성한다.
@@ -1529,6 +1634,39 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     refreshOverlaySource();
     setIsPlaying(false);
   }, [isAccumView, refreshOverlaySource]);
+
+  // 입체 누적 모드는 전용 기둥 레이어를 켜고 방송 화면에 맞는 각도로 자동 기울인다.
+  useEffect(() => {
+    const show3d = isAccumView && accumDisplayMode === '3d';
+    const applyMode = () => {
+      const map = mapRef.current;
+      if (!map) {
+        return;
+      }
+      if (map.getLayer(ACCUM_EXTRUSION_LAYER_ID)) {
+        map.setLayoutProperty(
+          ACCUM_EXTRUSION_LAYER_ID,
+          'visibility',
+          show3d ? 'visible' : 'none',
+        );
+      }
+      if (map.getLayer('radar-overlay')) {
+        map.setLayoutProperty('radar-overlay', 'visibility', show3d ? 'none' : 'visible');
+      }
+
+      if (show3d && !accumWas3dRef.current) {
+        accumPreviousPitchRef.current = map.getPitch();
+        map.easeTo({ pitch: ACCUM_3D_DEFAULT_PITCH, bearing: 0, duration: 800 });
+      } else if (!show3d && accumWas3dRef.current) {
+        map.easeTo({ pitch: accumPreviousPitchRef.current, bearing: 0, duration: 650 });
+      }
+      accumWas3dRef.current = show3d;
+    };
+
+    applyMode();
+    const timer = window.setTimeout(applyMode, 350);
+    return () => window.clearTimeout(timer);
+  }, [accumDisplayMode, isAccumView]);
 
   const currentAccumHour = accumHours[accumIndex] ?? null;
   const accumThumbPercent =
@@ -2258,21 +2396,53 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               ) : null}
               <div className="flex items-center gap-2">
                 {isAccumView ? (
-                  <select
-                    value={accumDays}
-                    onChange={(event) => {
-                      setIsPlaying(false);
-                      setAccumDays(Number(event.target.value));
-                    }}
-                    className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
-                    aria-label="누적 일수"
-                  >
-                    {[1, 2, 3, 4, 5].map((days) => (
-                      <option key={days} value={days} className="text-slate-900">
-                        {days}일
-                      </option>
-                    ))}
-                  </select>
+                  <>
+                    <select
+                      value={accumDays}
+                      onChange={(event) => {
+                        setIsPlaying(false);
+                        setAccumDays(Number(event.target.value));
+                      }}
+                      className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
+                      aria-label="누적 일수"
+                    >
+                      {[1, 2, 3, 4, 5].map((days) => (
+                        <option key={days} value={days} className="text-slate-900">
+                          {days}일
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex h-10 items-center rounded-full border border-white/25 bg-slate-900/65 p-1 shadow-lg backdrop-blur-sm">
+                      {[
+                        { id: 'flat', label: '평면' },
+                        { id: '3d', label: '입체' },
+                      ].map(({ id, label }) => {
+                        const isActive = accumDisplayMode === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => {
+                              if (!isActive) {
+                                setIsPlaying(false);
+                                setAccumDisplayMode(id);
+                              }
+                            }}
+                            className={`h-8 rounded-full px-3 text-xs font-black transition ${
+                              isActive
+                                ? id === '3d'
+                                  ? 'bg-amber-400 text-slate-950 shadow-sm'
+                                  : 'bg-white text-slate-900 shadow-sm'
+                                : 'text-white/65 hover:text-white'
+                            }`}
+                            aria-pressed={isActive}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
                 ) : null}
                 <select
                   value={playDurationSec}
