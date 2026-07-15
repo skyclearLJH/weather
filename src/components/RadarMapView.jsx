@@ -1156,10 +1156,42 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         buckets[cy * gridW + cx].push(index);
       });
 
+      // 육지 마스크: 시도 폴리곤 내부는 넓게 내삽·외삽해 빈틈없이 채우고,
+      // 바다(도서 관측점 주변)는 섬 규모(13km)의 점으로만 표출한다.
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = latticeW;
+      maskCanvas.height = latticeH;
+      const maskContext = maskCanvas.getContext('2d', { willReadFrequently: true });
+      maskContext.fillStyle = '#000';
+      const projectPoint = (lon, lat) => [
+        (((lon - VIEW_BOUNDS.lonMin) / (VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin)) * width) / STEP,
+        (((yTop - mercatorY(lat)) / (yTop - yBottom)) * height) / STEP,
+      ];
+      const fillRing = (ring) => {
+        ring.forEach(([lon, lat], index) => {
+          const [px, py] = projectPoint(lon, lat);
+          if (index === 0) {
+            maskContext.moveTo(px, py);
+          } else {
+            maskContext.lineTo(px, py);
+          }
+        });
+        maskContext.closePath();
+      };
+      krProvinces.features.forEach(({ geometry }) => {
+        maskContext.beginPath();
+        if (geometry.type === 'Polygon') {
+          geometry.coordinates.forEach(fillRing);
+        } else if (geometry.type === 'MultiPolygon') {
+          geometry.coordinates.forEach((polygon) => polygon.forEach(fillRing));
+        }
+        maskContext.fill('evenodd');
+      });
+      const maskData = maskContext.getImageData(0, 0, latticeW, latticeH).data;
+
       const NEIGHBORS = 6;
-      // 고립 지점(도서)의 표출 반경이 과대해지지 않도록 커버 반경을 울릉도
-      // 규모(~13km)로 제한하고, 가장자리는 페이드시켜 자연스럽게 마감한다.
-      const CUTOFF_PX = 13; // 캔버스 1px ≈ 1km
+      const CUTOFF_LAND_PX = 60; // 육지: 관측 공백을 보간으로 메움 (1px ≈ 1km)
+      const CUTOFF_SEA_PX = 13; // 바다: 섬 관측점 주변만
       const FADE_START_PX = 9;
       const neighborIdx = new Int16Array(latticeW * latticeH * NEIGHBORS).fill(-1);
       const neighborW = new Float32Array(latticeW * latticeH * NEIGHBORS);
@@ -1168,12 +1200,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       for (let ly = 0; ly < latticeH; ly++) {
         const py = ly * STEP + STEP / 2;
         for (let lx = 0; lx < latticeW; lx++) {
+          const node = ly * latticeW + lx;
+          const isLand = maskData[node * 4 + 3] > 0;
+          const cutoff = isLand ? CUTOFF_LAND_PX : CUTOFF_SEA_PX;
           const px = lx * STEP + STEP / 2;
           const candidates = [];
           const cx = Math.floor(px / CELL);
           const cy = Math.floor(py / CELL);
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
               const gx = cx + dx;
               const gy = cy + dy;
               if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) {
@@ -1181,7 +1216,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               }
               for (const index of buckets[gy * gridW + gx]) {
                 const d2 = (stationX[index] - px) ** 2 + (stationY[index] - py) ** 2;
-                if (d2 <= CUTOFF_PX * CUTOFF_PX) {
+                if (d2 <= cutoff * cutoff) {
                   candidates.push([d2, index]);
                 }
               }
@@ -1191,18 +1226,24 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             continue;
           }
           candidates.sort((left, right) => left[0] - right[0]);
-          const node = ly * latticeW + lx;
           const base = node * NEIGHBORS;
           for (let k = 0; k < Math.min(NEIGHBORS, candidates.length); k++) {
             neighborIdx[base + k] = candidates[k][1];
             neighborW[base + k] = 1 / (candidates[k][0] + 4);
           }
-          const nearest = Math.sqrt(candidates[0][0]);
-          const fade =
-            nearest <= FADE_START_PX
-              ? 1
-              : Math.max(0, 1 - (nearest - FADE_START_PX) / (CUTOFF_PX - FADE_START_PX));
-          nodeAlpha[node] = Math.round(OVERLAY_ALPHA * fade);
+          if (isLand) {
+            nodeAlpha[node] = OVERLAY_ALPHA;
+          } else {
+            const nearest = Math.sqrt(candidates[0][0]);
+            const fade =
+              nearest <= FADE_START_PX
+                ? 1
+                : Math.max(
+                    0,
+                    1 - (nearest - FADE_START_PX) / (CUTOFF_SEA_PX - FADE_START_PX),
+                  );
+            nodeAlpha[node] = Math.round(OVERLAY_ALPHA * fade);
+          }
         }
       }
 
