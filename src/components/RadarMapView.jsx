@@ -40,7 +40,7 @@ const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
 const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
 const ACCUM_EXTRUSION_STRIDE = 2;
 const ACCUM_3D_DEFAULT_PITCH = 55;
-const MAX_ACCUM_TIMELINE_FRAMES = 31;
+const MAX_ACCUM_API_FRAMES = 31;
 const SINGLE_PILLAR_ISLAND_NAMES = new Set([
   '백령',
   '백령도',
@@ -571,6 +571,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [accumTop5, setAccumTop5] = useState([]);
   const [accumDisplayMode, setAccumDisplayMode] = useState('flat'); // 'flat' | '3d'
   const accumHourlyCacheRef = useRef(new Map()); // 정시 tm → Map<지점, RN_DAY>
+  const accumHourlyPendingRef = useRef(new Map());
+  const accumAnchorHoursRef = useRef([]); // API-backed frames; displayed hours are interpolated.
   const accumBasesRef = useRef([]); // 기간 내 일 인덱스별 지점 누적 베이스 Map
   const accumStationsRef = useRef(null);
   const accumIdwRef = useRef(null);
@@ -580,6 +582,30 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const accumPreviousPitchRef = useRef(0);
   const isAccumView = isBroadcast && broadcastView === 'accum';
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
+
+  const loadAccumAnchor = useCallback((hour) => {
+    if (hour.getHours() === 0) {
+      return Promise.resolve(null);
+    }
+    const tm = formatAccumHourTm(hour);
+    if (accumHourlyCacheRef.current.has(tm)) {
+      return Promise.resolve(accumHourlyCacheRef.current.get(tm));
+    }
+    const pending = accumHourlyPendingRef.current.get(tm);
+    if (pending) {
+      return pending;
+    }
+    const request = fetchHourlyRnDay(hour)
+      .then((data) => {
+        accumHourlyCacheRef.current.set(tm, data);
+        return data;
+      })
+      .finally(() => {
+        accumHourlyPendingRef.current.delete(tm);
+      });
+    accumHourlyPendingRef.current.set(tm, request);
+    return request;
+  }, []);
   const navControlRef = useRef(null);
   const navControlAddedRef = useRef(false);
   // 주기적 자동 갱신(눈금·'현재'가 실제 시간을 따라가도록)
@@ -1090,8 +1116,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
   useEffect(() => {
-    playIntervalRef.current = isBroadcast ? playIntervalMs : PLAY_INTERVAL_MS;
-  }, [isBroadcast, playIntervalMs]);
+    playIntervalRef.current = isAccumView
+      ? Math.max(60, Math.round((playDurationSec * 1000) / Math.max(1, accumHours.length)))
+      : isBroadcast
+        ? playIntervalMs
+        : PLAY_INTERVAL_MS;
+  }, [accumHours.length, isAccumView, isBroadcast, playDurationSec, playIntervalMs]);
 
   // 방송모드는 선택 지점부터 목표 지점까지를 설정한 재생 길이에 맞춰 진행한다.
   useEffect(() => {
@@ -1390,31 +1420,60 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       }
       // KMA 시간통계에서 0시(tm=…0000)의 RN_DAY는 '전날 하루 전체 누적'이므로
       // 자정 프레임은 완결된 날들의 합계(base)만 쓴다. 기간 시작 0시는 전부 0.
-      const isMidnight = hour.getHours() === 0;
-      const hourly = isMidnight ? null : accumHourlyCacheRef.current.get(formatAccumHourTm(hour));
-      if (!isMidnight && !hourly) {
+      const anchorHours = accumAnchorHoursRef.current;
+      if (anchorHours.length === 0) {
         return;
       }
 
-      // 기간 시작일부터 해당 시각의 날 전까지의 일합계 베이스 + 그 시각 RN_DAY
       const periodStart = accumHours[0];
-      const dayIndex = Math.round(
-        (new Date(hour).setHours(0, 0, 0, 0) - new Date(periodStart).setHours(0, 0, 0, 0)) /
-          86400000,
-      );
-      const base = accumBasesRef.current[dayIndex] ?? null;
+      const targetMs = hour.getTime();
+      let previousAnchor = anchorHours[0];
+      let nextAnchor = anchorHours.at(-1);
+      for (const anchor of anchorHours) {
+        if (anchor.getTime() <= targetMs) {
+          previousAnchor = anchor;
+        }
+        if (anchor.getTime() >= targetMs) {
+          nextAnchor = anchor;
+          break;
+        }
+      }
+
+      const totalAtAnchor = (stationId, anchor) => {
+        const dayIndex = Math.round(
+          (new Date(anchor).setHours(0, 0, 0, 0) -
+            new Date(periodStart).setHours(0, 0, 0, 0)) /
+            86400000,
+        );
+        const base = accumBasesRef.current[dayIndex] ?? null;
+        if (anchor.getHours() === 0) {
+          return base ? (base.get(stationId) ?? 0) : 0;
+        }
+        const hourly = accumHourlyCacheRef.current.get(formatAccumHourTm(anchor));
+        const hourlyValue = hourly?.get(stationId);
+        return hourlyValue === undefined
+          ? undefined
+          : hourlyValue + (base ? (base.get(stationId) ?? 0) : 0);
+      };
+
+      const previousMs = previousAnchor.getTime();
+      const nextMs = nextAnchor.getTime();
+      const blend = nextMs === previousMs ? 0 : (targetMs - previousMs) / (nextMs - previousMs);
 
       const values = new Float32Array(stations.length).fill(-1);
       stations.forEach((station, index) => {
-        if (isMidnight) {
-          values[index] = base ? (base.get(station.id) ?? 0) : 0;
+        const previousValue = totalAtAnchor(station.id, previousAnchor);
+        const nextValue = totalAtAnchor(station.id, nextAnchor);
+        if (previousValue === undefined && nextValue === undefined) {
           return;
         }
-        const hourValue = hourly.get(station.id);
-        if (hourValue === undefined) {
-          return;
+        if (previousValue === undefined) {
+          values[index] = nextValue;
+        } else if (nextValue === undefined) {
+          values[index] = previousValue;
+        } else {
+          values[index] = previousValue + (nextValue - previousValue) * blend;
         }
-        values[index] = hourValue + (base ? (base.get(station.id) ?? 0) : 0);
       });
 
       const { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW, nodeAlpha } = idw;
@@ -1560,16 +1619,57 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
       latticeContext.putImageData(image, 0, 0);
 
+      const context = canvas.getContext('2d');
+      const fromCanvas = transitionFromCanvasRef.current;
+      const toCanvas = transitionToCanvasRef.current;
+      if (!fromCanvas || !toCanvas) {
+        return;
+      }
+      const toContext = toCanvas.getContext('2d');
+      toContext.clearRect(0, 0, toCanvas.width, toCanvas.height);
+      toContext.imageSmoothingEnabled = true;
+      toContext.imageSmoothingQuality = 'high';
+      toContext.drawImage(latticeCanvas, 0, 0, toCanvas.width, toCanvas.height);
+
       if (transitionAnimationRef.current !== null) {
         cancelAnimationFrame(transitionAnimationRef.current);
         transitionAnimationRef.current = null;
       }
-      const context = canvas.getContext('2d');
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = 'high';
-      context.drawImage(latticeCanvas, 0, 0, canvas.width, canvas.height);
-      refreshOverlaySource();
+      if (!isPlayingRef.current || !hasRenderedFrameRef.current) {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(toCanvas, 0, 0);
+        hasRenderedFrameRef.current = true;
+        refreshOverlaySource();
+        return;
+      }
+
+      const fromContext = fromCanvas.getContext('2d');
+      fromContext.clearRect(0, 0, fromCanvas.width, fromCanvas.height);
+      fromContext.drawImage(canvas, 0, 0);
+      const durationMs = Math.min(140, Math.max(45, playIntervalRef.current * 0.82));
+      const source = mapRef.current?.getSource('radar-overlay');
+      source?.play();
+      const startedAt = performance.now();
+      const dissolve = (timestamp) => {
+        const progress = Math.min(1, (timestamp - startedAt) / durationMs);
+        const eased = progress * progress * (3 - 2 * progress);
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.globalAlpha = 1 - eased;
+        context.drawImage(fromCanvas, 0, 0);
+        context.globalAlpha = eased;
+        context.drawImage(toCanvas, 0, 0);
+        context.globalAlpha = 1;
+        mapRef.current?.triggerRepaint();
+
+        if (progress < 1) {
+          transitionAnimationRef.current = requestAnimationFrame(dissolve);
+          return;
+        }
+        transitionAnimationRef.current = null;
+        source?.pause();
+        mapRef.current?.triggerRepaint();
+      };
+      transitionAnimationRef.current = requestAnimationFrame(dissolve);
     },
     [accumDisplayMode, accumHours, refreshOverlaySource],
   );
@@ -1639,18 +1739,27 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         accumBasesRef.current = bases;
 
         const hours = [];
-        const spanHours = Math.max(0, (latest.date.getTime() - start.getTime()) / 3600000);
-        const frameStepHours = Math.max(
-          1,
-          Math.ceil(spanHours / (MAX_ACCUM_TIMELINE_FRAMES - 1)),
-        );
-        const frameStepMs = frameStepHours * 3600000;
-        for (let t = start.getTime(); t <= latest.date.getTime(); t += frameStepMs) {
+        for (let t = start.getTime(); t <= latest.date.getTime(); t += 3600000) {
           hours.push(new Date(t));
         }
         if (hours.at(-1)?.getTime() !== latest.date.getTime()) {
           hours.push(new Date(latest.date));
         }
+
+        const spanHours = Math.max(0, (latest.date.getTime() - start.getTime()) / 3600000);
+        const frameStepHours = Math.max(
+          1,
+          Math.ceil(spanHours / (MAX_ACCUM_API_FRAMES - 1)),
+        );
+        const frameStepMs = frameStepHours * 3600000;
+        const anchorHours = [];
+        for (let t = start.getTime(); t <= latest.date.getTime(); t += frameStepMs) {
+          anchorHours.push(new Date(t));
+        }
+        if (anchorHours.at(-1)?.getTime() !== latest.date.getTime()) {
+          anchorHours.push(new Date(latest.date));
+        }
+        accumAnchorHoursRef.current = anchorHours;
         setAccumHours(hours);
         setAccumIndex(hours.length - 1);
         setAccumStatus('ready');
@@ -1679,13 +1788,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           })),
         );
 
-        // 나머지 정시 프레임을 앞에서부터 순차 프리페치
+        // API-backed anchor frames remain capped; displayed hours are interpolated.
         let cursor = 0;
         const pump = () => {
-          if (!isActive || cursor >= hours.length) {
+          if (!isActive || cursor >= anchorHours.length) {
             return;
           }
-          const hour = hours[cursor];
+          const hour = anchorHours[cursor];
           cursor += 1;
           const tm = formatAccumHourTm(hour);
           // 자정 프레임은 시간통계를 쓰지 않으므로 프리페치도 건너뛴다.
@@ -1693,12 +1802,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             window.setTimeout(pump, 0);
             return;
           }
-          fetchHourlyRnDay(hour)
-            .then((data) => {
-              if (isActive) {
-                accumHourlyCacheRef.current.set(tm, data);
-              }
-            })
+          loadAccumAnchor(hour)
             .catch(() => {})
             .finally(() => {
               if (isActive) {
@@ -1719,7 +1823,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return () => {
       isActive = false;
     };
-  }, [isAccumView, accumDays, buildAccumIdw]);
+  }, [isAccumView, accumDays, buildAccumIdw, loadAccumAnchor]);
 
   // 누적 뷰 현재 프레임 렌더링 (자료 미도착 시 도착 후 렌더)
   useEffect(() => {
@@ -1731,21 +1835,40 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       return;
     }
     const token = ++accumRenderTokenRef.current;
-    const tm = formatAccumHourTm(hour);
-    // 자정 프레임은 시간통계가 필요 없다(완결 일합계만 사용).
-    if (hour.getHours() === 0 || accumHourlyCacheRef.current.has(tm)) {
+    const anchors = accumAnchorHoursRef.current;
+    const targetMs = hour.getTime();
+    let previousAnchor = anchors[0];
+    let nextAnchor = anchors.at(-1);
+    for (const anchor of anchors) {
+      if (anchor.getTime() <= targetMs) {
+        previousAnchor = anchor;
+      }
+      if (anchor.getTime() >= targetMs) {
+        nextAnchor = anchor;
+        break;
+      }
+    }
+    const requiredAnchors = [previousAnchor, nextAnchor].filter(
+      (anchor, index, list) =>
+        anchor &&
+        anchor.getHours() !== 0 &&
+        list.findIndex((candidate) => candidate?.getTime() === anchor.getTime()) === index &&
+        !accumHourlyCacheRef.current.has(formatAccumHourTm(anchor)),
+    );
+    if (requiredAnchors.length === 0) {
       renderAccumFrame(accumIndex);
       return;
     }
-    fetchHourlyRnDay(hour)
-      .then((data) => {
-        accumHourlyCacheRef.current.set(tm, data);
+    Promise.all(
+      requiredAnchors.map((anchor) => loadAccumAnchor(anchor)),
+    )
+      .then(() => {
         if (accumRenderTokenRef.current === token) {
           renderAccumFrame(accumIndex);
         }
       })
       .catch(() => {});
-  }, [isAccumView, accumStatus, accumHours, accumIndex, renderAccumFrame]);
+  }, [isAccumView, accumStatus, accumHours, accumIndex, loadAccumAnchor, renderAccumFrame]);
 
   // 뷰 전환 시 오버레이를 비워 이전 그림이 남지 않게 한다.
   useEffect(() => {
@@ -1759,6 +1882,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     }
     const context = canvas.getContext('2d');
     context.clearRect(0, 0, canvas.width, canvas.height);
+    hasRenderedFrameRef.current = false;
     refreshOverlaySource();
     setIsPlaying(false);
   }, [isAccumView, refreshOverlaySource]);
