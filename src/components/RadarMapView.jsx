@@ -38,7 +38,7 @@ const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
 const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
 const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
-const ACCUM_EXTRUSION_STRIDE = 3;
+const ACCUM_EXTRUSION_STRIDE = 2;
 const ACCUM_3D_DEFAULT_PITCH = 55;
 const MAX_ACCUM_TIMELINE_FRAMES = 31;
 
@@ -1409,7 +1409,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               type: 'Feature',
               properties: {
                 value: Math.round(value * 10) / 10,
-                height: Math.min(130000, Math.max(1800, Math.pow(value, 0.68) * 2600)),
+                height: Math.min(260000, Math.max(3600, Math.pow(value, 0.68) * 5200)),
                 color: `rgb(${r}, ${g}, ${b})`,
               },
               geometry: {
