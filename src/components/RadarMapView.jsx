@@ -862,7 +862,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     }
 
     const promise = (frameDef.kind === 'obs'
-      ? fetchRadarFrame(frameDef.tm)
+      ? fetchRadarFrame(frameDef.tm, { broadcast: isBroadcast })
       : fetchQpfFrame(frameDef.tm, frameDef.ef)
     )
       .then((data) => {
@@ -874,7 +874,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       });
     pending.set(frameDef.key, promise);
     return promise;
-  }, [rememberFrameBuckets]);
+  }, [isBroadcast, rememberFrameBuckets]);
 
   // 초기 로딩 및 상단 새로고침(refreshToken 변경) 시 타임라인 재구성
   useEffect(() => {
@@ -899,8 +899,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
       try {
         const [radarLatest, qpfLatest] = await Promise.all([
-          probeLatestRadarTm(new Date(), OBS_HISTORY_HOURS * 60, ({ tm, frame }) =>
-            rememberFrameBuckets(`obs-${tm}`, frame.buckets),
+          probeLatestRadarTm(
+            new Date(),
+            OBS_HISTORY_HOURS * 60,
+            ({ tm, frame }) => rememberFrameBuckets(`obs-${tm}`, frame.buckets),
+            { broadcast: isBroadcast },
           ),
           probeLatestQpfTm().catch(() => null),
         ]);
@@ -1002,7 +1005,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return () => {
       isActive = false;
     };
-  }, [loadFrameData, rememberFrameBuckets, refreshToken, autoRefreshTick, manualRefreshTick]);
+  }, [
+    loadFrameData,
+    rememberFrameBuckets,
+    refreshToken,
+    autoRefreshTick,
+    manualRefreshTick,
+    isBroadcast,
+  ]);
 
   // 시간이 흐르면 '현재'와 눈금도 따라가야 하므로 주기적으로 최신 발표를 확인한다.
   // 모바일은 화면이 꺼지면 타이머가 멈추므로, 탭 복귀 시에도 즉시 확인한다.

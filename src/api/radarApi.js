@@ -4,6 +4,9 @@
 // 표준위선 30/60N, 원점 38N/126E) 투영이며, (126E,38N)이 격자 (1120,1680)에
 // 온다. nph-rdr_latlon_api 실측 격자 모서리와 5m 이내로 일치함을 확인했다.
 const KMA_PROXY_BASE = '/api/kma/';
+const KMA_BROADCAST_PROXY_BASE = '/api/kma-broadcast/';
+const getKmaProxyBase = (broadcast = false) =>
+  broadcast ? KMA_BROADCAST_PROXY_BASE : KMA_PROXY_BASE;
 
 // --- LCC 순방향 투영 (위경도 → km) ---
 const DEG = Math.PI / 180;
@@ -205,8 +208,8 @@ const gunzipToArrayBuffer = async (response) => {
 };
 
 // HSP 격자를 내려받아 1/2 축소(최댓값 유지) 버킷 배열로 변환한다.
-export const fetchRadarFrame = async (tm) => {
-  const url = `${KMA_PROXY_BASE}api/typ04/url/rdr_cmp_file.php?tm=${tm}&data=bin&cmp=hsp`;
+export const fetchRadarFrame = async (tm, options = {}) => {
+  const url = `${getKmaProxyBase(options.broadcast)}api/typ04/url/rdr_cmp_file.php?tm=${tm}&data=bin&cmp=hsp`;
   const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) {
     throw new Error(`레이더 자료 요청 실패 (${response.status})`);
@@ -302,7 +305,12 @@ export const fetchQpfFrame = async (tm, efMinutes) => {
 // 후보 시각을 몇 개씩 병렬로 시도하고 가장 최신 성공을 쓴다.
 const PROBE_BATCH_SIZE = 3;
 
-export const probeLatestRadarTm = async (now = new Date(), lookbackMinutes = 30, onExtraFrame) => {
+export const probeLatestRadarTm = async (
+  now = new Date(),
+  lookbackMinutes = 30,
+  onExtraFrame,
+  options = {},
+) => {
   const base = floorToFiveMinutes(now);
   const maxSteps = Math.floor(lookbackMinutes / 5) + 1;
 
@@ -316,7 +324,7 @@ export const probeLatestRadarTm = async (now = new Date(), lookbackMinutes = 30,
       steps.map(async (step) => {
         const tm = formatRadarTm(new Date(base.getTime() - step * 5 * 60 * 1000));
         try {
-          return { tm, frame: await fetchRadarFrame(tm) };
+          return { tm, frame: await fetchRadarFrame(tm, options) };
         } catch {
           return null;
         }

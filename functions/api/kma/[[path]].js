@@ -76,7 +76,12 @@ const getCacheTtl = (pathname, searchParams) => {
   return 60;
 };
 
+const isBroadcastProxyRequest = (context) =>
+  new URL(context.request.url).pathname.startsWith('/api/kma-broadcast/');
+
 const readAuthKey = (context) =>
+  (isBroadcastProxyRequest(context) &&
+    (context.env?.KMA_BROADCAST_AUTH_KEY || process.env.KMA_BROADCAST_AUTH_KEY)) ||
   context.env?.KMA_AUTH_KEY ||
   context.env?.VITE_KMA_AUTH_KEY ||
   process.env.KMA_AUTH_KEY ||

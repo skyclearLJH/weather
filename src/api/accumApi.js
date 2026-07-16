@@ -3,7 +3,7 @@
 // 데이터 구성: AWS 시간통계(awsh.php)의 RN_DAY(그날 0시~해당 정시 누적)와
 // 일자료(sfc_aws_day, rn_day)의 일합계를 조합한다. 기간 내 임의 정시 T의
 // 누적 = (T 이전 완결 일들의 일합계 합) + (T 시각의 RN_DAY).
-const KMA_PROXY_BASE = '/api/kma/';
+const KMA_PROXY_BASE = '/api/kma-broadcast/';
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 // 누적 강수 팔레트(시안): 낮은 값은 단계를 촘촘히, 높은 값은 성기게.
