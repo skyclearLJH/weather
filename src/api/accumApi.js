@@ -101,6 +101,7 @@ export const fetchAwsStationCoords = () => {
               id: fields[0],
               lon,
               lat,
+              stationType: fields[3] ?? '',
               name: fields[8] ?? fields[0],
               address: fields.length > 13 ? fields.slice(13).join(' ') : '',
             });

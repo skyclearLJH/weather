@@ -41,6 +41,46 @@ const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
 const ACCUM_EXTRUSION_STRIDE = 2;
 const ACCUM_3D_DEFAULT_PITCH = 55;
 const MAX_ACCUM_API_FRAMES = 31;
+const SINGLE_PILLAR_ISLAND_STATION_IDS = new Set([
+  '229', // 북격렬비도
+  '269', // 안마도
+  '300', // 말도
+  '301', // 임자도
+  '302', // 장산도
+  '304', // 신지도
+  '305', // 여서도
+  '306', // 소리도
+  '308', // 옥도
+  '502', // 교동
+  '578', // 호도
+  '609', // 삽시도
+  '610', // 홍성죽도
+  '656', // 볼음도
+  '665', // 무의도
+  '666', // 안도
+  '667', // 옹도
+  '707', // 지도
+  '714', // 자은도
+  '716', // 하의도
+  '719', // 선유도
+  '720', // 보길도
+  '743', // 비금
+  '747', // 청산도
+  '756', // 위도
+  '771', // 안좌
+  '789', // 압해도
+  '790', // 나로도
+  '956', // 가대암
+  '957', // 십이동파
+  '958', // 갈매여
+  '959', // 해수서
+  '960', // 지귀도
+  '961', // 간여암
+  '963', // 이덕서
+  '966', // 풍도
+  '967', // 도리도
+  '984', // 오륙도
+]);
 const SINGLE_PILLAR_ISLAND_NAMES = new Set([
   '백령',
   '백령도',
@@ -62,6 +102,24 @@ const SINGLE_PILLAR_ISLAND_NAMES = new Set([
   '서수도',
   '어청도',
   '외연도',
+  '북격렬비도',
+  '안마도',
+  '말도',
+  '임자도',
+  '장산도',
+  '신지도',
+  '여서도',
+  '소리도',
+  '옥도',
+  '교동',
+  '장봉도',
+  '호도',
+  '삽시도',
+  '홍성죽도',
+  '볼음도',
+  '무의도',
+  '안도',
+  '옹도',
   '흑산',
   '흑산도',
   '홍도',
@@ -71,6 +129,16 @@ const SINGLE_PILLAR_ISLAND_NAMES = new Set([
   '서거차도',
   '상조도',
   '하조도',
+  '선유도',
+  '보길도',
+  '청산도',
+  '위도',
+  '자은도',
+  '하의도',
+  '비금',
+  '안좌',
+  '압해도',
+  '나로도',
   '낙월도',
   '거문도',
   '초도',
@@ -80,10 +148,40 @@ const SINGLE_PILLAR_ISLAND_NAMES = new Set([
   '마라도',
   '가파도',
   '우도',
+  '가대암',
+  '십이동파',
+  '갈매여',
+  '해수서',
+  '지귀도',
+  '간여암',
+  '이덕서',
+  '풍도',
+  '도리도',
+  '오륙도',
   '울릉',
   '울릉도',
   '독도',
 ]);
+const SINGLE_PILLAR_ISLAND_ADDRESS_RULES = [
+  ['옹진군'],
+  ['울릉군'],
+  ['신안군'],
+  ['영광군', '낙월면'],
+  ['강화군', '서도면'],
+  ['군산시', '옥도면'],
+  ['보령시', '오천면'],
+  ['진도군', '조도면'],
+  ['여수시', '남면'],
+  ['여수시', '삼산면'],
+  ['완도군', '청산면'],
+  ['완도군', '보길면'],
+  ['부안군', '위도면'],
+  ['통영시', '한산면'],
+  ['통영시', '사량면'],
+  ['통영시', '욕지면'],
+  ['제주시', '추자면'],
+  ['제주시', '우도면'],
+];
 const ACCUM_EXTRUSION_COLOR_EXPRESSION = [
   'interpolate',
   ['linear'],
@@ -98,9 +196,12 @@ const isSinglePillarIslandStation = (station) => {
     .replace(/\s+/g, '');
   const address = String(station.address ?? '');
   return (
+    String(station.stationType ?? '').startsWith('7') ||
+    SINGLE_PILLAR_ISLAND_STATION_IDS.has(String(station.id ?? '')) ||
     SINGLE_PILLAR_ISLAND_NAMES.has(normalizedName) ||
-    address.includes('옹진군') ||
-    address.includes('울릉군')
+    SINGLE_PILLAR_ISLAND_ADDRESS_RULES.some((tokens) =>
+      tokens.every((token) => address.includes(token)),
+    )
   );
 };
 
