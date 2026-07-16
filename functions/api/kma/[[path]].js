@@ -4,9 +4,39 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': '*',
 };
 
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const RECENT_OBSERVATION_AGE_MS = 15 * 60 * 1000;
+const HISTORICAL_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+const parseKstTimestamp = (value) => {
+  if (!/^\d{12}$/.test(value ?? '')) {
+    return null;
+  }
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(4, 6)) - 1;
+  const day = Number(value.slice(6, 8));
+  const hour = Number(value.slice(8, 10));
+  const minute = Number(value.slice(10, 12));
+  return Date.UTC(year, month, day, hour, minute) - KST_OFFSET_MS;
+};
+
+const isHistoricalTimestamp = (value) => {
+  const timestamp = parseKstTimestamp(value);
+  return timestamp !== null && Date.now() - timestamp >= RECENT_OBSERVATION_AGE_MS;
+};
+
+const getKstDay = () => new Date(Date.now() + KST_OFFSET_MS).toISOString().slice(0, 10).replaceAll('-', '');
+
 const getCacheTtl = (pathname, searchParams) => {
   if (pathname.includes('/nph-aws2_min')) {
+    if (!searchParams.has('tm1') && isHistoricalTimestamp(searchParams.get('tm2'))) {
+      return HISTORICAL_CACHE_TTL_SECONDS;
+    }
     return 60;
+  }
+
+  if (pathname.includes('/awsh.php')) {
+    return isHistoricalTimestamp(searchParams.get('tm')) ? HISTORICAL_CACHE_TTL_SECONDS : 60;
   }
 
   if (pathname.includes('/wrn_now_data.php') || pathname.includes('/kma_snow1.php')) {
@@ -28,7 +58,10 @@ const getCacheTtl = (pathname, searchParams) => {
   }
 
   if (pathname.includes('/sfc_aws_day.php')) {
-    return 300;
+    const requestedDay = searchParams.get('tm2');
+    return /^\d{8}$/.test(requestedDay ?? '') && requestedDay < getKstDay()
+      ? HISTORICAL_CACHE_TTL_SECONDS
+      : 300;
   }
 
   if (pathname.includes('/wthr_cmt_rpt.php') || pathname.includes('/fct_afs_ds.php')) {
@@ -101,7 +134,7 @@ export async function onRequestOptions() {
 // 실제 파일이 나온 뒤에도 한동안 '없음'으로 고정되므로(타임라인 멈춤 현상),
 // 본문이 진짜 자료(gzip/PNG)일 때만 엣지 캐시에 저장한다.
 const VALIDATED_CACHE_PATHS = ['/rdr_cmp_file.php', '/nph-qpf_ana_img', '/awsh.php'];
-const VALIDATED_CACHE_TTL_SECONDS = 3600; // 발표시각별 자료는 불변
+const RADAR_CACHE_TTL_SECONDS = 3600;
 
 const isValidRadarPayload = (bytes) => {
   if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
@@ -132,7 +165,7 @@ const isValidRadarPayload = (bytes) => {
   return false;
 };
 
-const handleValidatedRadarRequest = async (context, targetUrl, forceRefresh) => {
+const handleValidatedRadarRequest = async (context, targetUrl, forceRefresh, cacheTtl) => {
   const cacheKeyUrl = new URL(targetUrl);
   cacheKeyUrl.searchParams.delete('authKey');
   const cacheKey = new Request(cacheKeyUrl.toString(), { method: 'GET' });
@@ -156,7 +189,7 @@ const handleValidatedRadarRequest = async (context, targetUrl, forceRefresh) => 
   );
   headers.set(
     'Cache-Control',
-    valid ? `public, max-age=30, s-maxage=${VALIDATED_CACHE_TTL_SECONDS}` : 'no-store',
+    valid ? `public, max-age=30, s-maxage=${cacheTtl}` : 'no-store',
   );
 
   if (valid && edgeCache) {
@@ -203,7 +236,15 @@ export async function onRequest(context) {
       request.method === 'GET' &&
       VALIDATED_CACHE_PATHS.some((path) => targetUrl.pathname.includes(path))
     ) {
-      return await handleValidatedRadarRequest(context, targetUrl, forceRefresh);
+      const validatedCacheTtl = targetUrl.pathname.includes('/awsh.php')
+        ? cacheTtl
+        : RADAR_CACHE_TTL_SECONDS;
+      return await handleValidatedRadarRequest(
+        context,
+        targetUrl,
+        forceRefresh,
+        validatedCacheTtl,
+      );
     }
 
     let response = await fetchKma(context, targetUrl, cacheTtl, forceRefresh);

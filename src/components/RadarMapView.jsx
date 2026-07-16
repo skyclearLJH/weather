@@ -40,6 +40,7 @@ const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
 const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
 const ACCUM_EXTRUSION_STRIDE = 5;
 const ACCUM_3D_DEFAULT_PITCH = 48;
+const MAX_ACCUM_TIMELINE_FRAMES = 31;
 
 const OBS_HISTORY_HOURS = 6;
 const OBS_FRAME_INTERVAL_MINUTES = 5;
@@ -1514,8 +1515,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         accumBasesRef.current = bases;
 
         const hours = [];
-        for (let t = start.getTime(); t <= latest.date.getTime(); t += 3600000) {
+        const spanHours = Math.max(0, (latest.date.getTime() - start.getTime()) / 3600000);
+        const frameStepHours = Math.max(
+          1,
+          Math.ceil(spanHours / (MAX_ACCUM_TIMELINE_FRAMES - 1)),
+        );
+        const frameStepMs = frameStepHours * 3600000;
+        for (let t = start.getTime(); t <= latest.date.getTime(); t += frameStepMs) {
           hours.push(new Date(t));
+        }
+        if (hours.at(-1)?.getTime() !== latest.date.getTime()) {
+          hours.push(new Date(latest.date));
         }
         setAccumHours(hours);
         setAccumIndex(hours.length - 1);
@@ -1572,7 +1582,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               }
             });
         };
-        pump();
         pump();
         pump();
       } catch (error) {
