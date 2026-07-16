@@ -2353,14 +2353,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             {/* 누적 강수량: 기간 최다 강수 5개 지점 */}
             {isAccumView && accumTop5.length > 0 ? (
               <div
-                className="pointer-events-none absolute z-20"
+                className="pointer-events-none absolute z-20 flex justify-center"
                 style={{
                   left: '4.4%',
-                  top: 'calc(14% + clamp(58px, 7.4vh, 96px) + 14px)',
-                  width: 'clamp(320px, 22vw, 500px)',
+                  top: 'calc(50% - max(23vh, 140px) - 18.5px)',
+                  width: 'clamp(430px, 29vw, 700px)',
                 }}
               >
-                <div className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm">
+                <div
+                  className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm"
+                  style={{ width: 'clamp(320px, 22vw, 500px)' }}
+                >
                   <div className="divide-y divide-white/10">
                     {accumTop5.map((row, index) => (
                       <div
@@ -2386,7 +2389,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             ) : null}
 
             {/* 좌측 세로 스케일: 레이더(mm/h) 또는 누적 강수량(mm) */}
-            <div className="pointer-events-none absolute left-5 top-1/2 z-20 -translate-y-1/2 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm">
+            <div
+              className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
+              style={{ top: 'calc(50% - max(23vh, 140px) - 18.5px)' }}
+            >
               {isAccumView ? (
                 <>
                   <div className="flex h-[46vh] min-h-[280px]">
