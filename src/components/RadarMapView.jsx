@@ -41,6 +41,68 @@ const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
 const ACCUM_EXTRUSION_STRIDE = 2;
 const ACCUM_3D_DEFAULT_PITCH = 55;
 const MAX_ACCUM_TIMELINE_FRAMES = 31;
+const SINGLE_PILLAR_ISLAND_NAMES = new Set([
+  '백령',
+  '백령도',
+  '대청',
+  '대청도',
+  '소청',
+  '소청도',
+  '연평',
+  '연평도',
+  '대연평',
+  '덕적',
+  '덕적도',
+  '덕적북리',
+  '덕적지도',
+  '자월',
+  '자월도',
+  '승봉도',
+  '목덕도',
+  '서수도',
+  '어청도',
+  '외연도',
+  '흑산',
+  '흑산도',
+  '홍도',
+  '가거도',
+  '하태도',
+  '상태도',
+  '서거차도',
+  '상조도',
+  '하조도',
+  '낙월도',
+  '거문도',
+  '초도',
+  '욕지도',
+  '매물도',
+  '추자도',
+  '마라도',
+  '가파도',
+  '우도',
+  '울릉',
+  '울릉도',
+  '독도',
+]);
+const ACCUM_EXTRUSION_COLOR_EXPRESSION = [
+  'interpolate',
+  ['linear'],
+  ['get', 'value'],
+  ...ACCUM_PALETTE.flatMap(({ min, color }) => [min, `rgb(${color.join(', ')})`]),
+];
+
+const isSinglePillarIslandStation = (station) => {
+  const normalizedName = String(station.name ?? '')
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\*/g, '')
+    .replace(/\s+/g, '');
+  const address = String(station.address ?? '');
+  return (
+    SINGLE_PILLAR_ISLAND_NAMES.has(normalizedName) ||
+    address.includes('옹진군') ||
+    address.includes('울릉군')
+  );
+};
 
 const OBS_HISTORY_HOURS = 6;
 const OBS_FRAME_INTERVAL_MINUTES = 5;
@@ -622,8 +684,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           paint: {
             'fill-extrusion-base': 0,
             'fill-extrusion-height': ['get', 'height'],
-            'fill-extrusion-color': ['get', 'color'],
-            'fill-extrusion-opacity': 0.9,
+            'fill-extrusion-color': ACCUM_EXTRUSION_COLOR_EXPRESSION,
+            'fill-extrusion-opacity': 1,
             'fill-extrusion-vertical-gradient': true,
           },
         },
@@ -1370,7 +1432,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         const features = [];
         const yTop = mercatorY(VIEW_BOUNDS.latMax);
         const yBottom = mercatorY(VIEW_BOUNDS.latMin);
-        const halfCell = ACCUM_EXTRUSION_STRIDE * 0.48;
+        const halfCell = ACCUM_EXTRUSION_STRIDE * 0.505;
         const lonAt = (x) =>
           VIEW_BOUNDS.lonMin +
           (Math.min(latticeW, Math.max(0, x)) / latticeW) *
@@ -1380,6 +1442,55 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             yTop +
               (Math.min(latticeH, Math.max(0, y)) / latticeH) * (yBottom - yTop),
           );
+        const islandStations = stations.flatMap((station, index) => {
+          if (!isSinglePillarIslandStation(station)) {
+            return [];
+          }
+          return [
+            {
+              index,
+              x:
+                ((station.lon - VIEW_BOUNDS.lonMin) /
+                  (VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin)) *
+                latticeW,
+              y: ((yTop - mercatorY(station.lat)) / (yTop - yBottom)) * latticeH,
+            },
+          ];
+        });
+        const islandSuppressionRadius = 9;
+        const isNearSinglePillarIsland = (x, y) =>
+          islandStations.some(
+            (station) =>
+              (station.x - x) ** 2 + (station.y - y) ** 2 <= islandSuppressionRadius ** 2,
+          );
+        const pushExtrusion = (value, x, y, cellHalfSize = halfCell) => {
+          if (accumBucket(value) <= 0) {
+            return;
+          }
+          const west = lonAt(x - cellHalfSize);
+          const east = lonAt(x + cellHalfSize);
+          const north = latAt(y - cellHalfSize);
+          const south = latAt(y + cellHalfSize);
+          features.push({
+            type: 'Feature',
+            properties: {
+              value: Math.round(value * 10) / 10,
+              height: Math.min(130000, Math.max(1800, Math.pow(value, 0.68) * 2600)),
+            },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [
+                [
+                  [west, north],
+                  [east, north],
+                  [east, south],
+                  [west, south],
+                  [west, north],
+                ],
+              ],
+            },
+          });
+        };
 
         for (
           let ly = Math.floor(ACCUM_EXTRUSION_STRIDE / 2);
@@ -1392,41 +1503,16 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             lx += ACCUM_EXTRUSION_STRIDE
           ) {
             const node = ly * latticeW + lx;
-            if (nodeAlpha[node] === 0) {
+            if (nodeAlpha[node] === 0 || isNearSinglePillarIsland(lx, ly)) {
               continue;
             }
             const value = interpolateNodeValue(node);
-            const bucket = accumBucket(value);
-            if (bucket <= 0) {
-              continue;
-            }
-            const [r, g, b] = ACCUM_PALETTE[bucket - 1].color;
-            const west = lonAt(lx - halfCell);
-            const east = lonAt(lx + halfCell);
-            const north = latAt(ly - halfCell);
-            const south = latAt(ly + halfCell);
-            features.push({
-              type: 'Feature',
-              properties: {
-                value: Math.round(value * 10) / 10,
-                height: Math.min(130000, Math.max(1800, Math.pow(value, 0.68) * 2600)),
-                color: `rgb(${r}, ${g}, ${b})`,
-              },
-              geometry: {
-                type: 'Polygon',
-                coordinates: [
-                  [
-                    [west, north],
-                    [east, north],
-                    [east, south],
-                    [west, south],
-                    [west, north],
-                  ],
-                ],
-              },
-            });
+            pushExtrusion(value, lx, ly);
           }
         }
+        islandStations.forEach(({ index, x, y }) => {
+          pushExtrusion(values[index], x, y, halfCell * 1.35);
+        });
         extrusionSource?.setData({ type: 'FeatureCollection', features });
         const context = canvas.getContext('2d');
         context.clearRect(0, 0, canvas.width, canvas.height);
