@@ -7,6 +7,7 @@ const corsHeaders = {
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const RECENT_OBSERVATION_AGE_MS = 15 * 60 * 1000;
 const HISTORICAL_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const PROXY_CACHE_VERSION = '20260716-1';
 
 const parseKstTimestamp = (value) => {
   if (!/^\d{12}$/.test(value ?? '')) {
@@ -104,6 +105,13 @@ const makeKmaRequest = (context, targetUrl) => {
   });
 };
 
+const makeKmaCacheKey = (targetUrl) => {
+  const cacheKeyUrl = new URL(targetUrl);
+  cacheKeyUrl.searchParams.delete('authKey');
+  cacheKeyUrl.searchParams.set('_proxy_cache', PROXY_CACHE_VERSION);
+  return cacheKeyUrl.toString();
+};
+
 const fetchKma = (context, targetUrl, cacheTtl, forceRefresh = false) => {
   const request = makeKmaRequest(context, targetUrl);
   const method = context.request.method;
@@ -113,10 +121,14 @@ const fetchKma = (context, targetUrl, cacheTtl, forceRefresh = false) => {
         ...(forceRefresh
           ? { cache: 'no-store' }
           : {
-              cf: {
-                cacheEverything: true,
-                cacheTtl,
+            cf: {
+              cacheEverything: true,
+              cacheKey: makeKmaCacheKey(targetUrl),
+              cacheTtlByStatus: {
+                '200-299': cacheTtl,
+                '300-599': 0,
               },
+            },
             }),
       }
     : undefined);
@@ -261,7 +273,10 @@ export async function onRequest(context) {
     });
 
     if (request.method === 'GET' || request.method === 'HEAD') {
-      nextHeaders.set('Cache-Control', forceRefresh ? 'no-store' : `public, max-age=30, s-maxage=${cacheTtl}`);
+      nextHeaders.set(
+        'Cache-Control',
+        forceRefresh || !response.ok ? 'no-store' : `public, max-age=30, s-maxage=${cacheTtl}`,
+      );
     }
 
     return new Response(response.body, {
