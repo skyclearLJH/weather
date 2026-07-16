@@ -38,8 +38,8 @@ const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
 const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
 const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
-const ACCUM_EXTRUSION_STRIDE = 5;
-const ACCUM_3D_DEFAULT_PITCH = 48;
+const ACCUM_EXTRUSION_STRIDE = 3;
+const ACCUM_3D_DEFAULT_PITCH = 55;
 const MAX_ACCUM_TIMELINE_FRAMES = 31;
 
 const OBS_HISTORY_HOURS = 6;
@@ -1216,8 +1216,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       });
       const maskData = maskContext.getImageData(0, 0, latticeW, latticeH).data;
 
-      const NEIGHBORS = 6;
-      const CUTOFF_LAND_PX = 60; // 육지: 관측 공백을 보간으로 메움 (1px ≈ 1km)
+      const NEIGHBORS = 10;
+      const CUTOFF_LAND_PX = 100; // 육지는 넓게 보간해 결측 관측소 주변의 빈 영역을 최소화한다.
       const CUTOFF_SEA_PX = 13; // 바다: 섬 관측점 주변만
       const FADE_START_PX = 9;
       const neighborIdx = new Int16Array(latticeW * latticeH * NEIGHBORS).fill(-1);
@@ -1234,8 +1234,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           const candidates = [];
           const cx = Math.floor(px / CELL);
           const cy = Math.floor(py / CELL);
-          for (let dy = -2; dy <= 2; dy++) {
-            for (let dx = -2; dx <= 2; dx++) {
+          const bucketRadius = Math.ceil(cutoff / CELL);
+          for (let dy = -bucketRadius; dy <= bucketRadius; dy++) {
+            for (let dx = -bucketRadius; dx <= bucketRadius; dx++) {
               const gx = cx + dx;
               const gy = cy + dy;
               if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) {
@@ -1245,6 +1246,33 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                 const d2 = (stationX[index] - px) ** 2 + (stationY[index] - py) ** 2;
                 if (d2 <= cutoff * cutoff) {
                   candidates.push([d2, index]);
+                }
+              }
+            }
+          }
+          // 드문 육지 공백은 더 먼 관측소까지 단계적으로 찾아 외삽한다.
+          if (isLand && candidates.length === 0) {
+            for (let radius = bucketRadius + 1; radius <= 7 && candidates.length === 0; radius++) {
+              for (let dx = -radius; dx <= radius; dx++) {
+                for (const dy of [-radius, radius]) {
+                  const gx = cx + dx;
+                  const gy = cy + dy;
+                  if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) continue;
+                  for (const index of buckets[gy * gridW + gx]) {
+                    const d2 = (stationX[index] - px) ** 2 + (stationY[index] - py) ** 2;
+                    candidates.push([d2, index]);
+                  }
+                }
+              }
+              for (let dy = -radius + 1; dy < radius; dy++) {
+                for (const dx of [-radius, radius]) {
+                  const gx = cx + dx;
+                  const gy = cy + dy;
+                  if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) continue;
+                  for (const index of buckets[gy * gridW + gx]) {
+                    const d2 = (stationX[index] - px) ** 2 + (stationY[index] - py) ** 2;
+                    candidates.push([d2, index]);
+                  }
                 }
               }
             }
@@ -1342,7 +1370,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         const features = [];
         const yTop = mercatorY(VIEW_BOUNDS.latMax);
         const yBottom = mercatorY(VIEW_BOUNDS.latMin);
-        const halfCell = ACCUM_EXTRUSION_STRIDE * 0.42;
+        const halfCell = ACCUM_EXTRUSION_STRIDE * 0.48;
         const lonAt = (x) =>
           VIEW_BOUNDS.lonMin +
           (Math.min(latticeW, Math.max(0, x)) / latticeW) *
@@ -1381,7 +1409,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               type: 'Feature',
               properties: {
                 value: Math.round(value * 10) / 10,
-                height: Math.min(45000, Math.max(900, Math.pow(value, 0.62) * 1200)),
+                height: Math.min(130000, Math.max(1800, Math.pow(value, 0.68) * 2600)),
                 color: `rgb(${r}, ${g}, ${b})`,
               },
               geometry: {
