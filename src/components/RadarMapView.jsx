@@ -1156,7 +1156,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   // 관측소 점 자료를 IDW(역거리가중)로 색면 보간해 오버레이 캔버스에 그린다.
   const buildAccumIdw = useCallback(
     (stations) => {
-      const STEP = 3;
+      const STEP = 2;
       const width = CANVAS_WIDTH;
       const height = canvasHeight;
       const latticeW = Math.ceil(width / STEP);
@@ -1409,7 +1409,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               type: 'Feature',
               properties: {
                 value: Math.round(value * 10) / 10,
-                height: Math.min(260000, Math.max(3600, Math.pow(value, 0.68) * 5200)),
+                height: Math.min(130000, Math.max(1800, Math.pow(value, 0.68) * 2600)),
                 color: `rgb(${r}, ${g}, ${b})`,
               },
               geometry: {
