@@ -4,6 +4,7 @@
 // 일자료(sfc_aws_day, rn_day)의 일합계를 조합한다. 기간 내 임의 정시 T의
 // 누적 = (T 이전 완결 일들의 일합계 합) + (T 시각의 RN_DAY).
 const KMA_PROXY_BASE = '/api/kma/';
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 // 누적 강수 팔레트(시안): 낮은 값은 단계를 촘촘히, 높은 값은 성기게.
 // 주요 경계 10/30/100/200/300/500/700에서 색 계열이 바뀐다. (단위 mm)
@@ -48,6 +49,10 @@ export const formatAccumHourTm = (date) =>
   `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}${pad2(date.getHours())}00`;
 const formatDay = (date) =>
   `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
+const formatCurrentKstDay = () => {
+  const date = new Date(Date.now() + KST_OFFSET_MS);
+  return `${date.getUTCFullYear()}${pad2(date.getUTCMonth() + 1)}${pad2(date.getUTCDate())}`;
+};
 
 const fetchKmaLines = async (path, params) => {
   const url = new URL(`${KMA_PROXY_BASE}${path}`, window.location.origin);
@@ -79,7 +84,7 @@ export const fetchAwsStationCoords = () => {
     stationCoordsPromise = fetchKmaLines('api/typ01/url/stn_inf.php', {
       inf: 'AWS',
       stn: '',
-      tm: '',
+      tm: `${formatCurrentKstDay()}0000`,
       help: 1,
     })
       .then((lines) => {
