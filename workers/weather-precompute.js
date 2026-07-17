@@ -18,8 +18,12 @@ const makeContext = (env, request = new Request('https://weathernow.local/cron')
 
 const refreshRankings = async (context) => {
   const results = [];
+  const orderedKinds = [
+    'precipitation-max-one-hour',
+    ...RANKING_KINDS.filter((kind) => kind !== 'precipitation-max-one-hour'),
+  ];
 
-  for (const kind of RANKING_KINDS) {
+  for (const kind of orderedKinds) {
     // 최대 60분 강수량은 기간별 캐시 키(period:...)로 조회되므로
     // 오늘/어제를 각각 계산해 같은 키에 저장해야 프런트가 읽는다.
     const variants =

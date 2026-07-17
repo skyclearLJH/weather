@@ -22,9 +22,11 @@ const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const PRECIPITATION_MAX_ONE_HOUR_AGGREGATE_TTL_SECONDS = 3 * 24 * 60 * 60;
 const ASOS_DAILY_RN_60M_MAX_INDEX = 41;
 const ASOS_DAILY_RN_60M_MAX_TM_INDEX = 42;
-const PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT = 20;
+const PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT = 42;
+const PRECIPITATION_MAX_ONE_HOUR_PRIORITY_FETCH_LIMIT = 30;
+const PRECIPITATION_MAX_ONE_HOUR_CLOSED_RECHECK_MS = 30 * 60 * 1000;
 const AWS_MINUTE_RANGE_REQUEST_TIMEOUT_MS = 12000;
-const RANKING_CACHE_VERSION = 'v7';
+const RANKING_CACHE_VERSION = 'v8';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
 const TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES = 5;
 const TROPICAL_NIGHT_CACHE_MAX_AGE_MS = 60 * 1000;
@@ -268,7 +270,6 @@ const formatKmaMinuteTime = (date) => {
 
 const formatKmaDay = (date) => formatKmaMinuteTime(date).slice(0, 8);
 const formatStationInfoTime = (date) => `${formatKmaMinuteTime(date).slice(0, 10)}00`;
-const addMinutes = (date, minutes) => new Date(date.getTime() + minutes * 60 * 1000);
 const subtractMinutes = (date, minutes) => new Date(date.getTime() - minutes * 60 * 1000);
 const subtractDays = (date, days) => new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -398,6 +399,7 @@ const createPrecipitationMaxOneHourAggregate = (day, previous) => ({
   stations: { ...(previous?.stations ?? {}) },
   sampledTimes: Array.isArray(previous?.sampledTimes) ? [...previous.sampledTimes] : [],
   exactUpTo: { ...(previous?.exactUpTo ?? {}) },
+  exactCheckedAt: { ...(previous?.exactCheckedAt ?? {}) },
 });
 
 const mergePrecipitationMaxOneHourRows = (aggregate, observedAt, rows = []) => {
@@ -765,7 +767,7 @@ const parseAwsStationMinuteSeries = (rawText) =>
 
 // 후보 풀은 현재 스냅샷의 일 강수량 지점과 기존 집계에 잡힌 지점의 합집합이라,
 // 중간에 결측된 지점도 과거 구간의 정밀 계산 대상에서 빠지지 않는다.
-const buildExactFetchCandidates = (aggregate, dayTotals, windowEnd) => {
+const buildExactFetchCandidates = (aggregate, dayTotals, windowEnd, isClosedWindow) => {
   const potentials = new Map();
   dayTotals.forEach(({ stationId, total }) => {
     if (Number.isFinite(total) && total > 0) {
@@ -779,36 +781,55 @@ const buildExactFetchCandidates = (aggregate, dayTotals, windowEnd) => {
     }
   });
 
-  return [...potentials.entries()]
+  const candidates = [...potentials.entries()]
     .map(([stationId, potential]) => ({
       stationId,
       potential,
       exactUpTo: aggregate.exactUpTo?.[stationId] ?? '',
+      exactCheckedAt: aggregate.exactCheckedAt?.[stationId] ?? '',
     }))
-    .filter(({ stationId, potential, exactUpTo }) => {
-      if (exactUpTo >= windowEnd) {
-        return false;
-      }
-      if (!exactUpTo) {
+    .filter(({ exactUpTo, exactCheckedAt }) => {
+      if (!isClosedWindow) {
         return true;
       }
-      // 최대 60분 강수량은 일 강수량을 넘을 수 없으므로, 강수량이 알려진
-      // 최대값을 넘지 못한 지점은 다시 계산해도 순위가 바뀌지 않는다.
-      return potential > (aggregate.stations[stationId]?.value ?? 0);
+
+      if (!exactUpTo || exactUpTo < windowEnd) {
+        return true;
+      }
+
+      const checkedAt = Date.parse(exactCheckedAt);
+      return !Number.isFinite(checkedAt) || Date.now() - checkedAt >= PRECIPITATION_MAX_ONE_HOUR_CLOSED_RECHECK_MS;
     })
+    .sort((left, right) => right.potential - left.potential);
+
+  if (isClosedWindow) {
+    return candidates
+      .sort((left, right) => {
+        if (left.exactCheckedAt !== right.exactCheckedAt) {
+          return left.exactCheckedAt < right.exactCheckedAt ? -1 : 1;
+        }
+        return right.potential - left.potential;
+      })
+      .slice(0, PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT);
+  }
+
+  const priority = candidates.slice(0, PRECIPITATION_MAX_ONE_HOUR_PRIORITY_FETCH_LIMIT);
+  const priorityStationIds = new Set(priority.map((item) => item.stationId));
+  const rotation = candidates
+    .filter((item) => !priorityStationIds.has(item.stationId))
     .sort((left, right) => {
-      // 정밀 계산을 아직 못 받은 지점을 최우선으로, 그다음은 가장 오래된
-      // 순으로 순환시켜 특정 지점이 계산 슬롯을 독점하지 못하게 한다.
-      if (left.exactUpTo !== right.exactUpTo) {
-        return left.exactUpTo < right.exactUpTo ? -1 : 1;
+      if (left.exactCheckedAt !== right.exactCheckedAt) {
+        return left.exactCheckedAt < right.exactCheckedAt ? -1 : 1;
       }
       return right.potential - left.potential;
     })
-    .slice(0, PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT);
+    .slice(0, PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT - priority.length);
+
+  return [...priority, ...rotation];
 };
 
-// 선정된 지점의 분자료(RN-60m)를 아직 계산하지 않은 구간만큼 통째로 받아
-// 정확한 최대 60분 강수량을 집계에 반영한다.
+// 선정된 지점의 당일 분자료(RN-60m)를 매번 처음부터 다시 받아 지연 수집과
+// 사후 품질관리로 같은 시각의 값이 정정되는 경우까지 최대값에 반영한다.
 const refreshExactStationMaxima = async (
   context,
   stationMetadata,
@@ -821,7 +842,13 @@ const refreshExactStationMaxima = async (
     return false;
   }
 
-  const candidates = buildExactFetchCandidates(aggregate, dayTotals, windowEnd);
+  const isClosedWindow = windowEnd === `${targetDay}2359`;
+  const candidates = buildExactFetchCandidates(
+    aggregate,
+    dayTotals,
+    windowEnd,
+    isClosedWindow,
+  );
   if (candidates.length === 0) {
     return false;
   }
@@ -829,31 +856,25 @@ const refreshExactStationMaxima = async (
   const dayStartTime = `${targetDay}0001`;
   const results = await Promise.allSettled(
     candidates.map(async ({ stationId }) => {
-      const exactUpTo = aggregate.exactUpTo?.[stationId] ?? '';
-      const previousEnd = parseKmaMinuteTime(exactUpTo);
-      const startTime =
-        previousEnd && exactUpTo >= dayStartTime
-          ? formatKmaMinuteTime(addMinutes(previousEnd, 1))
-          : dayStartTime;
-      if (startTime > windowEnd) {
-        return null;
-      }
-
       const rawText = await fetchKmaText(
         context,
         'api/typ01/cgi-bin/url/nph-aws2_min',
-        { tm1: startTime, tm2: windowEnd, stn: stationId, disp: 0, help: 0 },
+        { tm1: dayStartTime, tm2: windowEnd, stn: stationId, disp: 0, help: 0 },
         AWS_MINUTE_RANGE_REQUEST_TIMEOUT_MS,
         300,
       );
 
       let best = null;
+      let coveredThrough = '';
       parseAwsStationMinuteSeries(rawText).forEach((row) => {
+        if (parseKmaMinuteTime(row.observedAt) && row.observedAt > coveredThrough) {
+          coveredThrough = row.observedAt;
+        }
         if (Number.isFinite(row.value) && row.value > 0 && (!best || row.value > best.value)) {
           best = row;
         }
       });
-      return { stationId, best };
+      return { stationId, best, coveredThrough };
     }),
   );
 
@@ -863,10 +884,14 @@ const refreshExactStationMaxima = async (
       return;
     }
 
-    const { stationId, best } = result.value;
+    const { stationId, best, coveredThrough } = result.value;
     const metadata = stationMetadata.get(stationId) ?? { name: stationId, address: stationId };
     const existing = aggregate.stations[stationId];
-    if (best && (!existing || best.value > existing.value)) {
+    if (
+      best &&
+      (!existing || best.value > existing.value || coveredThrough >= existing.observedAt) &&
+      (best.value !== existing?.value || best.observedAt !== existing?.observedAt)
+    ) {
       aggregate.stations[stationId] = {
         stationId,
         name: metadata.name,
@@ -877,11 +902,13 @@ const refreshExactStationMaxima = async (
       hasChanged = true;
     }
 
-    if (!aggregate.exactUpTo) {
-      aggregate.exactUpTo = {};
+    if (coveredThrough && (aggregate.exactUpTo[stationId] ?? '') !== coveredThrough) {
+      aggregate.exactUpTo[stationId] = coveredThrough;
+      hasChanged = true;
     }
-    if ((aggregate.exactUpTo[stationId] ?? '') < windowEnd) {
-      aggregate.exactUpTo[stationId] = windowEnd;
+
+    if (coveredThrough) {
+      aggregate.exactCheckedAt[stationId] = new Date().toISOString();
       hasChanged = true;
     }
   });

@@ -42,7 +42,7 @@ const SNOW_TEST_TIME = '202603021800';
 const RANKING_COLLAPSED_LIMIT = 10;
 const RANKING_EXPANDED_LIMIT = 30;
 const TROPICAL_NIGHT_AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const PRECIPITATION_MAX_AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const PRECIPITATION_MAX_AUTO_REFRESH_INTERVAL_MS = 65 * 1000;
 
 const getInitialView = () => {
   const params = new URLSearchParams(window.location.search);
@@ -184,14 +184,14 @@ function App() {
   const isPrecipitationMaxMenu =
     selectedSubMenu === 'max_60m_today' || selectedSubMenu === 'max_60m_yesterday';
   const precipitationMaxAutoRefreshBucket = useMemo(() => {
-    if (selectedTab !== 'precipitation' || selectedSubMenu !== 'max_60m_today') {
+    if (selectedTab !== 'precipitation' || !isPrecipitationMaxMenu) {
       return 0;
     }
 
     return Math.floor(
       observationTimeBase.getTime() / PRECIPITATION_MAX_AUTO_REFRESH_INTERVAL_MS,
     );
-  }, [observationTimeBase, selectedSubMenu, selectedTab]);
+  }, [isPrecipitationMaxMenu, observationTimeBase, selectedTab]);
 
   const isObservationTimeControlVisible =
     (selectedTab === 'precipitation' && !isPrecipitationMaxMenu) ||
@@ -216,6 +216,8 @@ function App() {
         fetchServerPrecipitationCurrentRankings(refreshOptions),
         fetchServerPrecipitationSinceYesterdayRankings(refreshOptions),
         fetchServerPrecipitationSinceDayBeforeYesterdayRankings(refreshOptions),
+        fetchServerPrecipitationMaxOneHourRankings({ ...refreshOptions, period: 'today' }),
+        fetchServerPrecipitationMaxOneHourRankings({ ...refreshOptions, period: 'yesterday' }),
       ]).catch(() => {});
     }, 1200);
 
@@ -223,6 +225,24 @@ function App() {
       window.clearTimeout(timerId);
     };
   }, [refreshTrigger]);
+
+  useEffect(() => {
+    const warmMaxPrecipitationRankings = () => {
+      Promise.allSettled([
+        fetchServerPrecipitationMaxOneHourRankings({ period: 'today' }),
+        fetchServerPrecipitationMaxOneHourRankings({ period: 'yesterday' }),
+      ]).catch(() => {});
+    };
+
+    const timerId = window.setInterval(
+      warmMaxPrecipitationRankings,
+      PRECIPITATION_MAX_AUTO_REFRESH_INTERVAL_MS,
+    );
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, []);
 
   useEffect(() => {
     if (SHOW_SUBMENU_TABS.has(selectedTab)) {
