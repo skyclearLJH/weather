@@ -67,6 +67,7 @@ const formatTickLabel = (dateUtc) => {
 
 const MAP_STYLE = {
   version: 8,
+  projection: { type: 'globe' },
   sources: {
     land: { type: 'geojson', data: '/data/map/ea-land-50m.geojson' },
     coastline: { type: 'geojson', data: '/data/map/ea-coastline-50m.geojson' },
@@ -107,48 +108,59 @@ const createCloudLayer = () => {
     dirty: false,
     convStartKm: SEASON_CONV_KM.summer[0],
     convFullKm: SEASON_CONV_KM.summer[1],
+    shaderMap: new Map(),
 
-    onAdd(map, gl) {
-      this.map = map;
-      const vertexSource = `
-        attribute vec2 aPos;
-        attribute float aZScale;
-        attribute vec4 aCloud; // x: 강도 0..1, y: 고도(m), z: 음영 계수, w: 대류 0..1
-        uniform mat4 uMatrix;
+    // 구면(globe)/메르카토르 투영별 셰이더 — MapLibre가 주입하는 projectTile* 프렐류드 사용.
+    // globe 변형은 elevation을 미터로 받고(GLOBE_RADIUS로 나눔), 메르카토르 변형은
+    // 행렬이 메르카토르 z 단위를 기대하므로 aZScale(위도별 m→merc 변환)을 곱한다.
+    getShader(gl, shaderDescription) {
+      if (this.shaderMap.has(shaderDescription.variantName)) {
+        return this.shaderMap.get(shaderDescription.variantName);
+      }
+      const vertexSource = `#version 300 es
+        ${shaderDescription.vertexShaderPrelude}
+        ${shaderDescription.define}
+        in vec2 aPos;
+        in float aZScale;
+        in vec4 aCloud; // x: 강도 0..1, y: 고도(m), z: 음영 계수, w: 대류 0..1
         uniform float uExag;
-        varying float vT;
-        varying float vShade;
-        varying float vConv;
+        out float vT;
+        out float vShade;
+        out float vConv;
         void main() {
           vT = aCloud.x;
           vShade = aCloud.z;
           vConv = aCloud.w;
-          float z = aCloud.y * aZScale * uExag;
-          gl_Position = uMatrix * vec4(aPos, z, 1.0);
-        }
-      `;
-      const fragmentSource = `
+          #ifdef GLOBE
+            float elevation = aCloud.y * uExag;
+          #else
+            float elevation = aCloud.y * aZScale * uExag;
+          #endif
+          // projectTileWithElevation은 지구 뒷면 클리핑용 z를 쓴다 — 뒷면 구름 숨김
+          gl_Position = projectTileWithElevation(aPos, elevation);
+        }`;
+      const fragmentSource = `#version 300 es
         precision mediump float;
-        varying float vT;
-        varying float vShade;
-        varying float vConv;
+        in float vT;
+        in float vShade;
+        in float vConv;
         uniform float uConvOn;
+        out vec4 fragColor;
         void main() {
           // 반투명: 전운량이어도 지도가 비치도록 최대 알파를 낮게 유지
           float alpha = smoothstep(0.02, 0.30, vT) * mix(0.34, 0.72, vT);
           vec3 low = vec3(0.58, 0.65, 0.76);
           vec3 high = vec3(1.0, 1.0, 1.0);
           vec3 color = mix(low, high, clamp(vT * 1.25, 0.0, 1.0));
-          // 대류운 강조: 운정온도 -35℃(노랑) → -60℃ 이하(적색)
+          // 대류운 강조: 계절별 운정고도 임계값(노랑 → 적색)
           float conv = vConv * uConvOn;
           float convMixT = smoothstep(0.06, 0.45, conv);
           vec3 warm = mix(vec3(1.0, 0.84, 0.30), vec3(0.93, 0.23, 0.12), smoothstep(0.35, 1.0, conv));
           color = mix(color, warm, convMixT);
           alpha = max(alpha, smoothstep(0.06, 0.6, conv) * 0.9);
           float shade = mix(vShade, 1.0, convMixT);
-          gl_FragColor = vec4(color * shade * alpha, alpha);
-        }
-      `;
+          fragColor = vec4(color * shade * alpha, alpha);
+        }`;
       const compile = (type, source) => {
         const shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -158,20 +170,32 @@ const createCloudLayer = () => {
         }
         return shader;
       };
-      this.program = gl.createProgram();
-      gl.attachShader(this.program, compile(gl.VERTEX_SHADER, vertexSource));
-      gl.attachShader(this.program, compile(gl.FRAGMENT_SHADER, fragmentSource));
-      gl.linkProgram(this.program);
-      if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) {
-        console.error('[satellite] program link:', gl.getProgramInfoLog(this.program));
+      const program = gl.createProgram();
+      gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+      gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error('[satellite] program link:', gl.getProgramInfoLog(program));
       }
-      this.aPos = gl.getAttribLocation(this.program, 'aPos');
-      this.aZScale = gl.getAttribLocation(this.program, 'aZScale');
-      this.aCloud = gl.getAttribLocation(this.program, 'aCloud');
-      this.uMatrix = gl.getUniformLocation(this.program, 'uMatrix');
-      this.uExag = gl.getUniformLocation(this.program, 'uExag');
-      this.uConvOn = gl.getUniformLocation(this.program, 'uConvOn');
+      const shader = {
+        program,
+        aPos: gl.getAttribLocation(program, 'aPos'),
+        aZScale: gl.getAttribLocation(program, 'aZScale'),
+        aCloud: gl.getAttribLocation(program, 'aCloud'),
+        uExag: gl.getUniformLocation(program, 'uExag'),
+        uConvOn: gl.getUniformLocation(program, 'uConvOn'),
+        uProjMatrix: gl.getUniformLocation(program, 'u_projection_matrix'),
+        uFallbackMatrix: gl.getUniformLocation(program, 'u_projection_fallback_matrix'),
+        uTileMercatorCoords: gl.getUniformLocation(program, 'u_projection_tile_mercator_coords'),
+        uClippingPlane: gl.getUniformLocation(program, 'u_projection_clipping_plane'),
+        uTransition: gl.getUniformLocation(program, 'u_projection_transition'),
+      };
+      this.shaderMap.set(shaderDescription.variantName, shader);
+      return shader;
+    },
 
+    onAdd(map, gl) {
+      this.map = map;
       // 정점 위치(메르카토르)와 고도 스케일은 고정 — 한 번만 계산
       const positions = new Float32Array(MESH_W * MESH_H * 2);
       const zScales = new Float32Array(MESH_W * MESH_H);
@@ -232,12 +256,8 @@ const createCloudLayer = () => {
     },
 
     render(gl, renderArgs) {
-      if (!this.program) return;
-      // maplibre v5는 두 번째 인자로 행렬 대신 객체를 넘긴다 (globe 지원).
-      const matrix =
-        renderArgs?.defaultProjectionData?.mainMatrix ??
-        renderArgs?.modelViewProjectionMatrix ??
-        renderArgs;
+      const projectionData = renderArgs?.defaultProjectionData;
+      if (!projectionData) return;
 
       if (this.dirty && this.frameData) {
         // DN → (강도, 고도 m, 대류): 셀 중심 샘플
@@ -297,20 +317,27 @@ const createCloudLayer = () => {
         this.dirty = false;
       }
 
-      gl.useProgram(this.program);
-      gl.uniformMatrix4fv(this.uMatrix, false, matrix);
-      gl.uniform1f(this.uExag, this.exaggeration);
-      gl.uniform1f(this.uConvOn, this.convHighlight ? 1 : 0);
+      const shader = this.getShader(gl, renderArgs.shaderData);
+      gl.useProgram(shader.program);
+      gl.uniformMatrix4fv(shader.uProjMatrix, false, projectionData.mainMatrix);
+      gl.uniformMatrix4fv(shader.uFallbackMatrix, false, projectionData.fallbackMatrix);
+      gl.uniform4f(shader.uTileMercatorCoords, ...projectionData.tileMercatorCoords);
+      gl.uniform4f(shader.uClippingPlane, ...projectionData.clippingPlane);
+      gl.uniform1f(shader.uTransition, projectionData.projectionTransition);
+      gl.uniform1f(shader.uExag, this.exaggeration);
+      gl.uniform1f(shader.uConvOn, this.convHighlight ? 1 : 0);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);
-      gl.enableVertexAttribArray(this.aPos);
-      gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.zScaleBuffer);
-      gl.enableVertexAttribArray(this.aZScale);
-      gl.vertexAttribPointer(this.aZScale, 1, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(shader.aPos);
+      gl.vertexAttribPointer(shader.aPos, 2, gl.FLOAT, false, 0, 0);
+      if (shader.aZScale >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.zScaleBuffer);
+        gl.enableVertexAttribArray(shader.aZScale);
+        gl.vertexAttribPointer(shader.aZScale, 1, gl.FLOAT, false, 0, 0);
+      }
       gl.bindBuffer(gl.ARRAY_BUFFER, this.cloudBuffer);
-      gl.enableVertexAttribArray(this.aCloud);
-      gl.vertexAttribPointer(this.aCloud, 4, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(shader.aCloud);
+      gl.vertexAttribPointer(shader.aCloud, 4, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
 
       gl.enable(gl.BLEND);
