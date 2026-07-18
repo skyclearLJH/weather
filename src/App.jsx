@@ -626,7 +626,7 @@ function App() {
           {...getRankingExpandProps(fullData)}
         />
       ) : (
-        renderEmptyState(EMPTY_STATE_MESSAGE.default, renderObservationTimeControl())
+        renderEmptyState(apiError || EMPTY_STATE_MESSAGE.default, renderObservationTimeControl())
       );
     }
 
@@ -652,7 +652,7 @@ function App() {
           {...getRankingExpandProps(fullData)}
         />
       ) : (
-        renderEmptyState(EMPTY_STATE_MESSAGE.precipitation, renderObservationTimeControl())
+        renderEmptyState(apiError || EMPTY_STATE_MESSAGE.precipitation, renderObservationTimeControl())
       );
     }
 

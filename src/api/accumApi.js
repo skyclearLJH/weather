@@ -61,6 +61,10 @@ const fetchKmaLines = async (path, params) => {
   const buffer = await response.arrayBuffer();
   if (!response.ok) {
     const errorText = new TextDecoder().decode(buffer);
+    // API허브 일일 호출한도 초과(403)는 통일 문구로 안내
+    if (response.status === 403 || errorText.includes('Status: 403') || errorText.includes('호출한도') || errorText.includes('호출 한도')) {
+      throw new Error('하루 최대 호출량을 넘어 데이터를 불러올 수 없습니다.');
+    }
     let detail = '';
     try {
       detail = JSON.parse(errorText)?.result?.message ?? '';

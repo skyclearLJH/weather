@@ -175,6 +175,16 @@ export const clearWeatherApiCaches = () => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// 기상청 API허브는 일일 호출한도를 넘으면 403을 반환한다(자체 함수는 이를 500으로 감싸
+// {"error":"HTTP Error Status: 403"} 본문을 내려줌). 이 경우는 재시도 없이 통일 문구로 안내.
+export const QUOTA_EXCEEDED_MESSAGE = '하루 최대 호출량을 넘어 데이터를 불러올 수 없습니다.';
+
+const isQuotaExceededResponse = (status, bodyText = '') =>
+  status === 403 ||
+  bodyText.includes('Status: 403') ||
+  bodyText.includes('호출한도') ||
+  bodyText.includes('호출 한도');
+
 const fetchWithRetry = async (url, options = {}, retryCount = REQUEST_RETRY_COUNT, timeoutMs = REQUEST_TIMEOUT_MS) => {
   for (let attempt = 0; attempt <= retryCount; attempt += 1) {
     const controller = new AbortController();
@@ -187,12 +197,23 @@ const fetchWithRetry = async (url, options = {}, retryCount = REQUEST_RETRY_COUN
       });
 
       if (!response.ok) {
+        let bodyText = '';
+        try {
+          bodyText = await response.clone().text();
+        } catch {
+          bodyText = '';
+        }
+        if (isQuotaExceededResponse(response.status, bodyText)) {
+          const quotaError = new Error(QUOTA_EXCEEDED_MESSAGE);
+          quotaError.isQuotaExceeded = true;
+          throw quotaError;
+        }
         throw new Error(`HTTP Error Status: ${response.status}`);
       }
 
       return response;
     } catch (error) {
-      if (attempt === retryCount) {
+      if (error?.isQuotaExceeded || attempt === retryCount) {
         throw error;
       }
 
