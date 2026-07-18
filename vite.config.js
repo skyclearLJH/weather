@@ -24,6 +24,10 @@ import {
   onRequest as kmaProxyRequest,
   onRequestOptions as kmaProxyOptions,
 } from './functions/api/kma/[[path]].js';
+import {
+  onRequestGet as gk2aIrGet,
+  onRequestOptions as gk2aIrOptions,
+} from './functions/api/gk2a-ir.js';
 
 const sendFunctionResponse = async (response, res) => {
   res.statusCode = response.status;
@@ -85,6 +89,14 @@ const localFunctionsPlugin = (env) => ({
       };
 
       try {
+        if (requestUrl.pathname === '/api/gk2a-ir') {
+          const response = req.method === 'OPTIONS'
+            ? await gk2aIrOptions(context)
+            : await gk2aIrGet(context);
+          await sendFunctionResponse(response, res);
+          return;
+        }
+
         if (requestUrl.pathname.startsWith('/api/kma/')) {
           const kmaPath = requestUrl.pathname.replace(/^\/api\/kma\/?/, '');
           const response = req.method === 'OPTIONS'
