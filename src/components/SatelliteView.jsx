@@ -30,13 +30,26 @@ const BT_TOP_C = -75; // 이보다 차가우면 최대 강도
 const LAPSE_C_PER_KM = 6.5;
 const MAX_CLOUD_KM = 16;
 
-// 대류운 강조: 의사 운정고도(휘도온도에서 유도) 기준 — 높을수록 강한 대류.
-// 10km부터 강조 시작, 13km(권계면 부근 적란운) 이상은 최대.
-// 감률 6.5℃/km 기준 운정온도로는 각각 약 -50℃ / -69.5℃에 해당.
-const CONV_START_KM = 10;
-const CONV_FULL_KM = 13;
-
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+// 대류운 강조: 의사 운정고도(휘도온도에서 유도) 기준 — 높을수록 강한 대류.
+// 권계면 높이가 계절에 따라 달라 같은 강도의 대류라도 겨울엔 운정이 낮다.
+// [강조 시작 km, 최대 강조 km] — 여름은 권계면(15~16km) 부근 적란운 기준,
+// 겨울은 한기 대류(서해 눈구름 등)가 5km급이면 이미 깊은 대류라 낮게 잡는다.
+const SEASON_CONV_KM = {
+  summer: [10, 13], // 6~8월
+  spring: [8, 11], // 3~5월
+  autumn: [8, 11], // 9~11월
+  winter: [5, 8], // 12~2월
+};
+
+const seasonalConvRange = (dateUtc) => {
+  const month = new Date(dateUtc.getTime() + KST_OFFSET_MS).getUTCMonth() + 1;
+  if (month >= 6 && month <= 8) return SEASON_CONV_KM.summer;
+  if (month >= 3 && month <= 5) return SEASON_CONV_KM.spring;
+  if (month >= 9 && month <= 11) return SEASON_CONV_KM.autumn;
+  return SEASON_CONV_KM.winter;
+};
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const formatKstLabel = (dateUtc) => {
@@ -92,6 +105,8 @@ const createCloudLayer = () => {
     exaggeration: 6,
     frameData: null, // Uint16Array (750x650)
     dirty: false,
+    convStartKm: SEASON_CONV_KM.summer[0],
+    convFullKm: SEASON_CONV_KM.summer[1],
 
     onAdd(map, gl) {
       this.map = map;
@@ -208,6 +223,14 @@ const createCloudLayer = () => {
       this.map?.triggerRepaint();
     },
 
+    setConvRange(startKm, fullKm) {
+      if (this.convStartKm === startKm && this.convFullKm === fullKm) return;
+      this.convStartKm = startKm;
+      this.convFullKm = fullKm;
+      this.dirty = true;
+      this.map?.triggerRepaint();
+    },
+
     render(gl, renderArgs) {
       if (!this.program) return;
       // maplibre v5는 두 번째 인자로 행렬 대신 객체를 넘긴다 (globe 지원).
@@ -232,7 +255,10 @@ const createCloudLayer = () => {
             const btC = Number.isNaN(btK) ? BT_TOP_C - 30 : btK - 273.15;
             const intensity = Math.min(1, Math.max(0, (BT_CLEAR_C - btC) / (BT_CLEAR_C - BT_TOP_C)));
             const heightKm = Math.min(MAX_CLOUD_KM, Math.max(0, (BT_CLEAR_C - btC) / LAPSE_C_PER_KM));
-            const conv = Math.min(1, Math.max(0, (heightKm - CONV_START_KM) / (CONV_FULL_KM - CONV_START_KM)));
+            const conv = Math.min(
+              1,
+              Math.max(0, (heightKm - this.convStartKm) / (this.convFullKm - this.convStartKm)),
+            );
             cloud[v * 4] = intensity;
             cloud[v * 4 + 3] = conv;
             heights[v] = heightKm * 1000;
@@ -308,10 +334,15 @@ function SatelliteView() {
   const [exaggeration, setExaggeration] = useState(6);
   const [convHighlight, setConvHighlight] = useState(true);
   const pendingFrameRef = useRef(null);
+  const pendingConvRangeRef = useRef(SEASON_CONV_KM.summer);
   const exaggerationRef = useRef(6);
   const convHighlightRef = useRef(true);
 
   const currentDate = timeline[frameIndex] ?? null;
+  const convRange = useMemo(
+    () => (currentDate ? seasonalConvRange(currentDate) : SEASON_CONV_KM.summer),
+    [currentDate],
+  );
   const bandTime = useMemo(
     () => (currentDate ? formatKstLabel(currentDate) : null),
     [currentDate],
@@ -349,6 +380,7 @@ function SatelliteView() {
       map.addLayer(layer);
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
       if (pendingFrameRef.current) {
+        layer.setConvRange(...pendingConvRangeRef.current);
         layer.setFrame(pendingFrameRef.current);
       }
     });
@@ -430,7 +462,10 @@ function SatelliteView() {
         const frame = await fetchSatFrame(currentDate);
         if (!active) return;
         setStatus(null);
+        const range = seasonalConvRange(currentDate);
         pendingFrameRef.current = frame.data;
+        pendingConvRangeRef.current = range;
+        cloudLayerRef.current?.setConvRange(...range);
         cloudLayerRef.current?.setFrame(frame.data);
       } catch (error) {
         if (active) setStatus(error.message);
@@ -551,8 +586,8 @@ function SatelliteView() {
           <span className="sat-conv-legend-title">강한 대류운 (운정고도)</span>
           <span className="sat-conv-legend-bar" />
           <span className="sat-conv-legend-labels">
-            <span>10km</span>
-            <span>13km</span>
+            <span>{convRange[0]}km</span>
+            <span>{convRange[1]}km</span>
           </span>
         </div>
       ) : null}
