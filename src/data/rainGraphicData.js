@@ -146,6 +146,32 @@ const GYEONGBUK_SOUTH = cities(
 
 const ULLEUNG_AND_DOKDO = cities('경상북도', '울릉군');
 
+// 울릉군을 제외한 경북 본토 — 통보문에 울릉도.독도가 명시되지 않은 블록에서 사용
+const GYEONGBUK_MAINLAND = cities(
+  '경상북도',
+  '포항시',
+  '경주시',
+  '김천시',
+  '안동시',
+  '구미시',
+  '영주시',
+  '영천시',
+  '상주시',
+  '문경시',
+  '경산시',
+  '의성군',
+  '청송군',
+  '영양군',
+  '영덕군',
+  '청도군',
+  '고령군',
+  '성주군',
+  '칠곡군',
+  '예천군',
+  '봉화군',
+  '울진군',
+);
+
 const JEONBUK_WEST = cities(
   '전북특별자치도',
   '전주시',
@@ -197,13 +223,10 @@ export const RAIN_GRAPHICS = {
       {
         id: '20-60',
         color: '#1976d2',
-        selector: province(
-          '대전광역시',
-          '세종특별자치시',
-          '충청남도',
-          '충청북도',
-          '대구광역시',
-          '경상북도',
+        // 통보문 ①에는 울릉도.독도 항목이 없으므로 경북은 본토만 칠한다
+        selector: mergeSelectors(
+          province('대전광역시', '세종특별자치시', '충청남도', '충청북도', '대구광역시'),
+          GYEONGBUK_MAINLAND,
         ),
       },
       {
