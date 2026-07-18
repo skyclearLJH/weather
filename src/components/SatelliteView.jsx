@@ -30,10 +30,11 @@ const BT_TOP_C = -75; // 이보다 차가우면 최대 강도
 const LAPSE_C_PER_KM = 6.5;
 const MAX_CLOUD_KM = 16;
 
-// 대류운 강조: 운정온도가 낮을수록(운정이 높을수록) 강한 대류 — IR 단일 채널에서
-// 강한 강수 유발 대류운의 표준 프록시. -35℃부터 강조 시작, -60℃ 이하는 최대.
-const CONV_START_C = -35;
-const CONV_FULL_C = -60;
+// 대류운 강조: 의사 운정고도(휘도온도에서 유도) 기준 — 높을수록 강한 대류.
+// 10km부터 강조 시작, 13km(권계면 부근 적란운) 이상은 최대.
+// 감률 6.5℃/km 기준 운정온도로는 각각 약 -50℃ / -69.5℃에 해당.
+const CONV_START_KM = 10;
+const CONV_FULL_KM = 13;
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -231,7 +232,7 @@ const createCloudLayer = () => {
             const btC = Number.isNaN(btK) ? BT_TOP_C - 30 : btK - 273.15;
             const intensity = Math.min(1, Math.max(0, (BT_CLEAR_C - btC) / (BT_CLEAR_C - BT_TOP_C)));
             const heightKm = Math.min(MAX_CLOUD_KM, Math.max(0, (BT_CLEAR_C - btC) / LAPSE_C_PER_KM));
-            const conv = Math.min(1, Math.max(0, (CONV_START_C - btC) / (CONV_START_C - CONV_FULL_C)));
+            const conv = Math.min(1, Math.max(0, (heightKm - CONV_START_KM) / (CONV_FULL_KM - CONV_START_KM)));
             cloud[v * 4] = intensity;
             cloud[v * 4 + 3] = conv;
             heights[v] = heightKm * 1000;
@@ -547,11 +548,11 @@ function SatelliteView() {
 
       {convHighlight ? (
         <div className="sat-conv-legend">
-          <span className="sat-conv-legend-title">강한 대류운 (운정온도)</span>
+          <span className="sat-conv-legend-title">강한 대류운 (운정고도)</span>
           <span className="sat-conv-legend-bar" />
           <span className="sat-conv-legend-labels">
-            <span>-35℃</span>
-            <span>-60℃</span>
+            <span>10km</span>
+            <span>13km</span>
           </span>
         </div>
       ) : null}
