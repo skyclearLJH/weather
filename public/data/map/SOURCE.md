@@ -8,3 +8,9 @@
 - Border seam: the high-resolution South Korean northern boundary is connected to the lower-resolution neighboring-country geometry to prevent background gaps at high zoom
 
 These files are used only by the broadcast radar map and are loaded when broadcast mode opens.
+
+# East Asia land polygons (`ea-land-50m.geojson`)
+
+- Source: Natural Earth 1:50m `ne_50m_land` (public domain), via https://github.com/nvkelso/natural-earth-vector
+- Processing: clipped to lon 88–168 / lat 2–64 (GK2A EA domain coverage), coordinates rounded to 3 decimals, merged into a single MultiPolygon
+- Used by the satellite view (`?satellite=1`) for land/sea fill contrast

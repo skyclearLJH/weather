@@ -30,6 +30,11 @@ const BT_TOP_C = -75; // 이보다 차가우면 최대 강도
 const LAPSE_C_PER_KM = 6.5;
 const MAX_CLOUD_KM = 16;
 
+// 대류운 강조: 운정온도가 낮을수록(운정이 높을수록) 강한 대류 — IR 단일 채널에서
+// 강한 강수 유발 대류운의 표준 프록시. -35℃부터 강조 시작, -60℃ 이하는 최대.
+const CONV_START_C = -35;
+const CONV_FULL_C = -60;
+
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -49,22 +54,30 @@ const formatTickLabel = (dateUtc) => {
 const MAP_STYLE = {
   version: 8,
   sources: {
+    land: { type: 'geojson', data: '/data/map/ea-land-50m.geojson' },
     coastline: { type: 'geojson', data: '/data/map/ea-coastline-50m.geojson' },
     sido: { type: 'geojson', data: '/data/map/kr-sido-20260701.geojson' },
   },
   layers: [
-    { id: 'bg', type: 'background', paint: { 'background-color': '#060d16' } },
+    // 배경 = 바다, land 폴리곤 = 육지 — 구름이 덮여도 면 대비로 지형이 읽히게 한다.
+    { id: 'bg', type: 'background', paint: { 'background-color': '#0b2038' } },
+    {
+      id: 'land',
+      type: 'fill',
+      source: 'land',
+      paint: { 'fill-color': '#2c3f38' },
+    },
     {
       id: 'coastline',
       type: 'line',
       source: 'coastline',
-      paint: { 'line-color': '#3f5c78', 'line-width': 1.1 },
+      paint: { 'line-color': '#79a3c7', 'line-width': 1.3 },
     },
     {
       id: 'sido',
       type: 'line',
       source: 'sido',
-      paint: { 'line-color': '#4d6b88', 'line-width': 0.9 },
+      paint: { 'line-color': '#6b8aa6', 'line-width': 1.0 },
     },
   ],
 };
@@ -84,14 +97,16 @@ const createCloudLayer = () => {
       const vertexSource = `
         attribute vec2 aPos;
         attribute float aZScale;
-        attribute vec3 aCloud; // x: 강도 0..1, y: 고도(m), z: 음영 계수
+        attribute vec4 aCloud; // x: 강도 0..1, y: 고도(m), z: 음영 계수, w: 대류 0..1
         uniform mat4 uMatrix;
         uniform float uExag;
         varying float vT;
         varying float vShade;
+        varying float vConv;
         void main() {
           vT = aCloud.x;
           vShade = aCloud.z;
+          vConv = aCloud.w;
           float z = aCloud.y * aZScale * uExag;
           gl_Position = uMatrix * vec4(aPos, z, 1.0);
         }
@@ -100,12 +115,22 @@ const createCloudLayer = () => {
         precision mediump float;
         varying float vT;
         varying float vShade;
+        varying float vConv;
+        uniform float uConvOn;
         void main() {
-          float alpha = smoothstep(0.02, 0.30, vT) * 0.96;
+          // 반투명: 전운량이어도 지도가 비치도록 최대 알파를 낮게 유지
+          float alpha = smoothstep(0.02, 0.30, vT) * mix(0.34, 0.72, vT);
           vec3 low = vec3(0.58, 0.65, 0.76);
           vec3 high = vec3(1.0, 1.0, 1.0);
           vec3 color = mix(low, high, clamp(vT * 1.25, 0.0, 1.0));
-          gl_FragColor = vec4(color * vShade * alpha, alpha);
+          // 대류운 강조: 운정온도 -35℃(노랑) → -60℃ 이하(적색)
+          float conv = vConv * uConvOn;
+          float convMixT = smoothstep(0.06, 0.45, conv);
+          vec3 warm = mix(vec3(1.0, 0.84, 0.30), vec3(0.93, 0.23, 0.12), smoothstep(0.35, 1.0, conv));
+          color = mix(color, warm, convMixT);
+          alpha = max(alpha, smoothstep(0.06, 0.6, conv) * 0.9);
+          float shade = mix(vShade, 1.0, convMixT);
+          gl_FragColor = vec4(color * shade * alpha, alpha);
         }
       `;
       const compile = (type, source) => {
@@ -129,6 +154,7 @@ const createCloudLayer = () => {
       this.aCloud = gl.getAttribLocation(this.program, 'aCloud');
       this.uMatrix = gl.getUniformLocation(this.program, 'uMatrix');
       this.uExag = gl.getUniformLocation(this.program, 'uExag');
+      this.uConvOn = gl.getUniformLocation(this.program, 'uConvOn');
 
       // 정점 위치(메르카토르)와 고도 스케일은 고정 — 한 번만 계산
       const positions = new Float32Array(MESH_W * MESH_H * 2);
@@ -170,7 +196,7 @@ const createCloudLayer = () => {
       };
       this.posBuffer = makeBuffer(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
       this.zScaleBuffer = makeBuffer(gl.ARRAY_BUFFER, zScales, gl.STATIC_DRAW);
-      this.cloudArray = new Float32Array(MESH_W * MESH_H * 3);
+      this.cloudArray = new Float32Array(MESH_W * MESH_H * 4);
       this.cloudBuffer = makeBuffer(gl.ARRAY_BUFFER, this.cloudArray, gl.DYNAMIC_DRAW);
       this.indexBuffer = makeBuffer(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
     },
@@ -190,7 +216,7 @@ const createCloudLayer = () => {
         renderArgs;
 
       if (this.dirty && this.frameData) {
-        // DN → (강도, 고도 m): 셀 중심 샘플
+        // DN → (강도, 고도 m, 대류): 셀 중심 샘플
         const cloud = this.cloudArray;
         if (!this.heightScratch) {
           this.heightScratch = new Float32Array(MESH_W * MESH_H);
@@ -205,7 +231,9 @@ const createCloudLayer = () => {
             const btC = Number.isNaN(btK) ? BT_TOP_C - 30 : btK - 273.15;
             const intensity = Math.min(1, Math.max(0, (BT_CLEAR_C - btC) / (BT_CLEAR_C - BT_TOP_C)));
             const heightKm = Math.min(MAX_CLOUD_KM, Math.max(0, (BT_CLEAR_C - btC) / LAPSE_C_PER_KM));
-            cloud[v * 3] = intensity;
+            const conv = Math.min(1, Math.max(0, (CONV_START_C - btC) / (CONV_START_C - CONV_FULL_C)));
+            cloud[v * 4] = intensity;
+            cloud[v * 4 + 3] = conv;
             heights[v] = heightKm * 1000;
             v++;
           }
@@ -225,16 +253,16 @@ const createCloudLayer = () => {
                 count++;
               }
             }
-            cloud[(mj * MESH_W + mi) * 3 + 1] = sum / count;
+            cloud[(mj * MESH_W + mi) * 4 + 1] = sum / count;
           }
         }
         for (let mj = 0; mj < MESH_H; mj++) {
           for (let mi = 0; mi < MESH_W; mi++) {
             const idx = mj * MESH_W + mi;
-            const here = cloud[idx * 3 + 1];
-            const nw = cloud[(Math.max(0, mj - 1) * MESH_W + Math.max(0, mi - 1)) * 3 + 1];
+            const here = cloud[idx * 4 + 1];
+            const nw = cloud[(Math.max(0, mj - 1) * MESH_W + Math.max(0, mi - 1)) * 4 + 1];
             const gradient = (here - nw) / 1000; // km per cell
-            cloud[idx * 3 + 2] = Math.min(1.12, Math.max(0.72, 1 + gradient * 0.06));
+            cloud[idx * 4 + 2] = Math.min(1.12, Math.max(0.72, 1 + gradient * 0.06));
           }
         }
         gl.bindBuffer(gl.ARRAY_BUFFER, this.cloudBuffer);
@@ -245,6 +273,7 @@ const createCloudLayer = () => {
       gl.useProgram(this.program);
       gl.uniformMatrix4fv(this.uMatrix, false, matrix);
       gl.uniform1f(this.uExag, this.exaggeration);
+      gl.uniform1f(this.uConvOn, this.convHighlight ? 1 : 0);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);
       gl.enableVertexAttribArray(this.aPos);
@@ -254,7 +283,7 @@ const createCloudLayer = () => {
       gl.vertexAttribPointer(this.aZScale, 1, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.cloudBuffer);
       gl.enableVertexAttribArray(this.aCloud);
-      gl.vertexAttribPointer(this.aCloud, 3, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribPointer(this.aCloud, 4, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
 
       gl.enable(gl.BLEND);
@@ -276,8 +305,10 @@ function SatelliteView() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [status, setStatus] = useState('최신 위성 자료 탐색 중…');
   const [exaggeration, setExaggeration] = useState(6);
+  const [convHighlight, setConvHighlight] = useState(true);
   const pendingFrameRef = useRef(null);
   const exaggerationRef = useRef(6);
+  const convHighlightRef = useRef(true);
 
   const currentDate = timeline[frameIndex] ?? null;
   const bandTime = useMemo(
@@ -312,6 +343,7 @@ function SatelliteView() {
     map.on('load', () => {
       const layer = createCloudLayer();
       layer.exaggeration = exaggerationRef.current;
+      layer.convHighlight = convHighlightRef.current;
       cloudLayerRef.current = layer;
       map.addLayer(layer);
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
@@ -334,6 +366,14 @@ function SatelliteView() {
       mapRef.current?.triggerRepaint();
     }
   }, [exaggeration]);
+
+  useEffect(() => {
+    convHighlightRef.current = convHighlight;
+    if (cloudLayerRef.current) {
+      cloudLayerRef.current.convHighlight = convHighlight;
+      mapRef.current?.triggerRepaint();
+    }
+  }, [convHighlight]);
 
   const frameIndexRef = useRef(0);
   const timelineRef = useRef([]);
@@ -495,7 +535,26 @@ function SatelliteView() {
           />
           ×{exaggeration}
         </label>
+        <label className="sat-conv-toggle">
+          <input
+            type="checkbox"
+            checked={convHighlight}
+            onChange={(event) => setConvHighlight(event.target.checked)}
+          />
+          대류운 강조
+        </label>
       </div>
+
+      {convHighlight ? (
+        <div className="sat-conv-legend">
+          <span className="sat-conv-legend-title">강한 대류운 (운정온도)</span>
+          <span className="sat-conv-legend-bar" />
+          <span className="sat-conv-legend-labels">
+            <span>-35℃</span>
+            <span>-60℃</span>
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
