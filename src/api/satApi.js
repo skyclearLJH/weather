@@ -177,7 +177,10 @@ export const buildSatTimeline = (latestDate, hours = 12, stepMinutes = 10) => {
 
 // --- 프레임 로드 ---
 const FRAME_CACHE = new Map();
-const FRAME_CACHE_LIMIT = 90;
+// 12시간 타임라인(73프레임) × 2영역(ko/fd) = 146개가 동시에 살아 있어야
+// 재생이 캐시에서 돌므로 여유 있게 잡는다 (90이었을 때 재생 중 캐시가
+// 밀려나 같은 프레임을 반복 재요청했다).
+const FRAME_CACHE_LIMIT = 220;
 
 // 응답 매직: EA는 'GKIR', FD는 'GKFD', KO는 'GKKO'
 const FRAME_MAGIC = {

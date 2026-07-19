@@ -170,70 +170,107 @@ const walkFdChunkBtree = (buf, dv, addr, out) => {
   }
 };
 
-const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cacheKey) => {
+// 처리 결과(ko/fd 출력 바이트) 메모리 캐시 — 로컬 개발(엣지 캐시 없음)과
+// 워커 웜 아이솔레이트에서 재계산을 막는다. 프레임당 약 0.9MB × 20프레임.
+const FD_OUTPUT_CACHE = new Map(); // `${date}:${area}` → Uint8Array
+const FD_OUTPUT_CACHE_LIMIT = 40;
+const FD_PROCESS_IN_FLIGHT = new Map(); // date → Promise<{ko, fd}>
+
+const rememberOutput = (key, bytes) => {
+  FD_OUTPUT_CACHE.set(key, bytes);
+  while (FD_OUTPUT_CACHE.size > FD_OUTPUT_CACHE_LIMIT) {
+    FD_OUTPUT_CACHE.delete(FD_OUTPUT_CACHE.keys().next().value);
+  }
+};
+
+const frameError = (message, httpStatus) => {
+  const error = new Error(message);
+  error.httpStatus = httpStatus;
+  return error;
+};
+
+const packOutput = (magic, w, h, data) => {
+  const outBytes = new Uint8Array(8 + data.length * 2);
+  const head = new DataView(outBytes.buffer);
+  outBytes[0] = magic.charCodeAt(0);
+  outBytes[1] = magic.charCodeAt(1);
+  outBytes[2] = magic.charCodeAt(2);
+  outBytes[3] = magic.charCodeAt(3);
+  head.setUint16(4, w, true);
+  head.setUint16(6, h, true);
+  new Uint8Array(outBytes.buffer, 8).set(new Uint8Array(data.buffer));
+  return outBytes;
+};
+
+// 원본 파일을 한 번만 받아 청크를 한 번씩만 inflate하면서 FD(전구 22km)와
+// KO(한반도 6km) 출력을 동시에 만든다 — 두 영역의 성공/실패가 항상 함께 간다.
+const buildFrameOutputs = async (context, date) => {
   const base =
     context.env?.GK2A_FD_UPSTREAM_BASE || 'https://noaa-gk2a-pds.s3.amazonaws.com/AMI/L1B/FD/';
   const upstream = `${base}${date.slice(0, 6)}/${date.slice(6, 8)}/${date.slice(8, 10)}/gk2a_ami_le1b_ir105_fd020ge_${date}.nc`;
 
   let originResponse;
   try {
-    // fd/ko가 같은 원본을 쓰므로 원본 자체를 잠시 엣지 캐시해 다운로드를 공유
     originResponse = await fetch(upstream, { cf: { cacheEverything: true, cacheTtl: 600 } });
   } catch (error) {
-    return new Response(JSON.stringify({ error: `FD upstream fetch failed: ${error.message}` }), {
-      status: 502,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-    });
+    throw frameError(`FD upstream fetch failed: ${error.message}`, 502);
   }
   if (!originResponse.ok) {
-    return new Response(JSON.stringify({ error: 'FD frame not available', status: originResponse.status }), {
-      status: originResponse.status === 403 || originResponse.status === 404 ? 404 : 502,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-    });
+    throw frameError(
+      'FD frame not available',
+      originResponse.status === 403 || originResponse.status === 404 ? 404 : 502,
+    );
   }
 
   const body = await originResponse.arrayBuffer();
   const buf = new Uint8Array(body);
   const dv = new DataView(body);
   if (buf.length < 8 || buf[0] !== 0x89 || buf[1] !== 0x48 || buf[2] !== 0x44 || buf[3] !== 0x46) {
-    return new Response(JSON.stringify({ error: 'FD file is not HDF5', size: buf.length }), {
-      status: 502,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-    });
+    throw frameError('FD file is not HDF5', 502);
   }
 
   const layout = findFdDataset(buf, dv);
   if (!layout) {
-    return new Response(JSON.stringify({ error: 'FD dataset layout not found' }), {
-      status: 502,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-    });
+    throw frameError('FD dataset layout not found', 502);
   }
   const chunks = [];
   walkFdChunkBtree(buf, dv, layout.btree, chunks);
 
-  let out;
-  let outW;
-  let outH;
-  let magic;
-  if (area === 'ko') {
-    // 크롭과 교차하는 청크(4개)만 inflate → 크롭 원본 조립 → 3x3 블록 최대
-    magic = [0x47, 0x4b, 0x4b, 0x4f]; // 'GKKO'
-    outW = KO_OUT_W;
-    outH = KO_OUT_H;
-    const { col0, row0, srcW, srcH, factor } = KO_CROP;
-    const cropRaw = new Uint16Array(srcW * srcH);
-    for (const chunk of chunks) {
-      if (chunk.row + FD_CHUNK <= row0 || chunk.row >= row0 + srcH) continue;
-      if (chunk.col + FD_CHUNK <= col0 || chunk.col >= col0 + srcW) continue;
-      const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
-      if (raw.length !== FD_CHUNK * FD_CHUNK * 2) {
-        return new Response(JSON.stringify({ error: 'FD chunk size mismatch', got: raw.length }), {
-          status: 502,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-        });
+  const fdData = new Uint16Array(FD_OUT * FD_OUT);
+  const per = FD_CHUNK / FD_FACTOR; // 125
+  const { col0, row0, srcW, srcH, factor } = KO_CROP;
+  const cropRaw = new Uint16Array(srcW * srcH);
+
+  for (const chunk of chunks) {
+    const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
+    if (raw.length !== FD_CHUNK * FD_CHUNK * 2) {
+      throw frameError(`FD chunk size mismatch: ${raw.length}`, 502);
+    }
+    const cdv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+
+    // 전구: 11x11 블록 최대 DN 다운샘플 (DN 클수록 차가운 운정)
+    const outY0 = chunk.row / FD_FACTOR;
+    const outX0 = chunk.col / FD_FACTOR;
+    for (let oy = 0; oy < per; oy++) {
+      for (let ox = 0; ox < per; ox++) {
+        let max = 0;
+        for (let dy = 0; dy < FD_FACTOR; dy++) {
+          let idx = ((oy * FD_FACTOR + dy) * FD_CHUNK + ox * FD_FACTOR) * 2;
+          for (let dx = 0; dx < FD_FACTOR; dx++) {
+            const v = cdv.getUint16(idx, true);
+            if (v <= 8191 && v > max) max = v;
+            idx += 2;
+          }
+        }
+        fdData[(outY0 + oy) * FD_OUT + outX0 + ox] = max;
       }
-      const cdv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+    }
+
+    // 한반도 크롭: 교차 청크(4개)의 해당 영역을 원본 해상도로 조립
+    if (
+      chunk.row + FD_CHUNK > row0 && chunk.row < row0 + srcH &&
+      chunk.col + FD_CHUNK > col0 && chunk.col < col0 + srcW
+    ) {
       const rowStart = Math.max(chunk.row, row0);
       const rowEnd = Math.min(chunk.row + FD_CHUNK, row0 + srcH);
       const colStart = Math.max(chunk.col, col0);
@@ -246,62 +283,42 @@ const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cac
         }
       }
     }
-    out = new Uint16Array(outW * outH);
-    for (let oy = 0; oy < outH; oy++) {
-      for (let ox = 0; ox < outW; ox++) {
-        let max = 0;
-        for (let dy = 0; dy < factor; dy++) {
-          let idx = (oy * factor + dy) * srcW + ox * factor;
-          for (let dx = 0; dx < factor; dx++) {
-            const v = cropRaw[idx + dx];
-            if (v <= 8191 && v > max) max = v;
-          }
-        }
-        out[oy * outW + ox] = max;
-      }
-    }
-  } else {
-    // 청크별 inflate 후 11x11 블록 최대 DN 다운샘플 (DN 클수록 차가운 운정)
-    magic = [0x47, 0x4b, 0x46, 0x44]; // 'GKFD'
-    outW = FD_OUT;
-    outH = FD_OUT;
-    out = new Uint16Array(FD_OUT * FD_OUT);
-    const per = FD_CHUNK / FD_FACTOR; // 125
-    for (const chunk of chunks) {
-      const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
-      if (raw.length !== FD_CHUNK * FD_CHUNK * 2) {
-        return new Response(JSON.stringify({ error: 'FD chunk size mismatch', got: raw.length }), {
-          status: 502,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-        });
-      }
-      const cdv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-      const outY0 = chunk.row / FD_FACTOR;
-      const outX0 = chunk.col / FD_FACTOR;
-      for (let oy = 0; oy < per; oy++) {
-        for (let ox = 0; ox < per; ox++) {
-          let max = 0;
-          for (let dy = 0; dy < FD_FACTOR; dy++) {
-            let idx = ((oy * FD_FACTOR + dy) * FD_CHUNK + ox * FD_FACTOR) * 2;
-            for (let dx = 0; dx < FD_FACTOR; dx++) {
-              const v = cdv.getUint16(idx, true);
-              if (v <= 8191 && v > max) max = v;
-              idx += 2;
-            }
-          }
-          out[(outY0 + oy) * FD_OUT + outX0 + ox] = max;
+  }
+
+  // 크롭 3x3 블록 최대 → 6km
+  const koData = new Uint16Array(KO_OUT_W * KO_OUT_H);
+  for (let oy = 0; oy < KO_OUT_H; oy++) {
+    for (let ox = 0; ox < KO_OUT_W; ox++) {
+      let max = 0;
+      for (let dy = 0; dy < factor; dy++) {
+        let idx = (oy * factor + dy) * srcW + ox * factor;
+        for (let dx = 0; dx < factor; dx++) {
+          const v = cropRaw[idx + dx];
+          if (v <= 8191 && v > max) max = v;
         }
       }
+      koData[oy * KO_OUT_W + ox] = max;
     }
   }
 
-  const outBytes = new Uint8Array(8 + out.length * 2);
-  const head = new DataView(outBytes.buffer);
-  outBytes[0] = magic[0]; outBytes[1] = magic[1]; outBytes[2] = magic[2]; outBytes[3] = magic[3];
-  head.setUint16(4, outW, true);
-  head.setUint16(6, outH, true);
-  new Uint8Array(outBytes.buffer, 8).set(new Uint8Array(out.buffer));
+  return {
+    fd: packOutput('GKFD', FD_OUT, FD_OUT, fdData),
+    ko: packOutput('GKKO', KO_OUT_W, KO_OUT_H, koData),
+  };
+};
 
+const processFrame = (context, date) => {
+  if (FD_PROCESS_IN_FLIGHT.has(date)) {
+    return FD_PROCESS_IN_FLIGHT.get(date);
+  }
+  const promise = buildFrameOutputs(context, date).finally(() => {
+    FD_PROCESS_IN_FLIGHT.delete(date);
+  });
+  FD_PROCESS_IN_FLIGHT.set(date, promise);
+  return promise;
+};
+
+const buildFrameResponse = (outBytes, isHistorical) => {
   const headers = new Headers(corsHeaders);
   headers.set('Content-Type', 'application/octet-stream');
   headers.set(
@@ -310,7 +327,42 @@ const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cac
       ? `public, max-age=3600, s-maxage=${HISTORICAL_CACHE_TTL_SECONDS}`
       : 'public, max-age=120, s-maxage=120',
   );
-  const response = new Response(outBytes, { status: 200, headers });
+  return new Response(outBytes, { status: 200, headers });
+};
+
+const makeAreaCacheKey = (date, area) =>
+  new Request(`https://gk2a-ir.internal/frame?date=${date}&area=${area}&v=2`, { method: 'GET' });
+
+const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cacheKey) => {
+  let outBytes = FD_OUTPUT_CACHE.get(`${date}:${area}`);
+
+  if (!outBytes) {
+    let outputs;
+    try {
+      outputs = await processFrame(context, date);
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: error.httpStatus ?? 502,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    }
+    rememberOutput(`${date}:ko`, outputs.ko);
+    rememberOutput(`${date}:fd`, outputs.fd);
+    outBytes = outputs[area];
+
+    // 반대 영역도 엣지 캐시에 미리 저장 — 곧바로 이어질 요청이 재계산하지 않게
+    if (edgeCache) {
+      const other = area === 'ko' ? 'fd' : 'ko';
+      const putOther = edgeCache
+        .put(makeAreaCacheKey(date, other), buildFrameResponse(outputs[other], isHistorical))
+        .catch(() => {});
+      if (context.waitUntil) {
+        context.waitUntil(putOther);
+      }
+    }
+  }
+
+  const response = buildFrameResponse(outBytes, isHistorical);
   if (edgeCache) {
     const putPromise = edgeCache.put(cacheKey, response.clone()).catch(() => {});
     if (context.waitUntil) {

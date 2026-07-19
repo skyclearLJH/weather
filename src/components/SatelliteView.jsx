@@ -584,6 +584,27 @@ function SatelliteView() {
     };
   }, [currentDate, frameIndex, timeline]);
 
+  // 타임라인 전 구간을 백그라운드에서 순차 프리페치 — 첫 재생부터 빈 프레임이
+  // 없도록 한다. 프레임당 ko+fd를 함께 요청하고(서버가 원본 1회 다운로드로
+  // 두 출력을 만들어 캐시), 한 프레임씩 순서대로 진행해 서버를 압박하지 않는다.
+  useEffect(() => {
+    if (timeline.length === 0) return undefined;
+    let active = true;
+
+    (async () => {
+      // 최신 프레임 주변을 먼저, 그 다음 과거 순으로
+      const order = [...timeline].reverse();
+      for (const date of order) {
+        if (!active) return;
+        await Promise.allSettled([fetchSatFrame(date, 'ko'), fetchSatFrame(date, 'fd')]);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [timeline]);
+
   // 재생
   useEffect(() => {
     if (!isPlaying || timeline.length === 0) return undefined;
