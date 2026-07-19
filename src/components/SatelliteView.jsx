@@ -8,10 +8,13 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DN_TO_BT_KELVIN,
+  FD_GRID,
   SAT_GRID,
   buildSatTimeline,
+  fdCellToLonLat,
   fetchSatFrame,
   lccKmToLonLat,
+  lonLatToLccKm,
   probeLatestSatDate,
 } from '../api/satApi';
 import './SatelliteView.css';
@@ -68,6 +71,12 @@ const formatTickLabel = (dateUtc) => {
 const MAP_STYLE = {
   version: 8,
   projection: { type: 'globe' },
+  // 대기광: 지구 가장자리 산란광 링. 세게 주면 지도 전체가 씻겨 보여서
+  // 낮은 블렌드로 림 효과만 남기고, 줌인하면 서서히 사라지게 한다.
+  sky: {
+    'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 0.6, 3.5, 0.28, 4.5, 0.18, 6.5, 0],
+  },
+  light: { anchor: 'map', position: [1.5, 90, 80] },
   sources: {
     land: { type: 'geojson', data: '/data/map/ea-land-50m.geojson' },
     coastline: { type: 'geojson', data: '/data/map/ea-coastline-50m.geojson' },
@@ -75,24 +84,25 @@ const MAP_STYLE = {
   },
   layers: [
     // 배경 = 바다, land 폴리곤 = 육지 — 구름이 덮여도 면 대비로 지형이 읽히게 한다.
-    { id: 'bg', type: 'background', paint: { 'background-color': '#0b2038' } },
+    // 팔레트: 한난 대비를 위해 지도는 차가운 슬레이트 계열로 통일 (대류운 강조가 난색).
+    { id: 'bg', type: 'background', paint: { 'background-color': '#0a1522' } },
     {
       id: 'land',
       type: 'fill',
       source: 'land',
-      paint: { 'fill-color': '#2c3f38' },
+      paint: { 'fill-color': '#2f3945' },
     },
     {
       id: 'coastline',
       type: 'line',
       source: 'coastline',
-      paint: { 'line-color': '#79a3c7', 'line-width': 1.3 },
+      paint: { 'line-color': '#7f9bb8', 'line-width': 1.3 },
     },
     {
       id: 'sido',
       type: 'line',
       source: 'sido',
-      paint: { 'line-color': '#6b8aa6', 'line-width': 1.0 },
+      paint: { 'line-color': '#647d97', 'line-width': 1.0 },
     },
   ],
 };
@@ -104,8 +114,6 @@ const createCloudLayer = () => {
     type: 'custom',
     renderingMode: '3d',
     exaggeration: 6,
-    frameData: null, // Uint16Array (750x650)
-    dirty: false,
     convStartKm: SEASON_CONV_KM.summer[0],
     convFullKm: SEASON_CONV_KM.summer[1],
     shaderMap: new Map(),
@@ -196,54 +204,118 @@ const createCloudLayer = () => {
 
     onAdd(map, gl) {
       this.map = map;
-      // 정점 위치(메르카토르)와 고도 스케일은 고정 — 한 번만 계산
-      const positions = new Float32Array(MESH_W * MESH_H * 2);
-      const zScales = new Float32Array(MESH_W * MESH_H);
-      let v = 0;
-      for (let mj = 0; mj < MESH_H; mj++) {
-        const yKm = SAT_GRID.yMaxKm - mj * MESH_STEP * SAT_GRID.cellKm;
-        for (let mi = 0; mi < MESH_W; mi++) {
-          const xKm = SAT_GRID.xMinKm + mi * MESH_STEP * SAT_GRID.cellKm;
-          const [lon, lat] = lccKmToLonLat(xKm, yKm);
-          const merc = maplibregl.MercatorCoordinate.fromLngLat({ lng: lon, lat }, 0);
-          positions[v * 2] = merc.x;
-          positions[v * 2 + 1] = merc.y;
-          zScales[v] = maplibregl.MercatorCoordinate.fromLngLat({ lng: lon, lat }, 1).z;
-          v++;
-        }
-      }
-
-      const indices = new Uint32Array((MESH_W - 1) * (MESH_H - 1) * 6);
-      let t = 0;
-      for (let mj = 0; mj < MESH_H - 1; mj++) {
-        for (let mi = 0; mi < MESH_W - 1; mi++) {
-          const i0 = mj * MESH_W + mi;
-          indices[t++] = i0;
-          indices[t++] = i0 + 1;
-          indices[t++] = i0 + MESH_W;
-          indices[t++] = i0 + 1;
-          indices[t++] = i0 + MESH_W + 1;
-          indices[t++] = i0 + MESH_W;
-        }
-      }
-      this.indexCount = indices.length;
-
       const makeBuffer = (target, data, usage) => {
         const buffer = gl.createBuffer();
         gl.bindBuffer(target, buffer);
         gl.bufferData(target, data, usage);
         return buffer;
       };
-      this.posBuffer = makeBuffer(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-      this.zScaleBuffer = makeBuffer(gl.ARRAY_BUFFER, zScales, gl.STATIC_DRAW);
-      this.cloudArray = new Float32Array(MESH_W * MESH_H * 4);
-      this.cloudBuffer = makeBuffer(gl.ARRAY_BUFFER, this.cloudArray, gl.DYNAMIC_DRAW);
-      this.indexBuffer = makeBuffer(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+      // 정점 위치(메르카토르)/고도 스케일/인덱스는 고정 — 메쉬별로 한 번만 계산.
+      // vertexAt(mi,mj)이 [lon,lat] 또는 null(무효 정점)을 반환하고,
+      // quadVisible로 EA 도메인과 겹치는 FD 삼각형을 걸러낸다.
+      const buildMesh = (w, h, vertexAt, quadVisible, sample) => {
+        const positions = new Float32Array(w * h * 2);
+        const zScales = new Float32Array(w * h);
+        const valid = new Uint8Array(w * h);
+        let v = 0;
+        for (let mj = 0; mj < h; mj++) {
+          for (let mi = 0; mi < w; mi++) {
+            const lonLat = vertexAt(mi, mj);
+            if (lonLat) {
+              const merc = maplibregl.MercatorCoordinate.fromLngLat({ lng: lonLat[0], lat: lonLat[1] }, 0);
+              positions[v * 2] = merc.x;
+              positions[v * 2 + 1] = merc.y;
+              zScales[v] = maplibregl.MercatorCoordinate.fromLngLat({ lng: lonLat[0], lat: lonLat[1] }, 1).z;
+              valid[v] = 1;
+            }
+            v++;
+          }
+        }
+        const buildIndices = (visible) => {
+          const indices = [];
+          for (let mj = 0; mj < h - 1; mj++) {
+            for (let mi = 0; mi < w - 1; mi++) {
+              const i0 = mj * w + mi;
+              if (!valid[i0] || !valid[i0 + 1] || !valid[i0 + w] || !valid[i0 + w + 1]) continue;
+              if (visible && !visible(mi, mj)) continue;
+              indices.push(i0, i0 + 1, i0 + w, i0 + 1, i0 + w + 1, i0 + w);
+            }
+          }
+          return new Uint32Array(indices);
+        };
+        const indexArray = buildIndices(quadVisible);
+        return {
+          w,
+          h,
+          sample,
+          frameData: null,
+          dirty: false,
+          cloudArray: new Float32Array(w * h * 4),
+          heightScratch: new Float32Array(w * h),
+          posBuffer: makeBuffer(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW),
+          zScaleBuffer: makeBuffer(gl.ARRAY_BUFFER, zScales, gl.STATIC_DRAW),
+          cloudBuffer: makeBuffer(gl.ARRAY_BUFFER, new Float32Array(w * h * 4), gl.DYNAMIC_DRAW),
+          indexBuffer: makeBuffer(gl.ELEMENT_ARRAY_BUFFER, indexArray, gl.STATIC_DRAW),
+          indexCount: indexArray.length,
+          buildIndices,
+          makeBuffer,
+        };
+      };
+
+      const eaMesh = buildMesh(
+        MESH_W,
+        MESH_H,
+        (mi, mj) =>
+          lccKmToLonLat(
+            SAT_GRID.xMinKm + mi * MESH_STEP * SAT_GRID.cellKm,
+            SAT_GRID.yMaxKm - mj * MESH_STEP * SAT_GRID.cellKm,
+          ),
+        null,
+        (frameData, mi, mj) => frameData[mj * MESH_STEP * SAT_GRID.width + mi * MESH_STEP],
+      );
+
+      // FD: 디스크 밖 정점 무효화 + EA 도메인 안쪽(여유 40km 겹침)은 EA 메쉬에 맡긴다
+      const fdInsideEa = new Uint8Array(FD_GRID.width * FD_GRID.height);
+      const fdMesh = buildMesh(
+        FD_GRID.width,
+        FD_GRID.height,
+        (mi, mj) => {
+          const lonLat = fdCellToLonLat(mi, mj);
+          if (!lonLat) return null;
+          const [xKm, yKm] = lonLatToLccKm(lonLat[0], lonLat[1]);
+          if (Math.abs(xKm) < 2999 - 40 && Math.abs(yKm) < 2599 - 40) {
+            fdInsideEa[mj * FD_GRID.width + mi] = 1;
+          }
+          return lonLat;
+        },
+        (mi, mj) => {
+          const i0 = mj * FD_GRID.width + mi;
+          return !(
+            fdInsideEa[i0] &&
+            fdInsideEa[i0 + 1] &&
+            fdInsideEa[i0 + FD_GRID.width] &&
+            fdInsideEa[i0 + FD_GRID.width + 1]
+          );
+        },
+        (frameData, mi, mj) => frameData[mj * FD_GRID.width + mi],
+      );
+
+      // EA 프레임이 없을 때(예: KMA 한도 초과)는 FD가 EA 영역까지 채우도록
+      // 제외 없는 전체 인덱스 버퍼를 따로 둔다.
+      const fdFullIndices = fdMesh.buildIndices(null);
+      fdMesh.indexBufferFull = fdMesh.makeBuffer(gl.ELEMENT_ARRAY_BUFFER, fdFullIndices, gl.STATIC_DRAW);
+      fdMesh.indexCountFull = fdFullIndices.length;
+
+      // 그리기 순서: FD(배경) → EA(정밀)
+      this.meshes = [fdMesh, eaMesh];
+      this.meshByArea = { ea: eaMesh, fd: fdMesh };
     },
 
-    setFrame(data) {
-      this.frameData = data;
-      this.dirty = true;
+    setFrame(area, data) {
+      const mesh = this.meshByArea?.[area];
+      if (!mesh) return;
+      mesh.frameData = data;
+      mesh.dirty = true;
       this.map?.triggerRepaint();
     },
 
@@ -251,70 +323,69 @@ const createCloudLayer = () => {
       if (this.convStartKm === startKm && this.convFullKm === fullKm) return;
       this.convStartKm = startKm;
       this.convFullKm = fullKm;
-      this.dirty = true;
+      for (const mesh of this.meshes ?? []) mesh.dirty = true;
       this.map?.triggerRepaint();
+    },
+
+    // DN → (강도, 고도 m, 음영, 대류) 변환: 메쉬별 셀 중심 샘플
+    convertMesh(gl, mesh) {
+      const { w, h, cloudArray: cloud, heightScratch: heights, frameData } = mesh;
+      let v = 0;
+      for (let mj = 0; mj < h; mj++) {
+        for (let mi = 0; mi < w; mi++) {
+          const dn = mesh.sample(frameData, mi, mj);
+          const btK = DN_TO_BT_KELVIN[Math.min(dn, 8191)];
+          const btC = Number.isNaN(btK) ? BT_TOP_C - 30 : btK - 273.15;
+          const intensity = Math.min(1, Math.max(0, (BT_CLEAR_C - btC) / (BT_CLEAR_C - BT_TOP_C)));
+          const heightKm = Math.min(MAX_CLOUD_KM, Math.max(0, (BT_CLEAR_C - btC) / LAPSE_C_PER_KM));
+          const conv = Math.min(
+            1,
+            Math.max(0, (heightKm - this.convStartKm) / (this.convFullKm - this.convStartKm)),
+          );
+          cloud[v * 4] = intensity;
+          cloud[v * 4 + 3] = conv;
+          heights[v] = heightKm * 1000;
+          v++;
+        }
+      }
+      // 고도 3x3 평균(스파이크 완화) + 북서 사면 밝게/남동 사면 어둡게 간이 음영
+      for (let mj = 0; mj < h; mj++) {
+        for (let mi = 0; mi < w; mi++) {
+          let sum = 0;
+          let count = 0;
+          for (let dj = -1; dj <= 1; dj++) {
+            const nj = mj + dj;
+            if (nj < 0 || nj >= h) continue;
+            for (let di = -1; di <= 1; di++) {
+              const ni = mi + di;
+              if (ni < 0 || ni >= w) continue;
+              sum += heights[nj * w + ni];
+              count++;
+            }
+          }
+          cloud[(mj * w + mi) * 4 + 1] = sum / count;
+        }
+      }
+      for (let mj = 0; mj < h; mj++) {
+        for (let mi = 0; mi < w; mi++) {
+          const idx = mj * w + mi;
+          const here = cloud[idx * 4 + 1];
+          const nw = cloud[(Math.max(0, mj - 1) * w + Math.max(0, mi - 1)) * 4 + 1];
+          const gradient = (here - nw) / 1000; // km per cell
+          cloud[idx * 4 + 2] = Math.min(1.12, Math.max(0.72, 1 + gradient * 0.06));
+        }
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, mesh.cloudBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, cloud);
+      mesh.dirty = false;
     },
 
     render(gl, renderArgs) {
       const projectionData = renderArgs?.defaultProjectionData;
-      if (!projectionData) return;
+      if (!projectionData || !this.meshes) return;
 
-      if (this.dirty && this.frameData) {
-        // DN → (강도, 고도 m, 대류): 셀 중심 샘플
-        const cloud = this.cloudArray;
-        if (!this.heightScratch) {
-          this.heightScratch = new Float32Array(MESH_W * MESH_H);
-        }
-        const heights = this.heightScratch;
-        let v = 0;
-        for (let mj = 0; mj < MESH_H; mj++) {
-          const row = mj * MESH_STEP * SAT_GRID.width;
-          for (let mi = 0; mi < MESH_W; mi++) {
-            const dn = this.frameData[row + mi * MESH_STEP];
-            const btK = DN_TO_BT_KELVIN[Math.min(dn, 8191)];
-            const btC = Number.isNaN(btK) ? BT_TOP_C - 30 : btK - 273.15;
-            const intensity = Math.min(1, Math.max(0, (BT_CLEAR_C - btC) / (BT_CLEAR_C - BT_TOP_C)));
-            const heightKm = Math.min(MAX_CLOUD_KM, Math.max(0, (BT_CLEAR_C - btC) / LAPSE_C_PER_KM));
-            const conv = Math.min(
-              1,
-              Math.max(0, (heightKm - this.convStartKm) / (this.convFullKm - this.convStartKm)),
-            );
-            cloud[v * 4] = intensity;
-            cloud[v * 4 + 3] = conv;
-            heights[v] = heightKm * 1000;
-            v++;
-          }
-        }
-        // 고도 3x3 평균(스파이크 완화) + 북서 사면 밝게/남동 사면 어둡게 간이 음영
-        for (let mj = 0; mj < MESH_H; mj++) {
-          for (let mi = 0; mi < MESH_W; mi++) {
-            let sum = 0;
-            let count = 0;
-            for (let dj = -1; dj <= 1; dj++) {
-              const nj = mj + dj;
-              if (nj < 0 || nj >= MESH_H) continue;
-              for (let di = -1; di <= 1; di++) {
-                const ni = mi + di;
-                if (ni < 0 || ni >= MESH_W) continue;
-                sum += heights[nj * MESH_W + ni];
-                count++;
-              }
-            }
-            cloud[(mj * MESH_W + mi) * 4 + 1] = sum / count;
-          }
-        }
-        for (let mj = 0; mj < MESH_H; mj++) {
-          for (let mi = 0; mi < MESH_W; mi++) {
-            const idx = mj * MESH_W + mi;
-            const here = cloud[idx * 4 + 1];
-            const nw = cloud[(Math.max(0, mj - 1) * MESH_W + Math.max(0, mi - 1)) * 4 + 1];
-            const gradient = (here - nw) / 1000; // km per cell
-            cloud[idx * 4 + 2] = Math.min(1.12, Math.max(0.72, 1 + gradient * 0.06));
-          }
-        }
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.cloudBuffer);
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, cloud);
-        this.dirty = false;
+      for (const mesh of this.meshes) {
+        if (mesh.dirty && mesh.frameData) this.convertMesh(gl, mesh);
       }
 
       const shader = this.getShader(gl, renderArgs.shaderData);
@@ -327,22 +398,28 @@ const createCloudLayer = () => {
       gl.uniform1f(shader.uExag, this.exaggeration);
       gl.uniform1f(shader.uConvOn, this.convHighlight ? 1 : 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);
-      gl.enableVertexAttribArray(shader.aPos);
-      gl.vertexAttribPointer(shader.aPos, 2, gl.FLOAT, false, 0, 0);
-      if (shader.aZScale >= 0) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.zScaleBuffer);
-        gl.enableVertexAttribArray(shader.aZScale);
-        gl.vertexAttribPointer(shader.aZScale, 1, gl.FLOAT, false, 0, 0);
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.cloudBuffer);
-      gl.enableVertexAttribArray(shader.aCloud);
-      gl.vertexAttribPointer(shader.aCloud, 4, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
-
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-      gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
+
+      const eaHasData = !!this.meshByArea.ea.frameData;
+      for (const mesh of this.meshes) {
+        if (!mesh.frameData) continue;
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuffer);
+        gl.enableVertexAttribArray(shader.aPos);
+        gl.vertexAttribPointer(shader.aPos, 2, gl.FLOAT, false, 0, 0);
+        if (shader.aZScale >= 0) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, mesh.zScaleBuffer);
+          gl.enableVertexAttribArray(shader.aZScale);
+          gl.vertexAttribPointer(shader.aZScale, 1, gl.FLOAT, false, 0, 0);
+        }
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.cloudBuffer);
+        gl.enableVertexAttribArray(shader.aCloud);
+        gl.vertexAttribPointer(shader.aCloud, 4, gl.FLOAT, false, 0, 0);
+        // EA 데이터가 없으면 FD가 EA 영역까지 전체를 그린다
+        const useFull = mesh.indexBufferFull && !eaHasData;
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, useFull ? mesh.indexBufferFull : mesh.indexBuffer);
+        gl.drawElements(gl.TRIANGLES, useFull ? mesh.indexCountFull : mesh.indexCount, gl.UNSIGNED_INT, 0);
+      }
     },
   };
   return layer;
@@ -360,7 +437,7 @@ function SatelliteView() {
   const [status, setStatus] = useState('최신 위성 자료 탐색 중…');
   const [exaggeration, setExaggeration] = useState(6);
   const [convHighlight, setConvHighlight] = useState(true);
-  const pendingFrameRef = useRef(null);
+  const pendingFramesRef = useRef({ ea: null, fd: null });
   const pendingConvRangeRef = useRef(SEASON_CONV_KM.summer);
   const exaggerationRef = useRef(6);
   const convHighlightRef = useRef(true);
@@ -406,9 +483,11 @@ function SatelliteView() {
       cloudLayerRef.current = layer;
       map.addLayer(layer);
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
-      if (pendingFrameRef.current) {
-        layer.setConvRange(...pendingConvRangeRef.current);
-        layer.setFrame(pendingFrameRef.current);
+      layer.setConvRange(...pendingConvRangeRef.current);
+      for (const area of ['ea', 'fd']) {
+        if (pendingFramesRef.current[area]) {
+          layer.setFrame(area, pendingFramesRef.current[area]);
+        }
       }
     });
 
@@ -485,23 +564,33 @@ function SatelliteView() {
     let active = true;
 
     (async () => {
-      try {
-        const frame = await fetchSatFrame(currentDate);
-        if (!active) return;
+      // EA(정밀)와 FD(전구 배경)를 병렬 로드 — 한쪽이 실패해도 나머지는 표시
+      const [ea, fd] = await Promise.allSettled([
+        fetchSatFrame(currentDate, 'ea'),
+        fetchSatFrame(currentDate, 'fd'),
+      ]);
+      if (!active) return;
+      const range = seasonalConvRange(currentDate);
+      pendingConvRangeRef.current = range;
+      cloudLayerRef.current?.setConvRange(...range);
+      for (const [area, result] of [['ea', ea], ['fd', fd]]) {
+        const data = result.status === 'fulfilled' ? result.value.data : null;
+        pendingFramesRef.current[area] = data;
+        cloudLayerRef.current?.setFrame(area, data);
+      }
+      if (ea.status === 'rejected' && fd.status === 'rejected') {
+        setStatus(ea.reason?.message ?? fd.reason?.message);
+      } else {
         setStatus(null);
-        const range = seasonalConvRange(currentDate);
-        pendingFrameRef.current = frame.data;
-        pendingConvRangeRef.current = range;
-        cloudLayerRef.current?.setConvRange(...range);
-        cloudLayerRef.current?.setFrame(frame.data);
-      } catch (error) {
-        if (active) setStatus(error.message);
       }
     })();
 
     // 인접 프레임 프리페치 (재생·스크럽 반응성)
     const nextDate = timeline[frameIndex + 1];
-    if (nextDate) fetchSatFrame(nextDate).catch(() => {});
+    if (nextDate) {
+      fetchSatFrame(nextDate, 'ea').catch(() => {});
+      fetchSatFrame(nextDate, 'fd').catch(() => {});
+    }
 
     return () => {
       active = false;
