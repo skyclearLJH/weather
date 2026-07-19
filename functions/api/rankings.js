@@ -17,7 +17,11 @@ const SELECTED_TIME_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const SELECTED_TIME_CACHE_MAX_STALE_AGE_MS = 6 * 60 * 60 * 1000;
 const CURRENT_CACHE_MAX_OBSERVED_AGE_MS = 8 * 60 * 1000;
 const PRECOMPUTED_CACHE_API_MAX_AGE_SECONDS = 60 * 60;
-const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_AGE_MS = 60 * 1000;
+// 15분 — 프런트가 65초마다 폴링하므로 이 값이 사실상 KMA 재계산 주기가 된다.
+// 60초였을 때는 탭 하나만 열려 있어도 매 폴링마다 지점별 재계산(최대 42콜)이
+// 돌아 장마철 KMA 일일 한도를 소진했다 (2026-07-19). 방송 직전 최신값이
+// 필요하면 수동 새로고침(_refresh)을 쓰면 된다.
+const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_AGE_MS = 15 * 60 * 1000;
 const PRECIPITATION_MAX_ONE_HOUR_CACHE_MAX_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const PRECIPITATION_MAX_ONE_HOUR_AGGREGATE_TTL_SECONDS = 3 * 24 * 60 * 60;
 const ASOS_DAILY_RN_60M_MAX_INDEX = 41;
