@@ -608,15 +608,32 @@ function SatelliteView() {
     };
   }, [timeline]);
 
-  // 재생: 전 구간(12시간)을 선택한 재생 길이에 맞춰 진행
+  // 재생: 전 구간(12시간)을 선택한 재생 길이에 맞춰 진행하고 마지막에서 멈춘다
   useEffect(() => {
     if (!isPlaying || timeline.length === 0) return undefined;
+    const last = timeline.length - 1;
     const intervalMs = Math.max(45, Math.round((playDurationSec * 1000) / timeline.length));
     playTimerRef.current = setInterval(() => {
-      setFrameIndex((previous) => (previous + 1) % timeline.length);
+      const next = Math.min(frameIndexRef.current + 1, last);
+      setFrameIndex(next);
+      if (next >= last) {
+        setIsPlaying(false);
+      }
     }, intervalMs);
     return () => clearInterval(playTimerRef.current);
   }, [isPlaying, timeline.length, playDurationSec]);
+
+  // 끝에서 다시 재생을 누르면 처음부터
+  const handlePlayToggle = useCallback(() => {
+    if (isPlaying) {
+      setIsPlaying(false);
+      return;
+    }
+    if (timeline.length > 0 && frameIndex >= timeline.length - 1) {
+      setFrameIndex(0);
+    }
+    setIsPlaying(true);
+  }, [frameIndex, isPlaying, timeline.length]);
 
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
@@ -727,7 +744,7 @@ function SatelliteView() {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => setIsPlaying((previous) => !previous)}
+            onClick={handlePlayToggle}
             className="flex h-12 w-12 shrink-0 -translate-x-1/2 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800"
             aria-label={isPlaying ? '일시정지' : '재생'}
           >
@@ -788,7 +805,7 @@ function SatelliteView() {
       <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
         <div className="flex items-center gap-2">
           <label className="flex h-10 items-center gap-2 rounded-full border border-white/25 bg-slate-900/55 px-3.5 text-sm font-semibold text-white backdrop-blur-sm">
-            입체 과장
+            입체 효과
             <input
               type="range"
               min={1}
