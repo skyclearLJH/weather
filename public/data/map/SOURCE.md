@@ -9,8 +9,8 @@
 
 These files are used only by the broadcast radar map and are loaded when broadcast mode opens.
 
-# East Asia land polygons (`ea-land-50m.geojson`)
+# World land polygons (`land-50m-world.geojson`)
 
 - Source: Natural Earth 1:50m `ne_50m_land` (public domain), via https://github.com/nvkelso/natural-earth-vector
-- Processing: clipped to lon 88–168 / lat 2–64 (GK2A EA domain coverage), coordinates rounded to 3 decimals, merged into a single MultiPolygon
-- Used by the satellite view (`?satellite=1`) for land/sea fill contrast
+- Processing: whole world (no clipping — the satellite full-disk view shows everything from India to the Pacific), coordinates rounded to 3 decimals, merged into a single MultiPolygon
+- Used by the satellite view (`?satellite=1`) for land fill and coastline outline

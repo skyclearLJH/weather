@@ -75,8 +75,8 @@ const MAP_STYLE = {
   },
   light: { anchor: 'map', position: [1.5, 90, 80] },
   sources: {
-    land: { type: 'geojson', data: '/data/map/ea-land-50m.geojson' },
-    coastline: { type: 'geojson', data: '/data/map/ea-coastline-50m.geojson' },
+    // 전 세계 육지 — FD 전구 디스크가 보여주는 모든 영역(인도·중앙아시아·호주 등)을 덮는다
+    land: { type: 'geojson', data: '/data/map/land-50m-world.geojson' },
     sido: { type: 'geojson', data: '/data/map/kr-sido-20260701.geojson' },
   },
   layers: [
@@ -89,10 +89,11 @@ const MAP_STYLE = {
       source: 'land',
       paint: { 'fill-color': '#2f3945' },
     },
+    // 해안선 = 같은 육지 폴리곤의 외곽선 (별도 해안선 파일과 어긋날 일이 없다)
     {
       id: 'coastline',
       type: 'line',
-      source: 'coastline',
+      source: 'land',
       paint: { 'line-color': '#7f9bb8', 'line-width': 1.3 },
     },
     {
