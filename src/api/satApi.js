@@ -103,11 +103,9 @@ const FD_RAT = 1.006739501; // (적도반경/극반경)^2
 const FD_SN_CONST = 1737122264; // H^2 - 적도반경^2 (km^2)
 const SCALE_16 = 65536;
 
-// GEOS 역투영: 다운샘플 셀 (col,row) 중심 → [lon, lat] 또는 null(디스크 밖)
-export const fdCellToLonLat = (col, row) => {
-  const srcCol = col * FD_GRID.factor + (FD_GRID.factor - 1) / 2;
-  const srcRow = row * FD_GRID.factor + (FD_GRID.factor - 1) / 2;
-  // 스캔각(라디안): line 0 = 북쪽(lfac 음수), col 0 = 서쪽
+// GEOS 역투영: FD 원본 픽셀 좌표 → [lon, lat] 또는 null(디스크 밖)
+// 스캔각: line 0 = 북쪽(lfac 음수), col 0 = 서쪽
+export const geosPixelToLonLat = (srcCol, srcRow) => {
   const x = ((srcCol - FD_COFF) * SCALE_16) / FD_CFAC * DEG;
   const y = ((srcRow - FD_LOFF) * SCALE_16) / FD_LFAC * DEG;
   const cosx = Math.cos(x);
@@ -126,6 +124,23 @@ export const fdCellToLonLat = (col, row) => {
   const lat = Math.atan((FD_RAT * s3) / sxy) / DEG;
   return [lon, lat];
 };
+
+export const fdCellToLonLat = (col, row) =>
+  geosPixelToLonLat(
+    col * FD_GRID.factor + (FD_GRID.factor - 1) / 2,
+    row * FD_GRID.factor + (FD_GRID.factor - 1) / 2,
+  );
+
+// --- 한반도 주변 정밀 크롭(KO) 격자 ---
+// FD 원본 2km에서 (1845,534)부터 1746x1065 픽셀을 3x3 블록최대(6km)로 잘라
+// 582x355로 제공. KMA EA(LCC 8km)를 대체 — 서버 KO_CROP과 반드시 일치해야 한다.
+export const KO_GRID = { width: 582, height: 355, col0: 1845, row0: 534, factor: 3 };
+
+export const koCellToLonLat = (col, row) =>
+  geosPixelToLonLat(
+    KO_GRID.col0 + col * KO_GRID.factor + (KO_GRID.factor - 1) / 2,
+    KO_GRID.row0 + row * KO_GRID.factor + (KO_GRID.factor - 1) / 2,
+  );
 
 // --- 시각 유틸 (관측 시각은 UTC 10분 단위) ---
 const pad2 = (v) => String(v).padStart(2, '0');
@@ -164,8 +179,12 @@ export const buildSatTimeline = (latestDate, hours = 12, stepMinutes = 10) => {
 const FRAME_CACHE = new Map();
 const FRAME_CACHE_LIMIT = 90;
 
-// 응답 매직: EA는 'GKIR', FD는 'GKFD'
-const FRAME_MAGIC = { ea: [0x47, 0x4b, 0x49, 0x52], fd: [0x47, 0x4b, 0x46, 0x44] };
+// 응답 매직: EA는 'GKIR', FD는 'GKFD', KO는 'GKKO'
+const FRAME_MAGIC = {
+  ea: [0x47, 0x4b, 0x49, 0x52],
+  fd: [0x47, 0x4b, 0x46, 0x44],
+  ko: [0x47, 0x4b, 0x4b, 0x4f],
+};
 
 export const fetchSatFrame = async (dateUtc, area = 'ea') => {
   const key = `${area}:${formatSatDateUtc(dateUtc)}`;
@@ -220,21 +239,17 @@ export const fetchSatFrame = async (dateUtc, area = 'ea') => {
 };
 
 // 최신 발표 시각 탐색: 지금부터 거꾸로 최대 12슬롯(2시간) 시도.
-// EA(KMA)가 한도 초과 등으로 죽어 있으면 FD(NOAA)로 폴백한다.
+// KO/FD는 같은 NOAA 원본 파일에서 나오므로 KO 하나만 탐색하면 된다.
 export const probeLatestSatDate = async () => {
-  let lastError = null;
-  for (const area of ['ea', 'fd']) {
-    // 원본 생성 지연(관측 후 수 분~십수 분)을 고려해 15분 전부터 시작
-    let candidate = floorToTenMinutesUtc(new Date(Date.now() - 15 * 60 * 1000));
-    for (let i = 0; i < 12; i++) {
-      try {
-        await fetchSatFrame(candidate, area);
-        return candidate;
-      } catch (error) {
-        lastError = error;
-        candidate = new Date(candidate.getTime() - 10 * 60 * 1000);
-      }
+  // 원본 생성 지연(관측 후 수 분~십수 분)을 고려해 15분 전부터 시작
+  let candidate = floorToTenMinutesUtc(new Date(Date.now() - 15 * 60 * 1000));
+  for (let i = 0; i < 12; i++) {
+    try {
+      await fetchSatFrame(candidate, 'ko');
+      return candidate;
+    } catch {
+      candidate = new Date(candidate.getTime() - 10 * 60 * 1000);
     }
   }
-  throw new Error(lastError?.status === 403 ? lastError.message : '최근 위성 자료를 찾지 못했습니다.');
+  throw new Error('최근 위성 자료를 찾지 못했습니다.');
 };

@@ -54,6 +54,13 @@ const FD_FACTOR = 11; // 1375의 약수 → 청크 단위 처리 가능, 출력 
 const FD_OUT = FD_SRC / FD_FACTOR;
 const FD_DATASET_HEADER_HINT = 6524;
 
+// 한반도 주변 정밀 크롭(area=ko): FD 원본 2km에서 lat 22~48N/lon 110~145E를
+// 덮는 픽셀 사각형을 3x3 블록최대(6km)로 잘라낸다. KMA EA(8km) 대체 —
+// 같은 NOAA 파일에서 나오므로 KMA 데이터 용량을 전혀 쓰지 않는다.
+const KO_CROP = { col0: 1845, row0: 534, srcW: 1746, srcH: 1065, factor: 3 };
+const KO_OUT_W = KO_CROP.srcW / KO_CROP.factor; // 582
+const KO_OUT_H = KO_CROP.srcH / KO_CROP.factor; // 355
+
 const inflateBytes = async (bytes) => {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -163,14 +170,15 @@ const walkFdChunkBtree = (buf, dv, addr, out) => {
   }
 };
 
-const handleFdRequest = async (context, date, isHistorical, edgeCache, cacheKey) => {
+const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cacheKey) => {
   const base =
     context.env?.GK2A_FD_UPSTREAM_BASE || 'https://noaa-gk2a-pds.s3.amazonaws.com/AMI/L1B/FD/';
   const upstream = `${base}${date.slice(0, 6)}/${date.slice(6, 8)}/${date.slice(8, 10)}/gk2a_ami_le1b_ir105_fd020ge_${date}.nc`;
 
   let originResponse;
   try {
-    originResponse = await fetch(upstream);
+    // fd/ko가 같은 원본을 쓰므로 원본 자체를 잠시 엣지 캐시해 다운로드를 공유
+    originResponse = await fetch(upstream, { cf: { cacheEverything: true, cacheTtl: 600 } });
   } catch (error) {
     return new Response(JSON.stringify({ error: `FD upstream fetch failed: ${error.message}` }), {
       status: 502,
@@ -204,41 +212,94 @@ const handleFdRequest = async (context, date, isHistorical, edgeCache, cacheKey)
   const chunks = [];
   walkFdChunkBtree(buf, dv, layout.btree, chunks);
 
-  // 청크별 inflate 후 11x11 블록 최대 DN 다운샘플 (DN 클수록 차가운 운정)
-  const out = new Uint16Array(FD_OUT * FD_OUT);
-  const per = FD_CHUNK / FD_FACTOR; // 125
-  for (const chunk of chunks) {
-    const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
-    if (raw.length !== FD_CHUNK * FD_CHUNK * 2) {
-      return new Response(JSON.stringify({ error: 'FD chunk size mismatch', got: raw.length }), {
-        status: 502,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-      });
+  let out;
+  let outW;
+  let outH;
+  let magic;
+  if (area === 'ko') {
+    // 크롭과 교차하는 청크(4개)만 inflate → 크롭 원본 조립 → 3x3 블록 최대
+    magic = [0x47, 0x4b, 0x4b, 0x4f]; // 'GKKO'
+    outW = KO_OUT_W;
+    outH = KO_OUT_H;
+    const { col0, row0, srcW, srcH, factor } = KO_CROP;
+    const cropRaw = new Uint16Array(srcW * srcH);
+    for (const chunk of chunks) {
+      if (chunk.row + FD_CHUNK <= row0 || chunk.row >= row0 + srcH) continue;
+      if (chunk.col + FD_CHUNK <= col0 || chunk.col >= col0 + srcW) continue;
+      const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
+      if (raw.length !== FD_CHUNK * FD_CHUNK * 2) {
+        return new Response(JSON.stringify({ error: 'FD chunk size mismatch', got: raw.length }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
+      }
+      const cdv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+      const rowStart = Math.max(chunk.row, row0);
+      const rowEnd = Math.min(chunk.row + FD_CHUNK, row0 + srcH);
+      const colStart = Math.max(chunk.col, col0);
+      const colEnd = Math.min(chunk.col + FD_CHUNK, col0 + srcW);
+      for (let r = rowStart; r < rowEnd; r++) {
+        const srcOff = ((r - chunk.row) * FD_CHUNK + (colStart - chunk.col)) * 2;
+        const dstOff = (r - row0) * srcW + (colStart - col0);
+        for (let i = 0; i < colEnd - colStart; i++) {
+          cropRaw[dstOff + i] = cdv.getUint16(srcOff + i * 2, true);
+        }
+      }
     }
-    const cdv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-    const outY0 = chunk.row / FD_FACTOR;
-    const outX0 = chunk.col / FD_FACTOR;
-    for (let oy = 0; oy < per; oy++) {
-      for (let ox = 0; ox < per; ox++) {
+    out = new Uint16Array(outW * outH);
+    for (let oy = 0; oy < outH; oy++) {
+      for (let ox = 0; ox < outW; ox++) {
         let max = 0;
-        for (let dy = 0; dy < FD_FACTOR; dy++) {
-          let idx = ((oy * FD_FACTOR + dy) * FD_CHUNK + ox * FD_FACTOR) * 2;
-          for (let dx = 0; dx < FD_FACTOR; dx++) {
-            const v = cdv.getUint16(idx, true);
+        for (let dy = 0; dy < factor; dy++) {
+          let idx = (oy * factor + dy) * srcW + ox * factor;
+          for (let dx = 0; dx < factor; dx++) {
+            const v = cropRaw[idx + dx];
             if (v <= 8191 && v > max) max = v;
-            idx += 2;
           }
         }
-        out[(outY0 + oy) * FD_OUT + outX0 + ox] = max;
+        out[oy * outW + ox] = max;
+      }
+    }
+  } else {
+    // 청크별 inflate 후 11x11 블록 최대 DN 다운샘플 (DN 클수록 차가운 운정)
+    magic = [0x47, 0x4b, 0x46, 0x44]; // 'GKFD'
+    outW = FD_OUT;
+    outH = FD_OUT;
+    out = new Uint16Array(FD_OUT * FD_OUT);
+    const per = FD_CHUNK / FD_FACTOR; // 125
+    for (const chunk of chunks) {
+      const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
+      if (raw.length !== FD_CHUNK * FD_CHUNK * 2) {
+        return new Response(JSON.stringify({ error: 'FD chunk size mismatch', got: raw.length }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
+      }
+      const cdv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+      const outY0 = chunk.row / FD_FACTOR;
+      const outX0 = chunk.col / FD_FACTOR;
+      for (let oy = 0; oy < per; oy++) {
+        for (let ox = 0; ox < per; ox++) {
+          let max = 0;
+          for (let dy = 0; dy < FD_FACTOR; dy++) {
+            let idx = ((oy * FD_FACTOR + dy) * FD_CHUNK + ox * FD_FACTOR) * 2;
+            for (let dx = 0; dx < FD_FACTOR; dx++) {
+              const v = cdv.getUint16(idx, true);
+              if (v <= 8191 && v > max) max = v;
+              idx += 2;
+            }
+          }
+          out[(outY0 + oy) * FD_OUT + outX0 + ox] = max;
+        }
       }
     }
   }
 
   const outBytes = new Uint8Array(8 + out.length * 2);
   const head = new DataView(outBytes.buffer);
-  outBytes[0] = 0x47; outBytes[1] = 0x4b; outBytes[2] = 0x46; outBytes[3] = 0x44; // 'GKFD'
-  head.setUint16(4, FD_OUT, true);
-  head.setUint16(6, FD_OUT, true);
+  outBytes[0] = magic[0]; outBytes[1] = magic[1]; outBytes[2] = magic[2]; outBytes[3] = magic[3];
+  head.setUint16(4, outW, true);
+  head.setUint16(6, outH, true);
   new Uint8Array(outBytes.buffer, 8).set(new Uint8Array(out.buffer));
 
   const headers = new Headers(corsHeaders);
@@ -266,7 +327,8 @@ export async function onRequestOptions() {
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   const date = url.searchParams.get('date') ?? '';
-  const area = url.searchParams.get('area') === 'fd' ? 'fd' : 'ea';
+  const areaParam = url.searchParams.get('area');
+  const area = areaParam === 'fd' || areaParam === 'ko' ? areaParam : 'ea';
   const timestamp = parseUtcDate(date);
 
   if (timestamp === null || timestamp % (10 * 60 * 1000) !== 0) {
@@ -287,8 +349,8 @@ export async function onRequestGet(context) {
     }
   }
 
-  if (area === 'fd') {
-    return handleFdRequest(context, date, isHistorical, edgeCache, cacheKey);
+  if (area === 'fd' || area === 'ko') {
+    return handleFdRequest(context, date, area, isHistorical, edgeCache, cacheKey);
   }
 
   const authKey = readAuthKey(context.env);

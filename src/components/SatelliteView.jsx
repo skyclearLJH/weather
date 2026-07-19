@@ -1,28 +1,24 @@
 // 방송모드 위성 영상 뷰 (작업 중 — main.jsx의 ?satellite=1 게이트로만 진입).
 //
-// 천리안2A(GK2A) IR105 동아시아 관측을 지도 위에 그리고, 휘도온도에서 유도한
-// 의사 운정고도로 구름을 3D 돌출(과장)시켜 표현한다. 지도를 눕히면(pitch)
-// 구름 높이가 입체로 보인다. 과거 12시간을 10분 간격으로 조회할 수 있다.
+// 천리안2A(GK2A) IR105 관측을 구면 지도 위에 그리고, 휘도온도에서 유도한
+// 의사 운정고도로 구름을 3D 돌출(과장)시켜 표현한다. 데이터는 NOAA 공개
+// 버킷의 FD 원본 하나에서 두 해상도로 뽑는다: 전구 22km(FD) 배경 + 한반도
+// 주변 6km(KO) 정밀. 과거 12시간을 10분 간격으로 조회할 수 있다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DN_TO_BT_KELVIN,
   FD_GRID,
-  SAT_GRID,
+  KO_GRID,
   buildSatTimeline,
   fdCellToLonLat,
   fetchSatFrame,
-  lccKmToLonLat,
-  lonLatToLccKm,
+  koCellToLonLat,
   probeLatestSatDate,
 } from '../api/satApi';
 import './SatelliteView.css';
 
-// 메쉬는 다운샘플 격자의 2칸 간격(16km) 정점으로 구성 — 12만 정점/24만 삼각형.
-const MESH_STEP = 2;
-const MESH_W = Math.floor(SAT_GRID.width / MESH_STEP);
-const MESH_H = Math.floor(SAT_GRID.height / MESH_STEP);
 const TIMELINE_HOURS = 12;
 const STEP_MINUTES = 10;
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
@@ -262,53 +258,44 @@ const createCloudLayer = () => {
         };
       };
 
-      const eaMesh = buildMesh(
-        MESH_W,
-        MESH_H,
-        (mi, mj) =>
-          lccKmToLonLat(
-            SAT_GRID.xMinKm + mi * MESH_STEP * SAT_GRID.cellKm,
-            SAT_GRID.yMaxKm - mj * MESH_STEP * SAT_GRID.cellKm,
-          ),
+      // KO: 한반도 주변 정밀 크롭 (FD와 같은 GEOS 격자, 6km)
+      const koMesh = buildMesh(
+        KO_GRID.width,
+        KO_GRID.height,
+        (mi, mj) => koCellToLonLat(mi, mj),
         null,
-        (frameData, mi, mj) => frameData[mj * MESH_STEP * SAT_GRID.width + mi * MESH_STEP],
+        (frameData, mi, mj) => frameData[mj * KO_GRID.width + mi],
       );
 
-      // FD: 디스크 밖 정점 무효화 + EA 도메인 안쪽(여유 40km 겹침)은 EA 메쉬에 맡긴다
-      const fdInsideEa = new Uint8Array(FD_GRID.width * FD_GRID.height);
+      // FD: 디스크 밖 정점 무효화 + KO 크롭 안쪽은 KO 메쉬에 맡긴다.
+      // 둘 다 FD 픽셀 좌표계라 사각형 비교면 충분 (여유 22px ≈ 44km 겹침).
+      const koColMin = KO_GRID.col0 + 22;
+      const koColMax = KO_GRID.col0 + KO_GRID.width * KO_GRID.factor - 22;
+      const koRowMin = KO_GRID.row0 + 22;
+      const koRowMax = KO_GRID.row0 + KO_GRID.height * KO_GRID.factor - 22;
+      const fdCenter = (FD_GRID.factor - 1) / 2;
+      const fdInsideKo = (mi, mj) => {
+        const srcCol = mi * FD_GRID.factor + fdCenter;
+        const srcRow = mj * FD_GRID.factor + fdCenter;
+        return srcCol >= koColMin && srcCol <= koColMax && srcRow >= koRowMin && srcRow <= koRowMax;
+      };
       const fdMesh = buildMesh(
         FD_GRID.width,
         FD_GRID.height,
-        (mi, mj) => {
-          const lonLat = fdCellToLonLat(mi, mj);
-          if (!lonLat) return null;
-          const [xKm, yKm] = lonLatToLccKm(lonLat[0], lonLat[1]);
-          if (Math.abs(xKm) < 2999 - 40 && Math.abs(yKm) < 2599 - 40) {
-            fdInsideEa[mj * FD_GRID.width + mi] = 1;
-          }
-          return lonLat;
-        },
-        (mi, mj) => {
-          const i0 = mj * FD_GRID.width + mi;
-          return !(
-            fdInsideEa[i0] &&
-            fdInsideEa[i0 + 1] &&
-            fdInsideEa[i0 + FD_GRID.width] &&
-            fdInsideEa[i0 + FD_GRID.width + 1]
-          );
-        },
+        (mi, mj) => fdCellToLonLat(mi, mj),
+        (mi, mj) =>
+          !(fdInsideKo(mi, mj) && fdInsideKo(mi + 1, mj) && fdInsideKo(mi, mj + 1) && fdInsideKo(mi + 1, mj + 1)),
         (frameData, mi, mj) => frameData[mj * FD_GRID.width + mi],
       );
 
-      // EA 프레임이 없을 때(예: KMA 한도 초과)는 FD가 EA 영역까지 채우도록
-      // 제외 없는 전체 인덱스 버퍼를 따로 둔다.
+      // KO 프레임이 없을 때는 FD가 크롭 영역까지 채우도록 전체 인덱스 버퍼를 따로 둔다.
       const fdFullIndices = fdMesh.buildIndices(null);
       fdMesh.indexBufferFull = fdMesh.makeBuffer(gl.ELEMENT_ARRAY_BUFFER, fdFullIndices, gl.STATIC_DRAW);
       fdMesh.indexCountFull = fdFullIndices.length;
 
-      // 그리기 순서: FD(배경) → EA(정밀)
-      this.meshes = [fdMesh, eaMesh];
-      this.meshByArea = { ea: eaMesh, fd: fdMesh };
+      // 그리기 순서: FD(배경) → KO(정밀)
+      this.meshes = [fdMesh, koMesh];
+      this.meshByArea = { ko: koMesh, fd: fdMesh };
     },
 
     setFrame(area, data) {
@@ -401,7 +388,7 @@ const createCloudLayer = () => {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-      const eaHasData = !!this.meshByArea.ea.frameData;
+      const koHasData = !!this.meshByArea.ko.frameData;
       for (const mesh of this.meshes) {
         if (!mesh.frameData) continue;
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuffer);
@@ -415,8 +402,8 @@ const createCloudLayer = () => {
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.cloudBuffer);
         gl.enableVertexAttribArray(shader.aCloud);
         gl.vertexAttribPointer(shader.aCloud, 4, gl.FLOAT, false, 0, 0);
-        // EA 데이터가 없으면 FD가 EA 영역까지 전체를 그린다
-        const useFull = mesh.indexBufferFull && !eaHasData;
+        // KO 데이터가 없으면 FD가 크롭 영역까지 전체를 그린다
+        const useFull = mesh.indexBufferFull && !koHasData;
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, useFull ? mesh.indexBufferFull : mesh.indexBuffer);
         gl.drawElements(gl.TRIANGLES, useFull ? mesh.indexCountFull : mesh.indexCount, gl.UNSIGNED_INT, 0);
       }
@@ -437,7 +424,7 @@ function SatelliteView() {
   const [status, setStatus] = useState('최신 위성 자료 탐색 중…');
   const [exaggeration, setExaggeration] = useState(6);
   const [convHighlight, setConvHighlight] = useState(true);
-  const pendingFramesRef = useRef({ ea: null, fd: null });
+  const pendingFramesRef = useRef({ ko: null, fd: null });
   const pendingConvRangeRef = useRef(SEASON_CONV_KM.summer);
   const exaggerationRef = useRef(6);
   const convHighlightRef = useRef(true);
@@ -484,7 +471,7 @@ function SatelliteView() {
       map.addLayer(layer);
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
       layer.setConvRange(...pendingConvRangeRef.current);
-      for (const area of ['ea', 'fd']) {
+      for (const area of ['ko', 'fd']) {
         if (pendingFramesRef.current[area]) {
           layer.setFrame(area, pendingFramesRef.current[area]);
         }
@@ -564,22 +551,22 @@ function SatelliteView() {
     let active = true;
 
     (async () => {
-      // EA(정밀)와 FD(전구 배경)를 병렬 로드 — 한쪽이 실패해도 나머지는 표시
-      const [ea, fd] = await Promise.allSettled([
-        fetchSatFrame(currentDate, 'ea'),
+      // KO(정밀)와 FD(전구 배경)를 병렬 로드 — 한쪽이 실패해도 나머지는 표시
+      const [ko, fd] = await Promise.allSettled([
+        fetchSatFrame(currentDate, 'ko'),
         fetchSatFrame(currentDate, 'fd'),
       ]);
       if (!active) return;
       const range = seasonalConvRange(currentDate);
       pendingConvRangeRef.current = range;
       cloudLayerRef.current?.setConvRange(...range);
-      for (const [area, result] of [['ea', ea], ['fd', fd]]) {
+      for (const [area, result] of [['ko', ko], ['fd', fd]]) {
         const data = result.status === 'fulfilled' ? result.value.data : null;
         pendingFramesRef.current[area] = data;
         cloudLayerRef.current?.setFrame(area, data);
       }
-      if (ea.status === 'rejected' && fd.status === 'rejected') {
-        setStatus(ea.reason?.message ?? fd.reason?.message);
+      if (ko.status === 'rejected' && fd.status === 'rejected') {
+        setStatus(ko.reason?.message ?? fd.reason?.message);
       } else {
         setStatus(null);
       }
@@ -588,7 +575,7 @@ function SatelliteView() {
     // 인접 프레임 프리페치 (재생·스크럽 반응성)
     const nextDate = timeline[frameIndex + 1];
     if (nextDate) {
-      fetchSatFrame(nextDate, 'ea').catch(() => {});
+      fetchSatFrame(nextDate, 'ko').catch(() => {});
       fetchSatFrame(nextDate, 'fd').catch(() => {});
     }
 
