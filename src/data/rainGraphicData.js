@@ -91,25 +91,6 @@ const CHUNGBUK_CENTRAL_NORTH = cities(
   '괴산군',
 );
 
-const CHUNGNAM_SOUTH = cities(
-  '충청남도',
-  '공주시',
-  '보령시',
-  '논산시',
-  '계룡시',
-  '금산군',
-  '부여군',
-  '서천군',
-  '청양군',
-);
-
-const CHUNGBUK_SOUTH = cities(
-  '충청북도',
-  '보은군',
-  '옥천군',
-  '영동군',
-);
-
 const GANGWON_CENTRAL_SOUTH_INLAND = cities(
   '강원특별자치도',
   '춘천시',
@@ -173,11 +154,9 @@ const GANGWON_NORTH_MOUNTAIN_EMD = {
   ],
 };
 
-const GANGWON_INLAND_AND_MOUNTAIN = mergeSelectors(
-  GANGWON_NORTH_INLAND,
+const GANGWON_CENTRAL_SOUTH_INLAND_AND_MOUNTAIN = mergeSelectors(
   GANGWON_CENTRAL_SOUTH_INLAND,
   cities('강원특별자치도', '태백시'),
-  GANGWON_NORTH_MOUNTAIN_EMD,
   GANGWON_CENTRAL_SOUTH_MOUNTAIN_EMD,
 );
 
@@ -292,14 +271,6 @@ const JEONBUK_NORTHWEST_COAST = cities(
   '전북특별자치도',
   '군산시',
   '김제시',
-);
-
-const JEONBUK_WEST_COAST = cities(
-  '전북특별자치도',
-  '군산시',
-  '김제시',
-  '고창군',
-  '부안군',
 );
 
 const WEST_SEA_FIVE_ISLANDS = {
@@ -628,61 +599,56 @@ export const RAIN_GRAPHICS = {
       {
         id: '20-60',
         color: '#58ade8',
-        selector: province('부산광역시', '울산광역시', '경상남도'),
+        selector: province(
+          '전남광주통합특별시',
+          '부산광역시',
+          '울산광역시',
+          '경상남도',
+        ),
       },
       {
         id: '30-80',
         color: '#2f87d1',
-        selector: province('전남광주통합특별시'),
+        selector: mergeSelectors(JEONBUK_EAST, WEST_SEA_FIVE_ISLANDS),
       },
       {
         id: '30-100',
         color: '#1768b8',
         selector: mergeSelectors(
-          province('전북특별자치도', '대구광역시'),
+          JEONBUK_WEST,
+          province('대구광역시'),
           GYEONGBUK_SOUTH,
           ULLEUNG_AND_DOKDO,
-          WEST_SEA_FIVE_ISLANDS,
         ),
       },
       {
         id: '50-100',
         color: '#214c9d',
-        selector: mergeSelectors(
-          province('대전광역시', '세종특별자치시', '충청남도', '충청북도'),
-          GYEONGBUK_CENTRAL_NORTH,
-        ),
+        selector: GYEONGBUK_CENTRAL_NORTH,
       },
       {
-        id: '80-150',
-        color: '#343b94',
-        selector: province('서울특별시', '인천광역시', '경기도'),
-      },
-      {
-        id: '100-150',
-        color: '#51318e',
+        id: '100-200',
+        color: '#63348e',
         selector: province('강원특별자치도'),
       },
       {
         id: '120-plus',
         color: '#214078',
-        selector: JEONBUK_WEST_COAST,
+        selector: JEONBUK_NORTHWEST_COAST,
         emphasis: true,
       },
       {
         id: '150-plus',
         color: '#4b348f',
         selector: mergeSelectors(
-          province('대전광역시'),
-          CHUNGNAM_SOUTH,
-          CHUNGBUK_SOUTH,
+          province('대전광역시', '세종특별자치시', '충청남도', '충청북도'),
           GYEONGBUK_NORTH,
         ),
         emphasis: true,
       },
       {
-        id: '200-plus',
-        color: '#6d2c88',
+        id: '250-plus',
+        color: '#85257f',
         selector: mergeSelectors(
           province('세종특별자치시'),
           CHUNGNAM_NORTH,
@@ -691,23 +657,25 @@ export const RAIN_GRAPHICS = {
         emphasis: true,
       },
       {
-        id: '250-plus',
+        id: '300-plus',
         color: '#54116e',
-        selector: GANGWON_INLAND_AND_MOUNTAIN,
+        selector: mergeSelectors(
+          province('서울특별시', '인천광역시', '경기도'),
+          GANGWON_CENTRAL_SOUTH_INLAND_AND_MOUNTAIN,
+        ),
         emphasis: true,
       },
     ],
     labels: [
-      { text: '80~150', lon: 126.2, lat: 37.68, color: '#343b94' },
-      { text: '100~150', lon: 129.38, lat: 37.72, color: '#51318e' },
-      { text: '250↑', lon: 127.65, lat: 37.25, color: '#54116e' },
-      { text: '200↑', lon: 126.55, lat: 36.72, color: '#6d2c88' },
-      { text: '150↑', lon: 126.18, lat: 36.05, color: '#4b348f' },
-      { text: '50~100', lon: 128.7, lat: 36.65, color: '#214c9d' },
-      { text: '30~100', lon: 128.6, lat: 35.65, color: '#1768b8' },
-      { text: '120↑', lon: 125.72, lat: 35.48, color: '#214078' },
-      { text: '30~80', lon: 126.65, lat: 34.72, color: '#2f87d1' },
-      { text: '20~60', lon: 128.25, lat: 34.72, color: '#58ade8' },
+      { text: '300↑', note: '(19일 밤부터)', lon: 127.25, lat: 37.72, color: '#54116e' },
+      { text: '100~200', lon: 129.38, lat: 37.72, color: '#63348e' },
+      { text: '250↑', lon: 126.52, lat: 36.72, color: '#85257f' },
+      { text: '150↑', lon: 127.2, lat: 36.1, color: '#4b348f' },
+      { text: '50~100', lon: 129.1, lat: 36.25, color: '#214c9d' },
+      { text: '30~100', lon: 128.62, lat: 35.55, color: '#1768b8' },
+      { text: '120↑', lon: 125.72, lat: 35.85, color: '#214078' },
+      { text: '30~80', lon: 126.9, lat: 35.32, color: '#2f87d1' },
+      { text: '20~60', lon: 127.78, lat: 34.62, color: '#58ade8' },
       { text: '5~30', lon: 127.18, lat: 33.35, color: '#9adcf1', darkText: true },
     ],
   },
