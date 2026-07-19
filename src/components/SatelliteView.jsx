@@ -22,6 +22,7 @@ import './SatelliteView.css';
 const TIMELINE_HOURS = 12;
 const STEP_MINUTES = 10;
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
+const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
 
 // 휘도온도(°C) → 표시 강도/의사 운정고도
 const BT_CLEAR_C = 15; // 이보다 따뜻하면 구름 없음 취급
@@ -54,7 +55,7 @@ const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 const formatKstLabel = (dateUtc) => {
   const kst = new Date(dateUtc.getTime() + KST_OFFSET_MS);
   return {
-    date: `${kst.getUTCMonth() + 1}월 ${kst.getUTCDate()}일 (${WEEKDAYS[kst.getUTCDay()]})`,
+    date: `${kst.getUTCMonth() + 1}/${kst.getUTCDate()} (${WEEKDAYS[kst.getUTCDay()]})`,
     clock: `${String(kst.getUTCHours()).padStart(2, '0')}:${String(kst.getUTCMinutes()).padStart(2, '0')}`,
   };
 };
@@ -424,6 +425,7 @@ function SatelliteView() {
   const [status, setStatus] = useState('최신 위성 자료 탐색 중…');
   const [exaggeration, setExaggeration] = useState(6);
   const [convHighlight, setConvHighlight] = useState(true);
+  const [playDurationSec, setPlayDurationSec] = useState(10);
   const pendingFramesRef = useRef({ ko: null, fd: null });
   const pendingConvRangeRef = useRef(SEASON_CONV_KM.summer);
   const exaggerationRef = useRef(6);
@@ -605,14 +607,15 @@ function SatelliteView() {
     };
   }, [timeline]);
 
-  // 재생
+  // 재생: 전 구간(12시간)을 선택한 재생 길이에 맞춰 진행
   useEffect(() => {
     if (!isPlaying || timeline.length === 0) return undefined;
+    const intervalMs = Math.max(45, Math.round((playDurationSec * 1000) / timeline.length));
     playTimerRef.current = setInterval(() => {
       setFrameIndex((previous) => (previous + 1) % timeline.length);
-    }, 450);
+    }, intervalMs);
     return () => clearInterval(playTimerRef.current);
-  }, [isPlaying, timeline.length]);
+  }, [isPlaying, timeline.length, playDurationSec]);
 
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
@@ -636,73 +639,187 @@ function SatelliteView() {
       }));
   }, [timeline]);
 
+  const maxIndex = Math.max(0, timeline.length - 1);
+  const progressPercent = maxIndex > 0 ? (frameIndex / maxIndex) * 100 : 0;
+  const thumbPercent = Math.min(Math.max(progressPercent, 6), 94);
+
   return (
     <div className="sat-view">
       <div ref={mapContainerRef} className="sat-map" />
 
-      <div className="sat-band">
-        <div className="sat-band-title">위성 영상</div>
-        {bandTime ? (
-          <div className="sat-band-time">
-            <span className="sat-band-date">{bandTime.date}</span>
-            <span className="sat-band-clock">{bandTime.clock}</span>
+      {/* 좌상단: 타이틀 밴드 — 레이더 방송모드와 동일 형태·위치 */}
+      <div
+        className="pointer-events-none absolute z-20 flex items-center gap-[1vw]"
+        style={{ left: '4.4%', top: '14%' }}
+      >
+        <div
+          className="relative flex items-center overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 shadow-2xl"
+          style={{
+            width: 'clamp(430px, 29vw, 700px)',
+            height: 'clamp(58px, 7.4vh, 96px)',
+            paddingLeft: '1.3vw',
+            paddingRight: '1.2vw',
+            gap: '1.1vw',
+          }}
+        >
+          <div className="relative flex flex-col leading-none text-white">
+            <span
+              className="font-black tracking-[0.18em]"
+              style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
+            >
+              KBS
+            </span>
+            <span
+              className="mt-[0.2em] font-bold tracking-[0.1em] text-white/80"
+              style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
+            >
+              WEATHER
+            </span>
+            <svg
+              viewBox="0 0 12 12"
+              className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-[#f4c542]"
+              aria-hidden="true"
+            >
+              <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
+            </svg>
           </div>
-        ) : null}
-        <div className="sat-band-note">천리안2A 적외 · 동아시아</div>
+          <span
+            className="whitespace-nowrap font-black tracking-tight text-white"
+            style={{
+              fontSize: 'clamp(26px, 2.1vw, 46px)',
+              textShadow: '0 2px 6px rgba(0,0,0,0.35)',
+            }}
+          >
+            위성 영상
+          </span>
+          {bandTime ? (
+            <div
+              className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap"
+              style={{ gap: '0.6vw' }}
+            >
+              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
+              <span
+                className="font-black leading-none tabular-nums text-white"
+                style={{
+                  fontSize: 'clamp(22px, 1.7vw, 38px)',
+                  textShadow: '0 2px 5px rgba(0,0,0,0.3)',
+                }}
+              >
+                {bandTime.clock}
+              </span>
+              <span
+                className="font-semibold text-[#bdd6fb]"
+                style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
+              >
+                {bandTime.date}
+              </span>
+            </div>
+          ) : null}
+          <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
+        </div>
       </div>
 
       {status ? <div className="sat-status">{status}</div> : null}
 
-      <div className="sat-controls">
-        <button
-          type="button"
-          className="sat-play-button"
-          onClick={() => setIsPlaying((previous) => !previous)}
-          aria-label={isPlaying ? '일시정지' : '재생'}
-        >
-          {isPlaying ? '❚❚' : '▶'}
-        </button>
-        <div className="sat-slider-wrap">
-          <input
-            type="range"
-            className="sat-slider"
-            min={0}
-            max={Math.max(0, timeline.length - 1)}
-            value={frameIndex}
-            onChange={handleSlider}
-          />
-          <div className="sat-ticks">
-            {ticks.map((tick) => (
-              <span key={tick.key}>
-                <span className="sat-tick" style={{ left: tick.left }} />
-                {tick.label ? (
-                  <span className="sat-tick-label" style={{ left: tick.left }}>
-                    {tick.label}
-                  </span>
-                ) : null}
-              </span>
-            ))}
+      {/* 하단 반투명 컨트롤바 — 레이더 방송모드와 동일 형태·위치 */}
+      <div className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setIsPlaying((previous) => !previous)}
+            className="flex h-12 w-12 shrink-0 -translate-x-1/2 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800"
+            aria-label={isPlaying ? '일시정지' : '재생'}
+          >
+            {isPlaying ? (
+              <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+                <rect x="3" y="2" width="3.5" height="12" rx="1" />
+                <rect x="9.5" y="2" width="3.5" height="12" rx="1" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+                <path d="M4.5 2.7a1 1 0 0 1 1.53-.85l8 5.3a1 1 0 0 1 0 1.7l-8 5.3a1 1 0 0 1-1.53-.85V2.7Z" />
+              </svg>
+            )}
+          </button>
+          <div className="relative min-w-0 flex-1 pt-8">
+            {bandTime ? (
+              <div
+                className="pointer-events-none absolute top-0"
+                style={{ left: `${thumbPercent}%` }}
+              >
+                <span className="inline-block -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-600 px-2.5 py-1 text-[11px] font-bold tabular-nums text-white shadow-sm">
+                  {bandTime.clock}
+                </span>
+              </div>
+            ) : null}
+            <input
+              type="range"
+              min={0}
+              max={maxIndex}
+              value={frameIndex}
+              onChange={handleSlider}
+              className="broadcast-radar-range relative z-10 h-2.5 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0]"
+              style={{
+                background: `linear-gradient(to right, #64748b ${progressPercent}%, #2563eb ${progressPercent}%)`,
+              }}
+            />
+            <div className="relative mt-1 h-9">
+              {ticks.map((tick) => (
+                <div
+                  key={tick.key}
+                  className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
+                  style={{ left: tick.left }}
+                >
+                  <div className={`w-px ${tick.label ? 'h-2 bg-white/60' : 'h-1.5 bg-white/35'}`} />
+                  {tick.label ? (
+                    <div className="mt-0.5 whitespace-nowrap text-center text-[10px] font-medium tabular-nums text-white/75">
+                      {tick.label}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-        <label className="sat-exag">
-          입체 과장
-          <input
-            type="range"
-            min={1}
-            max={20}
-            value={exaggeration}
-            onChange={(event) => setExaggeration(Number(event.target.value))}
-          />
-          ×{exaggeration}
-        </label>
-        <label className="sat-conv-toggle">
-          <input
-            type="checkbox"
-            checked={convHighlight}
-            onChange={(event) => setConvHighlight(event.target.checked)}
-          />
-          대류운 강조
-        </label>
+      </div>
+
+      {/* 우하단: 표시 옵션 + 재생 길이 — 레이더의 길이 선택과 동일 위치 */}
+      <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
+        <div className="flex items-center gap-2">
+          <label className="flex h-10 items-center gap-2 rounded-full border border-white/25 bg-slate-900/55 px-3.5 text-sm font-semibold text-white backdrop-blur-sm">
+            입체 과장
+            <input
+              type="range"
+              min={1}
+              max={20}
+              value={exaggeration}
+              onChange={(event) => setExaggeration(Number(event.target.value))}
+              className="w-24 accent-[#f4c542]"
+            />
+            <span className="w-8 text-right tabular-nums">×{exaggeration}</span>
+          </label>
+          <label className="flex h-10 cursor-pointer items-center gap-2 rounded-full border border-white/25 bg-slate-900/55 px-3.5 text-sm font-semibold text-white backdrop-blur-sm">
+            <input
+              type="checkbox"
+              checked={convHighlight}
+              onChange={(event) => setConvHighlight(event.target.checked)}
+              className="h-4 w-4 accent-[#f4c542]"
+            />
+            대류운 강조
+          </label>
+          <select
+            value={playDurationSec}
+            onChange={(event) => setPlayDurationSec(Number(event.target.value))}
+            className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
+            aria-label="재생 길이"
+          >
+            {BROADCAST_PLAY_DURATIONS.map((seconds) => (
+              <option key={seconds} value={seconds} className="text-slate-900">
+                {seconds}초
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {convHighlight ? (
