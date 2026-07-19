@@ -14,10 +14,7 @@ const MAP_BOUNDS = {
   maxLat: 38.85,
 };
 
-const EAST_SEA_ISLAND_MARKERS = [
-  { id: 'ulleungdo', lon: 130.88, lat: 37.5, radius: 7.5 },
-  { id: 'dokdo', lon: 131.8833, lat: 37.25, radius: 5.5 },
-];
+const DOKDO_MARKER = { lon: 131.8833, lat: 37.25, radius: 3.2 };
 
 const projectCoordinate = ([longitude, latitude]) => {
   const longitudeScale = Math.cos((36 * Math.PI) / 180);
@@ -104,27 +101,22 @@ const RainLabel = ({ label }) => {
   );
 };
 
-const RainIslandMarkers = ({ color }) => (
-  <g className="rain-graphic-island-markers">
-    {EAST_SEA_ISLAND_MARKERS.map((marker) => {
-      const [projectedX, projectedY] = projectCoordinate([marker.lon, marker.lat]);
-      const edgePadding = marker.radius + 4;
-      const x = Math.max(edgePadding, Math.min(MAP_WIDTH - edgePadding, projectedX));
-      const y = Math.max(edgePadding, Math.min(MAP_HEIGHT - edgePadding, projectedY));
+const RainDokdoMarker = ({ color }) => {
+  const [projectedX, projectedY] = projectCoordinate([DOKDO_MARKER.lon, DOKDO_MARKER.lat]);
+  const edgePadding = DOKDO_MARKER.radius + 4;
+  const x = Math.max(edgePadding, Math.min(MAP_WIDTH - edgePadding, projectedX));
+  const y = Math.max(edgePadding, Math.min(MAP_HEIGHT - edgePadding, projectedY));
 
-      return (
-        <circle
-          key={marker.id}
-          className="rain-graphic-island-marker"
-          cx={x}
-          cy={y}
-          r={marker.radius}
-          fill={color}
-        />
-      );
-    })}
-  </g>
-);
+  return (
+    <circle
+      className="rain-graphic-island-marker"
+      cx={x}
+      cy={y}
+      r={DOKDO_MARKER.radius}
+      fill={color}
+    />
+  );
+};
 
 const RainGraphicTitle = ({ period, title }) => {
   const canvasRef = useRef(null);
@@ -277,7 +269,7 @@ function RainGraphicView({ graphicId = DEFAULT_RAIN_GRAPHIC_ID }) {
                   ))}
                 </g>
 
-                <RainIslandMarkers color={eastSeaIslandColor} />
+                <RainDokdoMarker color={eastSeaIslandColor} />
               </g>
             </svg>
 
