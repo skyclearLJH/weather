@@ -14,6 +14,11 @@ const MAP_BOUNDS = {
   maxLat: 38.85,
 };
 
+const EAST_SEA_ISLAND_MARKERS = [
+  { id: 'ulleungdo', lon: 130.88, lat: 37.5, radius: 7.5 },
+  { id: 'dokdo', lon: 131.8833, lat: 37.25, radius: 5.5 },
+];
+
 const projectCoordinate = ([longitude, latitude]) => {
   const longitudeScale = Math.cos((36 * Math.PI) / 180);
   const geographicWidth = (MAP_BOUNDS.maxLon - MAP_BOUNDS.minLon) * longitudeScale;
@@ -99,6 +104,28 @@ const RainLabel = ({ label }) => {
   );
 };
 
+const RainIslandMarkers = ({ color }) => (
+  <g className="rain-graphic-island-markers">
+    {EAST_SEA_ISLAND_MARKERS.map((marker) => {
+      const [projectedX, projectedY] = projectCoordinate([marker.lon, marker.lat]);
+      const edgePadding = marker.radius + 4;
+      const x = Math.max(edgePadding, Math.min(MAP_WIDTH - edgePadding, projectedX));
+      const y = Math.max(edgePadding, Math.min(MAP_HEIGHT - edgePadding, projectedY));
+
+      return (
+        <circle
+          key={marker.id}
+          className="rain-graphic-island-marker"
+          cx={x}
+          cy={y}
+          r={marker.radius}
+          fill={color}
+        />
+      );
+    })}
+  </g>
+);
+
 const RainGraphicTitle = ({ period, title }) => {
   const canvasRef = useRef(null);
 
@@ -183,6 +210,20 @@ function RainGraphicView({ graphicId = DEFAULT_RAIN_GRAPHIC_ID }) {
     }));
   }, [graphic, mapData]);
 
+  const eastSeaIslandColor = useMemo(() => {
+    const ulleungFeature = mapData?.sgg.features.find(
+      (feature) => feature.properties.sggnm?.startsWith('울릉군'),
+    );
+    if (!ulleungFeature) return '#aab4bf';
+
+    return (
+      [...graphic.layers]
+        .reverse()
+        .find((layer) => matchesSelector(ulleungFeature, layer.selector, 'sgg'))
+        ?.color ?? '#aab4bf'
+    );
+  }, [graphic, mapData]);
+
   return (
     <main className="rain-graphic-canvas">
       <div className="rain-graphic-photo" />
@@ -235,6 +276,8 @@ function RainGraphicView({ graphicId = DEFAULT_RAIN_GRAPHIC_ID }) {
                     />
                   ))}
                 </g>
+
+                <RainIslandMarkers color={eastSeaIslandColor} />
               </g>
             </svg>
 

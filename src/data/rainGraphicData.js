@@ -576,7 +576,7 @@ export const RAIN_GRAPHICS = {
       { text: '20~60', lon: 128.62, lat: 36.2, color: '#1e75c9' },
       { text: '5~40', lon: 127.55, lat: 35.65, color: '#3e9bdd' },
       { text: '5~20', lon: 126.95, lat: 34.65, color: '#6dc0ea', darkText: true },
-      { text: '5~10', lon: 130.52, lat: 37.62, color: '#92d7ef', darkText: true },
+      { text: '5~10', lon: 129.9, lat: 37.62, color: '#92d7ef', darkText: true },
       { text: '5안팎', lon: 127.18, lat: 33.35, color: '#b9e6f4', darkText: true },
     ],
   },
