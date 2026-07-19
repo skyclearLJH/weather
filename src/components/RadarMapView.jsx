@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
+import SatelliteView from './SatelliteView.jsx';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
@@ -663,7 +664,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
-  const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'accum'
+  const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'accum' | 'satellite'
   const [accumDays, setAccumDays] = useState(1);
   const [accumHours, setAccumHours] = useState([]);
   const [accumIndex, setAccumIndex] = useState(0);
@@ -682,6 +683,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const accumWas3dRef = useRef(false);
   const accumPreviousPitchRef = useRef(0);
   const isAccumView = isBroadcast && broadcastView === 'accum';
+  const isSatelliteView = isBroadcast && broadcastView === 'satellite';
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
 
   const loadAccumAnchor = useCallback((hour) => {
@@ -2432,6 +2434,43 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     </div>
   );
 
+  // 방송모드 뷰 전환(레이더/강수량/위성) — 레이더·강수량 화면과 위성 화면 양쪽에서 쓴다
+  const broadcastViewPills = (
+    <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
+      {[
+        { id: 'radar', label: '레이더' },
+        { id: 'accum', label: '강수량' },
+        { id: 'satellite', label: '위성' },
+      ].map(({ id, label }) => {
+        const isActive = broadcastView === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => {
+              if (!isActive) {
+                setIsPlaying(false);
+                setBroadcastView(id);
+              }
+            }}
+            className={`h-10 rounded-lg px-4 text-sm font-black tracking-tight transition ${
+              isActive
+                ? id === 'accum'
+                  ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30'
+                  : id === 'satellite'
+                    ? 'bg-violet-400 text-slate-950 shadow-md shadow-violet-950/30'
+                    : 'bg-cyan-400 text-slate-950 shadow-md shadow-cyan-950/30'
+                : 'text-white/75 hover:bg-white/10 hover:text-white'
+            }`}
+            aria-pressed={isActive}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <section
       ref={sectionRef}
@@ -2506,7 +2545,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           </div>
         ) : null}
 
-        {isBroadcast ? (
+        {/* 위성 뷰: 자체 화면(fixed)이 지도를 덮고, 뷰 전환 버튼은 슬롯으로 넘겨 그대로 쓴다 */}
+        {isSatelliteView ? <SatelliteView menuSlot={broadcastViewPills} /> : null}
+
+        {isBroadcast && !isSatelliteView ? (
           <>
             {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}
             <div
@@ -2721,36 +2763,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             </div>
 
             <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
-              <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
-                {[
-                  { id: 'radar', label: '레이더 영상' },
-                  { id: 'accum', label: '누적 강수량' },
-                ].map(({ id, label }) => {
-                  const isActive = broadcastView === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => {
-                        if (!isActive) {
-                          setIsPlaying(false);
-                          setBroadcastView(id);
-                        }
-                      }}
-                      className={`h-10 rounded-lg px-4 text-sm font-black tracking-tight transition ${
-                        isActive
-                          ? id === 'accum'
-                            ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30'
-                            : 'bg-cyan-400 text-slate-950 shadow-md shadow-cyan-950/30'
-                          : 'text-white/75 hover:bg-white/10 hover:text-white'
-                      }`}
-                      aria-pressed={isActive}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
+              {broadcastViewPills}
               <div className="flex items-center gap-2">
                 {isAccumView ? (
                   <>

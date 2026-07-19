@@ -414,7 +414,8 @@ const createCloudLayer = () => {
   return layer;
 };
 
-function SatelliteView() {
+// menuSlot: 방송모드에서 뷰 전환 버튼(레이더/강수량/위성)을 우하단 그룹 위에 얹는다
+function SatelliteView({ menuSlot = null }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const cloudLayerRef = useRef(null);
@@ -801,8 +802,9 @@ function SatelliteView() {
         </div>
       </div>
 
-      {/* 우하단: 표시 옵션 + 재생 길이 — 레이더의 길이 선택과 동일 위치 */}
+      {/* 우하단: (방송모드) 뷰 전환 + 표시 옵션 + 재생 길이 — 레이더와 동일 위치 */}
       <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
+        {menuSlot}
         <div className="flex items-center gap-2">
           <label className="flex h-10 items-center gap-2 rounded-full border border-white/25 bg-slate-900/55 px-3.5 text-sm font-semibold text-white backdrop-blur-sm">
             입체 효과
