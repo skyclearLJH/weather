@@ -119,12 +119,12 @@
   align-items: center;
   justify-content: center;
   width: max-content;
-  padding: 3px 7px 5px;
-  border: 1.5px solid rgba(248, 251, 255, 0.88);
+  padding: 4px 9px 6px;
+  border: 1.75px solid rgba(248, 251, 255, 0.88);
   border-radius: 2px;
   color: #ffffff;
-  font-size: clamp(29px, 2.4vw, 46px);
-  font-weight: 900;
+  font-size: clamp(35px, 2.9vw, 55px);
+  font-weight: 950;
   line-height: 0.93;
   letter-spacing: 0;
   white-space: nowrap;
