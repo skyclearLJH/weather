@@ -2,8 +2,9 @@ name = "weathernow-precompute"
 main = "workers/weather-precompute.js"
 compatibility_date = "2026-05-22"
 
+# 15분 주기 — 3분 주기는 장마철에 KMA 일일 호출한도를 소진시켰다 (2026-07-19)
 [triggers]
-crons = ["*/3 * * * *"]
+crons = ["*/15 * * * *"]
 
 [[kv_namespaces]]
 binding = "WEATHER_CACHE"
