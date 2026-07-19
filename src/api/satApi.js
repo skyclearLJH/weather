@@ -241,10 +241,24 @@ export const fetchSatFrame = async (dateUtc, area = 'ea') => {
   return promise;
 };
 
-// 최신 발표 시각 탐색: 지금부터 거꾸로 최대 12슬롯(2시간) 시도.
-// KO/FD는 같은 NOAA 원본 파일에서 나오므로 KO 하나만 탐색하면 된다.
+// 최신 발표 시각 조회: 서버가 NOAA 목록만 읽어 즉시(수백 ms) 응답한다.
+// 실패하면 예전 방식(프레임을 하나씩 받아보는 순차 탐색)으로 폴백.
 export const probeLatestSatDate = async () => {
-  // 원본 생성 지연(관측 후 수 분~십수 분)을 고려해 15분 전부터 시작
+  try {
+    const response = await fetch('/api/gk2a-ir?latest=1', {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (response.ok) {
+      const { latest } = await response.json();
+      if (/^\d{12}$/.test(latest ?? '')) {
+        return parseSatDateUtc(latest);
+      }
+    }
+  } catch {
+    // 목록 조회 실패 시 폴백
+  }
+
+  // 폴백: 원본 생성 지연(~12분)을 고려해 15분 전부터 거꾸로 최대 12슬롯 시도
   let candidate = floorToTenMinutesUtc(new Date(Date.now() - 15 * 60 * 1000));
   for (let i = 0; i < 12; i++) {
     try {

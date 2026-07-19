@@ -307,15 +307,56 @@ const buildFrameOutputs = async (context, date) => {
   };
 };
 
+// 같은 아이솔레이트 안에서는 프레임 처리를 직렬화한다 — 35MB 원본을 동시에
+// 여러 개 들고 있으면 워커 메모리 한도(128MB)를 넘겨 요청이 통째로 죽는다.
+let processChain = Promise.resolve();
+
 const processFrame = (context, date) => {
   if (FD_PROCESS_IN_FLIGHT.has(date)) {
     return FD_PROCESS_IN_FLIGHT.get(date);
   }
-  const promise = buildFrameOutputs(context, date).finally(() => {
-    FD_PROCESS_IN_FLIGHT.delete(date);
-  });
+  const promise = processChain
+    .catch(() => {})
+    .then(() => buildFrameOutputs(context, date))
+    .finally(() => {
+      FD_PROCESS_IN_FLIGHT.delete(date);
+    });
   FD_PROCESS_IN_FLIGHT.set(date, promise);
+  processChain = promise.catch(() => {});
   return promise;
+};
+
+// 최신 관측 시각 조회: S3 목록(수 KB)만 읽으므로 프레임 탐색(35MB 다운로드
+// 반복)과 달리 수백 ms면 끝난다. 현재 시간대에 파일이 없으면 이전 시간대 확인.
+const handleLatestRequest = async () => {
+  const pad = (v) => String(v).padStart(2, '0');
+  let latest = null;
+  for (const offsetHours of [0, 1, 2]) {
+    const t = new Date(Date.now() - offsetHours * 60 * 60 * 1000);
+    const prefix = `AMI/L1B/FD/${t.getUTCFullYear()}${pad(t.getUTCMonth() + 1)}/${pad(t.getUTCDate())}/${pad(t.getUTCHours())}/gk2a_ami_le1b_ir105_fd020ge_`;
+    let xml;
+    try {
+      const response = await fetch(
+        `https://noaa-gk2a-pds.s3.amazonaws.com/?list-type=2&prefix=${encodeURIComponent(prefix)}`,
+      );
+      if (!response.ok) continue;
+      xml = await response.text();
+    } catch {
+      continue;
+    }
+    for (const match of xml.matchAll(/fd020ge_(\d{12})\.nc/g)) {
+      if (!latest || match[1] > latest) latest = match[1];
+    }
+    if (latest) break;
+  }
+  return new Response(JSON.stringify({ latest }), {
+    status: latest ? 200 : 404,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=30, s-maxage=30',
+    },
+  });
 };
 
 const buildFrameResponse = (outBytes, isHistorical) => {
@@ -378,6 +419,9 @@ export async function onRequestOptions() {
 
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
+  if (url.searchParams.has('latest')) {
+    return handleLatestRequest();
+  }
   const date = url.searchParams.get('date') ?? '';
   const areaParam = url.searchParams.get('area');
   const area = areaParam === 'fd' || areaParam === 'ko' ? areaParam : 'ea';
