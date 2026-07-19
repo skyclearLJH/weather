@@ -53,6 +53,21 @@ const GYEONGGI_SOUTHWEST = cities(
   '안성시',
 );
 
+const GYEONGGI_NORTH = cities(
+  '경기도',
+  '고양시',
+  '파주시',
+  '양주시',
+  '김포시',
+  '의정부시',
+  '포천시',
+  '동두천시',
+  '가평군',
+  '연천군',
+  '남양주시',
+  '구리시',
+);
+
 const CHUNGNAM_NORTH = cities(
   '충청남도',
   '천안시',
@@ -102,6 +117,58 @@ const GANGWON_CENTRAL_SOUTH_MOUNTAIN_EMD = {
     '32070360', // 삼척시 신기면
   ],
 };
+
+const GANGWON_NORTH_INLAND = cities(
+  '강원특별자치도',
+  '철원군',
+  '화천군',
+  '양구군',
+  '인제군',
+);
+
+const GANGWON_EAST_COAST = cities(
+  '강원특별자치도',
+  '고성군',
+  '속초시',
+  '양양군',
+  '강릉시',
+  '동해시',
+  '삼척시',
+);
+
+// KMA official mountain districts inside the northern coastal and inland cities.
+// Legal dongs 도문동·설악동 are contained in the 행정동 대포동 geometry.
+const GANGWON_NORTH_MOUNTAIN_EMD = {
+  emdCodes: [
+    '32060570', // 속초시 노학동
+    '32060600', // 속초시 대포동(도문동·설악동 포함)
+    '32580340', // 양구군 해안면
+    '32590320', // 인제군 북면
+    '32590330', // 인제군 기린면
+    '32590340', // 인제군 서화면
+    '32590350', // 인제군 상남면
+    '32600110', // 고성군 간성읍
+    '32610310', // 양양군 서면
+    '32610330', // 양양군 현북면
+    '32610350', // 양양군 강현면
+  ],
+};
+
+const GYEONGNAM_EXCEPT_SOUTH_COAST = cities(
+  '경상남도',
+  '진주시',
+  '김해시',
+  '밀양시',
+  '양산시',
+  '의령군',
+  '함안군',
+  '창녕군',
+  '하동군',
+  '산청군',
+  '함양군',
+  '거창군',
+  '합천군',
+);
 
 const GYEONGBUK_CENTRAL_NORTH = cities(
   '경상북도',
@@ -437,6 +504,82 @@ export const RAIN_GRAPHICS = {
       { text: '5~30', lon: 127.16, lat: 33.4, color: '#9adcf1', darkText: true },
     ],
   },
+  '20260719-21': {
+    title: '예상 강수량',
+    period: '(모레, mm)',
+    issuedAt: '2026-07-19',
+    layers: [
+      {
+        id: '5-around',
+        color: '#b9e6f4',
+        selector: province('제주특별자치도'),
+      },
+      {
+        id: '5-10',
+        color: '#92d7ef',
+        selector: ULLEUNG_AND_DOKDO,
+      },
+      {
+        id: '5-20',
+        color: '#6dc0ea',
+        selector: province('전남광주통합특별시'),
+      },
+      {
+        id: '5-40',
+        color: '#3e9bdd',
+        selector: mergeSelectors(
+          province('전북특별자치도', '울산광역시'),
+          GANGWON_EAST_COAST,
+          GYEONGNAM_EXCEPT_SOUTH_COAST,
+        ),
+      },
+      {
+        id: '20-60',
+        color: '#1e75c9',
+        selector: mergeSelectors(
+          province('대구광역시'),
+          GYEONGBUK_MAINLAND,
+        ),
+      },
+      {
+        id: '30-80',
+        color: '#0b4fa3',
+        selector: province(
+          '서울특별시',
+          '인천광역시',
+          '경기도',
+          '강원특별자치도',
+          '대전광역시',
+          '세종특별자치시',
+          '충청남도',
+          '충청북도',
+        ),
+      },
+      {
+        id: '100-plus',
+        color: '#312b78',
+        selector: mergeSelectors(GYEONGGI_NORTH, GANGWON_NORTH_INLAND),
+        emphasis: true,
+      },
+      {
+        id: 'gangwon-mountain-30-80',
+        color: '#0b4fa3',
+        selector: mergeSelectors(
+          GANGWON_NORTH_MOUNTAIN_EMD,
+          GANGWON_CENTRAL_SOUTH_MOUNTAIN_EMD,
+        ),
+      },
+    ],
+    labels: [
+      { text: '100↑', lon: 126.22, lat: 38.05, color: '#312b78' },
+      { text: '30~80', lon: 125.86, lat: 36.52, color: '#0b4fa3' },
+      { text: '20~60', lon: 129.68, lat: 36.2, color: '#1e75c9' },
+      { text: '5~40', lon: 129.76, lat: 35.12, color: '#3e9bdd' },
+      { text: '5~20', lon: 125.88, lat: 34.48, color: '#6dc0ea', darkText: true },
+      { text: '5~10', lon: 130.52, lat: 37.62, color: '#92d7ef', darkText: true },
+      { text: '5안팎', lon: 127.18, lat: 33.35, color: '#b9e6f4', darkText: true },
+    ],
+  },
 };
 
-export const DEFAULT_RAIN_GRAPHIC_ID = '20260717-18-19';
+export const DEFAULT_RAIN_GRAPHIC_ID = '20260719-21';
