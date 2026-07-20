@@ -46,6 +46,8 @@ const ACCUM_3D_SPATIAL_SMOOTHING =
 const ACCUM_3D_SMOOTHING_PASSES = 2;
 const ACCUM_3D_SMOOTHING_BLEND = 0.82;
 const ACCUM_3D_DEFAULT_PITCH = 55;
+const ISLAND_PILLAR_HEIGHT_SCALE = 0.55;
+const ISLAND_PILLAR_WIDTH_SCALE = 0.7;
 const MAX_ACCUM_API_FRAMES = 31;
 const SINGLE_PILLAR_ISLAND_STATION_IDS = new Set([
   '229', // 북격렬비도
@@ -1700,7 +1702,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             (station) =>
               (station.x - x) ** 2 + (station.y - y) ** 2 <= islandSuppressionRadius ** 2,
           );
-        const pushExtrusion = (value, x, y, cellHalfSize = halfCell) => {
+        const pushExtrusion = (
+          value,
+          x,
+          y,
+          cellHalfSize = halfCell,
+          heightScale = 1,
+        ) => {
           if (accumBucket(value) <= 0) {
             return;
           }
@@ -1712,7 +1720,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             type: 'Feature',
             properties: {
               value: Math.round(value * 10) / 10,
-              height: Math.min(130000, Math.max(1800, Math.pow(value, 0.68) * 2600)),
+              height:
+                Math.min(130000, Math.max(1800, Math.pow(value, 0.68) * 2600)) *
+                heightScale,
             },
             geometry: {
               type: 'Polygon',
@@ -1794,7 +1804,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
         // 작은 섬은 표면 메쉬에서 제외하고 기존 단일 관측 기둥으로 정확한 위치를 표시한다.
         islandStations.forEach(({ index, x, y }) => {
-          pushExtrusion(values[index], x, y, halfCell * 1.35);
+          pushExtrusion(
+            values[index],
+            x,
+            y,
+            halfCell * 1.35 * ISLAND_PILLAR_WIDTH_SCALE,
+            ISLAND_PILLAR_HEIGHT_SCALE,
+          );
         });
         extrusionSource?.setData({ type: 'FeatureCollection', features });
         const context = canvas.getContext('2d');
