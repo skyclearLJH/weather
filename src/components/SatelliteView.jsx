@@ -591,16 +591,42 @@ function SatelliteView({ menuSlot = null }) {
   // 타임라인 전 구간을 백그라운드에서 순차 프리페치 — 첫 재생부터 빈 프레임이
   // 없도록 한다. 프레임당 ko+fd를 함께 요청하고(서버가 원본 1회 다운로드로
   // 두 출력을 만들어 캐시), 한 프레임씩 순서대로 진행해 서버를 압박하지 않는다.
+  //
+  // 순서는 '현재 보고 있는 프레임에서 가까운 것부터'다. 서버는 미캐시 프레임을
+  // 한 아이솔레이트에서 직렬 처리(processChain)하므로, 항상 최신→과거 고정
+  // 순서로 프리페치하면 사용자가 과거 구간(예: 10~12시)으로 이동해도 그 프레임이
+  // 프리페치 대기열 맨 뒤에 걸려 수십 초씩 지연·타임아웃된다. 매 반복마다
+  // 현재 인덱스에 가장 가까운 미요청 프레임을 골라 요청하면, 사용자가 어디로
+  // 스크럽하든 그 주변부터 데워져 체감 지연이 사라진다.
   useEffect(() => {
     if (timeline.length === 0) return undefined;
     let active = true;
+    const requested = new Set();
+
+    const nearestUnfetchedIndex = () => {
+      const center = Math.min(Math.max(frameIndexRef.current, 0), timeline.length - 1);
+      let best = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < timeline.length; i++) {
+        if (requested.has(i)) continue;
+        const dist = Math.abs(i - center);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = i;
+        }
+      }
+      return best;
+    };
 
     (async () => {
-      // 최신 프레임 주변을 먼저, 그 다음 과거 순으로
-      const order = [...timeline].reverse();
-      for (const date of order) {
-        if (!active) return;
-        await Promise.allSettled([fetchSatFrame(date, 'ko'), fetchSatFrame(date, 'fd')]);
+      while (active) {
+        const index = nearestUnfetchedIndex();
+        if (index < 0) return; // 전 구간 프리페치 완료
+        requested.add(index);
+        await Promise.allSettled([
+          fetchSatFrame(timeline[index], 'ko'),
+          fetchSatFrame(timeline[index], 'fd'),
+        ]);
       }
     })();
 
