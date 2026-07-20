@@ -198,11 +198,23 @@ export const formatStationLabel = (station) => {
   const sigunToken = tokens[1] ?? '';
   const sigun = /(시|군)$/.test(sigunToken) ? sigunToken.replace(/(시|군)$/, '') : '';
   const isMetroCounty = isMetro && /군$/.test(sigunToken);
+  const normalizePlaceName = (value) =>
+    String(value ?? '')
+      .replace(/\([^)]*\)/g, '')
+      .replace(/\*/g, '')
+      .replace(/(특별자치시|특별시|광역시|시|군|구)$/, '')
+      .replace(/\s+/g, '');
   if (!sido) {
     return station.name;
   }
   if ((isMetro && !isMetroCounty) || !sigun) {
+    if (normalizePlaceName(station.name) === normalizePlaceName(sido)) {
+      return sido;
+    }
     return `${sido}(${station.name})`;
+  }
+  if (normalizePlaceName(station.name) === normalizePlaceName(sigun)) {
+    return `${sido} ${sigun}`;
   }
   return `${sido} ${sigun}(${station.name})`;
 };
