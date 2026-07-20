@@ -40,6 +40,10 @@ const OVERLAY_ALPHA = 208;
 const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
 const ACCUM_EXTRUSION_LAYER_ID = 'accum-extrusion-bars';
 const ACCUM_EXTRUSION_STRIDE = 2;
+const ACCUM_3D_SPATIAL_SMOOTHING =
+  import.meta.env.VITE_ACCUM_3D_SPATIAL_SMOOTHING !== 'off';
+const ACCUM_3D_SMOOTHING_PASSES = 2;
+const ACCUM_3D_SMOOTHING_BLEND = 0.82;
 const ACCUM_3D_DEFAULT_PITCH = 55;
 const MAX_ACCUM_API_FRAMES = 31;
 const SINGLE_PILLAR_ISLAND_STATION_IDS = new Set([
@@ -204,6 +208,59 @@ const isSinglePillarIslandStation = (station) => {
       tokens.every((token) => address.includes(token)),
     )
   );
+};
+
+// 유효 셀 밖으로 강수값이 번지지 않도록 마스크를 유지한 채 5-tap 가우시안 필터를 적용한다.
+const smoothMaskedAccumGrid = (source, width, height, passes) => {
+  const kernel = [1, 4, 6, 4, 1];
+  let current = source;
+
+  for (let pass = 0; pass < passes; pass++) {
+    const horizontal = new Float32Array(source.length).fill(-1);
+    const output = new Float32Array(source.length).fill(-1);
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x;
+        if (current[index] < 0) continue;
+        let weightedValue = 0;
+        let weightSum = 0;
+        for (let offset = -2; offset <= 2; offset++) {
+          const sampleX = x + offset;
+          if (sampleX < 0 || sampleX >= width) continue;
+          const value = current[y * width + sampleX];
+          if (value < 0) continue;
+          const weight = kernel[offset + 2];
+          weightedValue += value * weight;
+          weightSum += weight;
+        }
+        horizontal[index] = weightSum > 0 ? weightedValue / weightSum : current[index];
+      }
+    }
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x;
+        if (current[index] < 0) continue;
+        let weightedValue = 0;
+        let weightSum = 0;
+        for (let offset = -2; offset <= 2; offset++) {
+          const sampleY = y + offset;
+          if (sampleY < 0 || sampleY >= height) continue;
+          const value = horizontal[sampleY * width + x];
+          if (value < 0) continue;
+          const weight = kernel[offset + 2];
+          weightedValue += value * weight;
+          weightSum += weight;
+        }
+        output[index] = weightSum > 0 ? weightedValue / weightSum : horizontal[index];
+      }
+    }
+
+    current = output;
+  }
+
+  return current;
 };
 
 const OBS_HISTORY_HOURS = 6;
@@ -1664,21 +1721,44 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           });
         };
 
-        for (
-          let ly = Math.floor(ACCUM_EXTRUSION_STRIDE / 2);
-          ly < latticeH;
-          ly += ACCUM_EXTRUSION_STRIDE
-        ) {
-          for (
-            let lx = Math.floor(ACCUM_EXTRUSION_STRIDE / 2);
-            lx < latticeW;
-            lx += ACCUM_EXTRUSION_STRIDE
-          ) {
+        const sampleOffset = Math.floor(ACCUM_EXTRUSION_STRIDE / 2);
+        const sampleWidth = Math.ceil((latticeW - sampleOffset) / ACCUM_EXTRUSION_STRIDE);
+        const sampleHeight = Math.ceil((latticeH - sampleOffset) / ACCUM_EXTRUSION_STRIDE);
+        const rawGrid = new Float32Array(sampleWidth * sampleHeight).fill(-1);
+
+        for (let gridY = 0; gridY < sampleHeight; gridY++) {
+          const ly = sampleOffset + gridY * ACCUM_EXTRUSION_STRIDE;
+          if (ly >= latticeH) continue;
+          for (let gridX = 0; gridX < sampleWidth; gridX++) {
+            const lx = sampleOffset + gridX * ACCUM_EXTRUSION_STRIDE;
+            if (lx >= latticeW) continue;
             const node = ly * latticeW + lx;
-            if (nodeAlpha[node] === 0 || isNearSinglePillarIsland(lx, ly)) {
-              continue;
-            }
-            const value = interpolateNodeValue(node);
+            if (nodeAlpha[node] === 0 || isNearSinglePillarIsland(lx, ly)) continue;
+            rawGrid[gridY * sampleWidth + gridX] = interpolateNodeValue(node);
+          }
+        }
+
+        const displayGrid = ACCUM_3D_SPATIAL_SMOOTHING
+          ? smoothMaskedAccumGrid(
+              rawGrid,
+              sampleWidth,
+              sampleHeight,
+              ACCUM_3D_SMOOTHING_PASSES,
+            )
+          : rawGrid;
+
+        for (let gridY = 0; gridY < sampleHeight; gridY++) {
+          const ly = sampleOffset + gridY * ACCUM_EXTRUSION_STRIDE;
+          for (let gridX = 0; gridX < sampleWidth; gridX++) {
+            const lx = sampleOffset + gridX * ACCUM_EXTRUSION_STRIDE;
+            const index = gridY * sampleWidth + gridX;
+            const rawValue = rawGrid[index];
+            if (rawValue < 0) continue;
+            const smoothedValue = displayGrid[index];
+            const value = ACCUM_3D_SPATIAL_SMOOTHING
+              ? rawValue * (1 - ACCUM_3D_SMOOTHING_BLEND) +
+                smoothedValue * ACCUM_3D_SMOOTHING_BLEND
+              : rawValue;
             pushExtrusion(value, lx, ly);
           }
         }
