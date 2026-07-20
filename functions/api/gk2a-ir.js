@@ -359,6 +359,50 @@ const handleLatestRequest = async () => {
   });
 };
 
+// --- 접속 시 최근 프레임 엣지 캐시 프리워밍 ---
+// 위성 뷰를 열면 클라이언트가 먼저 `?latest=1`을 한 번 호출한다. 그 응답을 돌려준
+// 뒤(waitUntil, 백그라운드)에 '관측 30분을 갓 넘긴' 프레임들을 이 함수 자신에게
+// self-fetch로 요청해 엣지 캐시에 채워 둔다. 30분이 지난 프레임은 7일 엣지 캐시를
+// 받으므로 한 번 데우면 그 프레임의 12시간 수명 내내 유지된다. 이미 데워진 프레임은
+// 값싼 엣지 HIT라 재계산이 없다. 별도 크론/워커 없이 Pages 자동 배포로 반영된다.
+// 매 요청마다 돌지 않도록 아이솔레이트별로 최소 간격(WARM_THROTTLE_MS)을 둔다.
+const WARM_AGES_MINUTES = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130];
+const WARM_THROTTLE_MS = 4 * 60 * 1000;
+let lastWarmAt = 0;
+
+const warmRecentFrames = async (origin) => {
+  const floored = Math.floor(Date.now() / (10 * 60 * 1000)) * (10 * 60 * 1000);
+  const pad = (v) => String(v).padStart(2, '0');
+  for (const ageMin of WARM_AGES_MINUTES) {
+    const d = new Date(floored - ageMin * 60 * 1000);
+    const date =
+      `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}` +
+      `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`;
+    // ko 미스면 처리하면서 fd 엣지 캐시도 함께 채워지지만(handleFdRequest), 확실히
+    // 하도록 두 영역 모두 요청한다. 한 프레임씩 순차로 — 서버 처리를 몰아치지 않게.
+    for (const area of ['ko', 'fd']) {
+      try {
+        const response = await fetch(`${origin}/api/gk2a-ir?date=${date}&area=${area}`);
+        await response.arrayBuffer();
+      } catch {
+        // 개별 프레임 실패는 무시 — 다음 접속/다음 프레임에서 다시 시도된다
+      }
+    }
+  }
+};
+
+const maybeWarmRecentFrames = (context) => {
+  const now = Date.now();
+  if (now - lastWarmAt < WARM_THROTTLE_MS) {
+    return;
+  }
+  lastWarmAt = now;
+  const origin = new URL(context.request.url).origin;
+  if (context.waitUntil) {
+    context.waitUntil(warmRecentFrames(origin));
+  }
+};
+
 const buildFrameResponse = (outBytes, isHistorical) => {
   const headers = new Headers(corsHeaders);
   headers.set('Content-Type', 'application/octet-stream');
@@ -420,6 +464,8 @@ export async function onRequestOptions() {
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   if (url.searchParams.has('latest')) {
+    // 위성 뷰 진입 신호 — 응답과 별개로 최근 프레임을 백그라운드 프리워밍
+    maybeWarmRecentFrames(context);
     return handleLatestRequest();
   }
   const date = url.searchParams.get('date') ?? '';
