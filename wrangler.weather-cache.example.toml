@@ -3,8 +3,14 @@ main = "workers/weather-precompute.js"
 compatibility_date = "2026-05-22"
 
 # 15분 주기 — 3분 주기는 장마철에 KMA 일일 호출한도를 소진시켰다 (2026-07-19)
+# 이 크론은 랭킹·특보 KV 갱신과 위성(GK2A) 프레임 엣지 캐시 프리워밍을 함께 돈다.
 [triggers]
 crons = ["*/15 * * * *"]
+
+# 위성 프레임 프리워밍이 호출할 배포 오리진(기본값은 프로덕션 Pages 도메인).
+# 스테이징 등 다른 도메인을 데우려면 여기서 지정한다.
+[vars]
+SITE_ORIGIN = "https://weather-ljh.pages.dev"
 
 [[kv_namespaces]]
 binding = "WEATHER_CACHE"
