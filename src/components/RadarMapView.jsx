@@ -2946,7 +2946,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                       <div className="flex h-10 items-center rounded-full border border-amber-300/35 bg-slate-900/65 p-1 shadow-lg backdrop-blur-sm">
                         {[
                           { id: 'columns', label: '기둥형' },
-                          { id: 'surface', label: '표면형' },
+                          { id: 'surface', label: '곡면형' },
                         ].map(({ id, label }) => {
                           const isActive = accum3dStyle === id;
                           return (
