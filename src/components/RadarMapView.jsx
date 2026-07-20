@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
+import { createAccumSurfaceLayer } from './AccumSurfaceLayer.js';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
@@ -702,6 +703,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const transitionFromCanvasRef = useRef(null);
   const transitionToCanvasRef = useRef(null);
   const transitionAnimationRef = useRef(null);
+  const accumSurfaceLayerRef = useRef(null);
   const mappingsRef = useRef(null);
   const imageDataRef = useRef(null);
   const frameCacheRef = useRef(new Map());
@@ -729,6 +731,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [accumError, setAccumError] = useState('');
   const [accumTop5, setAccumTop5] = useState([]);
   const [accumDisplayMode, setAccumDisplayMode] = useState('flat'); // 'flat' | '3d'
+  const [accum3dStyle, setAccum3dStyle] = useState('columns'); // 'columns' | 'surface'
   const accumHourlyCacheRef = useRef(new Map()); // 정시 tm → Map<지점, RN_DAY>
   const accumHourlyPendingRef = useRef(new Map());
   const accumAnchorHoursRef = useRef([]); // API-backed frames; displayed hours are interpolated.
@@ -857,6 +860,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         'province-border',
       );
 
+      const accumSurfaceLayer = createAccumSurfaceLayer(ACCUM_PALETTE);
+      accumSurfaceLayerRef.current = accumSurfaceLayer;
+      map.addLayer(accumSurfaceLayer, 'province-border');
+
       map.addSource(ACCUM_EXTRUSION_SOURCE_ID, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -898,6 +905,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       }
       map.remove();
       mapRef.current = null;
+      accumSurfaceLayerRef.current = null;
       overlayCanvasRef.current = null;
       transitionFromCanvasRef.current = null;
       transitionToCanvasRef.current = null;
@@ -1725,6 +1733,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         const sampleWidth = Math.ceil((latticeW - sampleOffset) / ACCUM_EXTRUSION_STRIDE);
         const sampleHeight = Math.ceil((latticeH - sampleOffset) / ACCUM_EXTRUSION_STRIDE);
         const rawGrid = new Float32Array(sampleWidth * sampleHeight).fill(-1);
+        const validGrid = new Uint8Array(sampleWidth * sampleHeight);
 
         for (let gridY = 0; gridY < sampleHeight; gridY++) {
           const ly = sampleOffset + gridY * ACCUM_EXTRUSION_STRIDE;
@@ -1734,7 +1743,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             if (lx >= latticeW) continue;
             const node = ly * latticeW + lx;
             if (nodeAlpha[node] === 0 || isNearSinglePillarIsland(lx, ly)) continue;
-            rawGrid[gridY * sampleWidth + gridX] = interpolateNodeValue(node);
+            const gridIndex = gridY * sampleWidth + gridX;
+            validGrid[gridIndex] = 1;
+            rawGrid[gridIndex] = interpolateNodeValue(node);
           }
         }
 
@@ -1747,21 +1758,41 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             )
           : rawGrid;
 
-        for (let gridY = 0; gridY < sampleHeight; gridY++) {
-          const ly = sampleOffset + gridY * ACCUM_EXTRUSION_STRIDE;
-          for (let gridX = 0; gridX < sampleWidth; gridX++) {
-            const lx = sampleOffset + gridX * ACCUM_EXTRUSION_STRIDE;
-            const index = gridY * sampleWidth + gridX;
-            const rawValue = rawGrid[index];
-            if (rawValue < 0) continue;
-            const smoothedValue = displayGrid[index];
-            const value = ACCUM_3D_SPATIAL_SMOOTHING
-              ? rawValue * (1 - ACCUM_3D_SMOOTHING_BLEND) +
-                smoothedValue * ACCUM_3D_SMOOTHING_BLEND
-              : rawValue;
-            pushExtrusion(value, lx, ly);
+        const renderedGrid = new Float32Array(rawGrid.length).fill(-1);
+        for (let index = 0; index < rawGrid.length; index++) {
+          const rawValue = rawGrid[index];
+          if (rawValue < 0) continue;
+          renderedGrid[index] = ACCUM_3D_SPATIAL_SMOOTHING
+            ? rawValue * (1 - ACCUM_3D_SMOOTHING_BLEND) +
+              displayGrid[index] * ACCUM_3D_SMOOTHING_BLEND
+            : rawValue;
+        }
+
+        if (accum3dStyle === 'surface') {
+          accumSurfaceLayerRef.current?.setGrid({
+            width: sampleWidth,
+            height: sampleHeight,
+            values: renderedGrid,
+            valid: validGrid,
+            sampleOffset,
+            stride: ACCUM_EXTRUSION_STRIDE,
+            latticeWidth: latticeW,
+            latticeHeight: latticeH,
+            bounds: VIEW_BOUNDS,
+          });
+        } else {
+          accumSurfaceLayerRef.current?.clear();
+          for (let gridY = 0; gridY < sampleHeight; gridY++) {
+            const ly = sampleOffset + gridY * ACCUM_EXTRUSION_STRIDE;
+            for (let gridX = 0; gridX < sampleWidth; gridX++) {
+              const lx = sampleOffset + gridX * ACCUM_EXTRUSION_STRIDE;
+              const value = renderedGrid[gridY * sampleWidth + gridX];
+              if (value < 0) continue;
+              pushExtrusion(value, lx, ly);
+            }
           }
         }
+        // 작은 섬은 표면 메쉬에서 제외하고 기존 단일 관측 기둥으로 정확한 위치를 표시한다.
         islandStations.forEach(({ index, x, y }) => {
           pushExtrusion(values[index], x, y, halfCell * 1.35);
         });
@@ -1772,6 +1803,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         return;
       }
 
+      accumSurfaceLayerRef.current?.clear();
       extrusionSource?.setData({ type: 'FeatureCollection', features: [] });
       if (!accumCanvasRef.current) {
         accumCanvasRef.current = document.createElement('canvas');
@@ -1854,7 +1886,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       };
       transitionAnimationRef.current = requestAnimationFrame(dissolve);
     },
-    [accumDisplayMode, accumHours, refreshOverlaySource],
+    [accum3dStyle, accumDisplayMode, accumHours, refreshOverlaySource],
   );
 
   // 누적 뷰 진입/일수 변경 시 시간축과 자료를 구성한다.
@@ -2073,11 +2105,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   // 입체 누적 모드는 전용 기둥 레이어를 켜고 방송 화면에 맞는 각도로 자동 기울인다.
   useEffect(() => {
     const show3d = isAccumView && accumDisplayMode === '3d';
+    const showSurface = show3d && accum3dStyle === 'surface';
     const applyMode = () => {
       const map = mapRef.current;
       if (!map) {
         return;
       }
+      accumSurfaceLayerRef.current?.setVisible(showSurface);
       if (map.getLayer(ACCUM_EXTRUSION_LAYER_ID)) {
         map.setLayoutProperty(
           ACCUM_EXTRUSION_LAYER_ID,
@@ -2101,7 +2135,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     applyMode();
     const timer = window.setTimeout(applyMode, 350);
     return () => window.clearTimeout(timer);
-  }, [accumDisplayMode, isAccumView]);
+  }, [accum3dStyle, accumDisplayMode, isAccumView]);
 
   const currentAccumHour = accumHours[accumIndex] ?? null;
   const accumThumbPercent =
@@ -2892,6 +2926,36 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                         );
                       })}
                     </div>
+                    {accumDisplayMode === '3d' ? (
+                      <div className="flex h-10 items-center rounded-full border border-amber-300/35 bg-slate-900/65 p-1 shadow-lg backdrop-blur-sm">
+                        {[
+                          { id: 'columns', label: '기둥형' },
+                          { id: 'surface', label: '표면형' },
+                        ].map(({ id, label }) => {
+                          const isActive = accum3dStyle === id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => {
+                                if (!isActive) {
+                                  setIsPlaying(false);
+                                  setAccum3dStyle(id);
+                                }
+                              }}
+                              className={`h-8 rounded-full px-3 text-xs font-black transition ${
+                                isActive
+                                  ? 'bg-cyan-300 text-slate-950 shadow-sm'
+                                  : 'text-white/65 hover:text-white'
+                              }`}
+                              aria-pressed={isActive}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </>
                 ) : null}
                 <select
