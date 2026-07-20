@@ -54,12 +54,14 @@ const FD_FACTOR = 11; // 1375의 약수 → 청크 단위 처리 가능, 출력 
 const FD_OUT = FD_SRC / FD_FACTOR;
 const FD_DATASET_HEADER_HINT = 6524;
 
-// 한반도 주변 정밀 크롭(area=ko): FD 원본 2km에서 lat 22~48N/lon 110~145E를
-// 덮는 픽셀 사각형을 3x3 블록최대(6km)로 잘라낸다. KMA EA(8km) 대체 —
+// 동아시아 정밀 크롭(area=ko): FD 원본 2km에서 대략 lon 95~168E / lat 5~55N
+// (기상청 EA 섹터 상당)을 덮는 GEOS 픽셀 사각형을 2x2 블록최대(4km)로 잘라낸다.
 // 같은 NOAA 파일에서 나오므로 KMA 데이터 용량을 전혀 쓰지 않는다.
-const KO_CROP = { col0: 1845, row0: 534, srcW: 1746, srcH: 1065, factor: 3 };
-const KO_OUT_W = KO_CROP.srcW / KO_CROP.factor; // 582
-const KO_OUT_H = KO_CROP.srcH / KO_CROP.factor; // 355
+// 클라이언트는 이 격자를 3D 높이 메쉬가 아니라 텍스처로 입혀 렌더하므로(정점 수와
+// 분리) 1809x1066 해상도도 가볍게 그린다. satApi.js의 KO_GRID와 반드시 일치해야 함.
+const KO_CROP = { col0: 1071, row0: 354, srcW: 3618, srcH: 2132, factor: 2 };
+const KO_OUT_W = KO_CROP.srcW / KO_CROP.factor; // 1809
+const KO_OUT_H = KO_CROP.srcH / KO_CROP.factor; // 1066
 
 const inflateBytes = async (bytes) => {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));

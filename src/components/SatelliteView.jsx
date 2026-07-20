@@ -105,6 +105,11 @@ const MAP_STYLE = {
   ],
 };
 
+// KO(동아시아) 3D 높이 메쉬는 데이터 해상도(1809x1066)와 분리해 성기게 만든다.
+// STEP=4 → 453x267 정점(약 12만). 구름 '이미지'는 풀해상도 DN 텍스처를 프래그먼트
+// 셰이더에서 샘플해 선명하게 그리고, 3D 돌출(높이)만 이 성긴 메쉬가 담당한다.
+const KO_MESH_STEP = 4;
+
 // --- 커스텀 3D 구름 레이어 ---
 const createCloudLayer = () => {
   const layer = {
@@ -119,6 +124,9 @@ const createCloudLayer = () => {
     // 구면(globe)/메르카토르 투영별 셰이더 — MapLibre가 주입하는 projectTile* 프렐류드 사용.
     // globe 변형은 elevation을 미터로 받고(GLOBE_RADIUS로 나눔), 메르카토르 변형은
     // 행렬이 메르카토르 z 단위를 기대하므로 aZScale(위도별 m→merc 변환)을 곱한다.
+    // 색(강도)은 uUseTexture일 때 풀해상도 DN 텍스처(uEaTex)를 4탭 이중선형 샘플 →
+    // DN→강도 LUT(uLut)로 매핑해 프래그먼트마다 선명하게 계산한다. 고도·음영·대류는
+    // 성긴 메쉬의 정점 보간값을 쓴다(3D 릴리프는 성겨도 됨). FD는 uUseTexture=0.
     getShader(gl, shaderDescription) {
       if (this.shaderMap.has(shaderDescription.variantName)) {
         return this.shaderMap.get(shaderDescription.variantName);
@@ -129,14 +137,17 @@ const createCloudLayer = () => {
         in vec2 aPos;
         in float aZScale;
         in vec4 aCloud; // x: 강도 0..1, y: 고도(m), z: 음영 계수, w: 대류 0..1
+        in vec2 aTexCoord;
         uniform float uExag;
-        out float vT;
+        out float vTv;
         out float vShade;
         out float vConv;
+        out vec2 vTexCoord;
         void main() {
-          vT = aCloud.x;
+          vTv = aCloud.x;
           vShade = aCloud.z;
           vConv = aCloud.w;
+          vTexCoord = aTexCoord;
           #ifdef GLOBE
             float elevation = aCloud.y * uExag;
           #else
@@ -146,13 +157,38 @@ const createCloudLayer = () => {
           gl_Position = projectTileWithElevation(aPos, elevation);
         }`;
       const fragmentSource = `#version 300 es
-        precision mediump float;
-        in float vT;
+        precision highp float;
+        in float vTv;
         in float vShade;
         in float vConv;
+        in vec2 vTexCoord;
         uniform float uConvOn;
+        uniform float uUseTexture;
+        uniform highp usampler2D uEaTex; // 풀해상도 DN (R16UI)
+        uniform sampler2D uLut;          // DN→강도 LUT (8192x1, R8)
         out vec4 fragColor;
+        float lutIntensity(int dn) {
+          return texelFetch(uLut, ivec2(clamp(dn, 0, 8191), 0), 0).r;
+        }
         void main() {
+          float vT;
+          if (uUseTexture > 0.5) {
+            // 풀해상도 DN을 4탭 이중선형으로 → LUT 강도. 텍셀보다 촘촘히 확대돼도 부드럽다.
+            vec2 ts = vec2(textureSize(uEaTex, 0));
+            vec2 p = vTexCoord * ts - 0.5;
+            vec2 f = fract(p);
+            ivec2 b = ivec2(floor(p));
+            ivec2 mx = ivec2(ts) - 1;
+            int d00 = int(texelFetch(uEaTex, clamp(b, ivec2(0), mx), 0).r);
+            int d10 = int(texelFetch(uEaTex, clamp(b + ivec2(1, 0), ivec2(0), mx), 0).r);
+            int d01 = int(texelFetch(uEaTex, clamp(b + ivec2(0, 1), ivec2(0), mx), 0).r);
+            int d11 = int(texelFetch(uEaTex, clamp(b + ivec2(1, 1), ivec2(0), mx), 0).r);
+            float i0 = mix(lutIntensity(d00), lutIntensity(d10), f.x);
+            float i1 = mix(lutIntensity(d01), lutIntensity(d11), f.x);
+            vT = mix(i0, i1, f.y);
+          } else {
+            vT = vTv;
+          }
           // 반투명: 전운량이어도 지도가 비치도록 최대 알파를 낮게 유지
           float alpha = smoothstep(0.02, 0.30, vT) * mix(0.34, 0.72, vT);
           vec3 low = vec3(0.58, 0.65, 0.76);
@@ -188,8 +224,12 @@ const createCloudLayer = () => {
         aPos: gl.getAttribLocation(program, 'aPos'),
         aZScale: gl.getAttribLocation(program, 'aZScale'),
         aCloud: gl.getAttribLocation(program, 'aCloud'),
+        aTexCoord: gl.getAttribLocation(program, 'aTexCoord'),
         uExag: gl.getUniformLocation(program, 'uExag'),
         uConvOn: gl.getUniformLocation(program, 'uConvOn'),
+        uUseTexture: gl.getUniformLocation(program, 'uUseTexture'),
+        uEaTex: gl.getUniformLocation(program, 'uEaTex'),
+        uLut: gl.getUniformLocation(program, 'uLut'),
         uProjMatrix: gl.getUniformLocation(program, 'u_projection_matrix'),
         uFallbackMatrix: gl.getUniformLocation(program, 'u_projection_fallback_matrix'),
         uTileMercatorCoords: gl.getUniformLocation(program, 'u_projection_tile_mercator_coords'),
@@ -208,12 +248,29 @@ const createCloudLayer = () => {
         gl.bufferData(target, data, usage);
         return buffer;
       };
-      // 정점 위치(메르카토르)/고도 스케일/인덱스는 고정 — 메쉬별로 한 번만 계산.
-      // vertexAt(mi,mj)이 [lon,lat] 또는 null(무효 정점)을 반환하고,
-      // quadVisible로 EA 도메인과 겹치는 FD 삼각형을 걸러낸다.
-      const buildMesh = (w, h, vertexAt, quadVisible, sample) => {
+
+      // DN(0..8191) → 강도(0..1) LUT를 R8 텍스처로 한 번만 만든다. float64 정밀 계산.
+      const lutBytes = new Uint8Array(8192);
+      for (let dn = 0; dn < 8192; dn++) {
+        const btK = DN_TO_BT_KELVIN[dn];
+        const btC = Number.isNaN(btK) ? BT_TOP_C - 30 : btK - 273.15;
+        const intensity = Math.min(1, Math.max(0, (BT_CLEAR_C - btC) / (BT_CLEAR_C - BT_TOP_C)));
+        lutBytes[dn] = Math.round(intensity * 255);
+      }
+      this.lutTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 8192, 1, 0, gl.RED, gl.UNSIGNED_BYTE, lutBytes);
+
+      // 정점 위치(메르카토르)/고도 스케일/텍스처좌표/인덱스는 고정 — 메쉬별로 한 번만 계산.
+      // vertexAt(mi,mj)이 [lon,lat] 또는 null(무효 정점), texCoordAt이 [u,v]를 반환.
+      const buildMesh = (w, h, vertexAt, quadVisible, sample, texCoordAt) => {
         const positions = new Float32Array(w * h * 2);
         const zScales = new Float32Array(w * h);
+        const texCoords = new Float32Array(w * h * 2);
         const valid = new Uint8Array(w * h);
         let v = 0;
         for (let mj = 0; mj < h; mj++) {
@@ -226,6 +283,9 @@ const createCloudLayer = () => {
               zScales[v] = maplibregl.MercatorCoordinate.fromLngLat({ lng: lonLat[0], lat: lonLat[1] }, 1).z;
               valid[v] = 1;
             }
+            const uv = texCoordAt ? texCoordAt(mi, mj) : [0, 0];
+            texCoords[v * 2] = uv[0];
+            texCoords[v * 2 + 1] = uv[1];
             v++;
           }
         }
@@ -246,12 +306,17 @@ const createCloudLayer = () => {
           w,
           h,
           sample,
+          textured: false,
+          dataTex: null,
+          dataW: 0,
+          dataH: 0,
           frameData: null,
           dirty: false,
           cloudArray: new Float32Array(w * h * 4),
           heightScratch: new Float32Array(w * h),
           posBuffer: makeBuffer(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW),
           zScaleBuffer: makeBuffer(gl.ARRAY_BUFFER, zScales, gl.STATIC_DRAW),
+          texCoordBuffer: makeBuffer(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW),
           cloudBuffer: makeBuffer(gl.ARRAY_BUFFER, new Float32Array(w * h * 4), gl.DYNAMIC_DRAW),
           indexBuffer: makeBuffer(gl.ELEMENT_ARRAY_BUFFER, indexArray, gl.STATIC_DRAW),
           indexCount: indexArray.length,
@@ -260,14 +325,31 @@ const createCloudLayer = () => {
         };
       };
 
-      // KO: 한반도 주변 정밀 크롭 (FD와 같은 GEOS 격자, 6km)
+      // KO: 동아시아 정밀. 데이터는 1809x1066(4km)이지만 높이 메쉬는 STEP=4로 성기게.
+      // texCoord는 각 성긴 정점을 풀해상도 텍스처의 해당 위치로 매핑한다.
+      const KW = KO_GRID.width;
+      const KH = KO_GRID.height;
+      const koMeshW = Math.floor((KW - 1) / KO_MESH_STEP) + 1;
+      const koMeshH = Math.floor((KH - 1) / KO_MESH_STEP) + 1;
+      const koDataCol = (mi) => Math.min(mi * KO_MESH_STEP, KW - 1);
+      const koDataRow = (mj) => Math.min(mj * KO_MESH_STEP, KH - 1);
       const koMesh = buildMesh(
-        KO_GRID.width,
-        KO_GRID.height,
-        (mi, mj) => koCellToLonLat(mi, mj),
+        koMeshW,
+        koMeshH,
+        (mi, mj) => koCellToLonLat(koDataCol(mi), koDataRow(mj)),
         null,
-        (frameData, mi, mj) => frameData[mj * KO_GRID.width + mi],
+        (frameData, mi, mj) => frameData[koDataRow(mj) * KW + koDataCol(mi)],
+        (mi, mj) => [(koDataCol(mi) + 0.5) / KW, (koDataRow(mj) + 0.5) / KH],
       );
+      koMesh.textured = true;
+      koMesh.dataW = KW;
+      koMesh.dataH = KH;
+      koMesh.dataTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, koMesh.dataTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
       // FD: 디스크 밖 정점 무효화 + KO 크롭 안쪽은 KO 메쉬에 맡긴다.
       // 둘 다 FD 픽셀 좌표계라 사각형 비교면 충분 (여유 22px ≈ 44km 겹침).
@@ -288,6 +370,7 @@ const createCloudLayer = () => {
         (mi, mj) =>
           !(fdInsideKo(mi, mj) && fdInsideKo(mi + 1, mj) && fdInsideKo(mi, mj + 1) && fdInsideKo(mi + 1, mj + 1)),
         (frameData, mi, mj) => frameData[mj * FD_GRID.width + mi],
+        null,
       );
 
       // KO 프레임이 없을 때는 FD가 크롭 영역까지 채우도록 전체 인덱스 버퍼를 따로 둔다.
@@ -316,9 +399,20 @@ const createCloudLayer = () => {
       this.map?.triggerRepaint();
     },
 
-    // DN → (강도, 고도 m, 음영, 대류) 변환: 메쉬별 셀 중심 샘플
+    // DN → (강도, 고도 m, 음영, 대류) 변환: 메쉬별 셀 중심 샘플.
+    // 텍스처 메쉬(KO)는 강도(x)를 프래그먼트에서 텍스처로 계산하므로 정점 강도는 안 쓰지만,
+    // 고도(y)·음영(z)·대류(w)는 여기서 채운다. 또 풀해상도 DN을 GPU 텍스처로 올린다.
     convertMesh(gl, mesh) {
       const { w, h, cloudArray: cloud, heightScratch: heights, frameData } = mesh;
+      if (mesh.textured && mesh.dataTex) {
+        gl.bindTexture(gl.TEXTURE_2D, mesh.dataTex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+        gl.texImage2D(
+          gl.TEXTURE_2D, 0, gl.R16UI, mesh.dataW, mesh.dataH, 0,
+          gl.RED_INTEGER, gl.UNSIGNED_SHORT, frameData,
+        );
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      }
       let v = 0;
       for (let mj = 0; mj < h; mj++) {
         for (let mi = 0; mi < w; mi++) {
@@ -387,12 +481,22 @@ const createCloudLayer = () => {
       gl.uniform1f(shader.uExag, this.exaggeration);
       gl.uniform1f(shader.uConvOn, this.convHighlight ? 1 : 0);
 
+      // LUT는 유닛1, KO 풀해상도 DN 텍스처는 유닛0에 고정 바인딩.
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
+      gl.uniform1i(shader.uLut, 1);
+      const koTex = this.meshByArea.ko.dataTex;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, koTex ?? this.lutTex);
+      gl.uniform1i(shader.uEaTex, 0);
+
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
       const koHasData = !!this.meshByArea.ko.frameData;
       for (const mesh of this.meshes) {
         if (!mesh.frameData) continue;
+        gl.uniform1f(shader.uUseTexture, mesh.textured ? 1 : 0);
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuffer);
         gl.enableVertexAttribArray(shader.aPos);
         gl.vertexAttribPointer(shader.aPos, 2, gl.FLOAT, false, 0, 0);
@@ -404,6 +508,11 @@ const createCloudLayer = () => {
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.cloudBuffer);
         gl.enableVertexAttribArray(shader.aCloud);
         gl.vertexAttribPointer(shader.aCloud, 4, gl.FLOAT, false, 0, 0);
+        if (shader.aTexCoord >= 0) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, mesh.texCoordBuffer);
+          gl.enableVertexAttribArray(shader.aTexCoord);
+          gl.vertexAttribPointer(shader.aTexCoord, 2, gl.FLOAT, false, 0, 0);
+        }
         // KO 데이터가 없으면 FD가 크롭 영역까지 전체를 그린다
         const useFull = mesh.indexBufferFull && !koHasData;
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, useFull ? mesh.indexBufferFull : mesh.indexBuffer);

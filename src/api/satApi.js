@@ -131,10 +131,12 @@ export const fdCellToLonLat = (col, row) =>
     row * FD_GRID.factor + (FD_GRID.factor - 1) / 2,
   );
 
-// --- 한반도 주변 정밀 크롭(KO) 격자 ---
-// FD 원본 2km에서 (1845,534)부터 1746x1065 픽셀을 3x3 블록최대(6km)로 잘라
-// 582x355로 제공. KMA EA(LCC 8km)를 대체 — 서버 KO_CROP과 반드시 일치해야 한다.
-export const KO_GRID = { width: 582, height: 355, col0: 1845, row0: 534, factor: 3 };
+// --- 동아시아 정밀 크롭(KO) 격자 ---
+// FD 원본 2km에서 (1071,354)부터 3618x2132 픽셀을 2x2 블록최대(4km)로 잘라
+// 1809x1066으로 제공 (대략 lon 95~168E / lat 5~55N, 기상청 EA 섹터 상당).
+// 서버 gk2a-ir.js의 KO_CROP과 반드시 일치. 클라이언트는 이 격자를 3D 메쉬가
+// 아니라 텍스처로 입혀 렌더하므로(정점 수와 분리) 고해상도도 가볍게 그린다.
+export const KO_GRID = { width: 1809, height: 1066, col0: 1071, row0: 354, factor: 2 };
 
 export const koCellToLonLat = (col, row) =>
   geosPixelToLonLat(
