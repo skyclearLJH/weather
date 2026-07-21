@@ -33,6 +33,11 @@ import {
   formatStationLabel,
   selectAccumTopStations,
 } from '../api/accumApi';
+import {
+  buildKimRainFrames,
+  fetchKimRainFrame,
+  fetchLatestKimRainMeta,
+} from '../api/kimApi';
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
@@ -563,12 +568,45 @@ const buildPixelMappings = (width, height) => {
   return { radarMap, qpfMap };
 };
 
+// KIM 3 km 격자는 (126E, 38N) 원점 좌표가 x0/y0로 주어지며 y축은 북쪽으로 증가한다.
+const buildKimPixelMapping = (width, height, meta) => {
+  const { lonMin, lonMax, latMin, latMax } = VIEW_BOUNDS;
+  const yTop = mercatorY(latMax);
+  const yBottom = mercatorY(latMin);
+  const mapping = new Int32Array(width * height).fill(-1);
+  const sinTheta = new Float64Array(width);
+  const cosTheta = new Float64Array(width);
+
+  for (let px = 0; px < width; px += 1) {
+    const lon = lonMin + ((px + 0.5) / width) * (lonMax - lonMin);
+    const theta = lccTheta(lon);
+    sinTheta[px] = Math.sin(theta);
+    cosTheta[px] = Math.cos(theta);
+  }
+
+  for (let py = 0; py < height; py += 1) {
+    const lat = mercatorYToLat(yTop - ((py + 0.5) / height) * (yTop - yBottom));
+    const rho = lccRhoKm(lat);
+    for (let px = 0; px < width; px += 1) {
+      const xKm = rho * sinTheta[px];
+      const yKm = LCC_RHO0_KM - rho * cosTheta[px];
+      const gridX = Math.round(xKm / meta.gridKm + meta.originX);
+      const gridY = Math.round(yKm / meta.gridKm + meta.originY);
+      if (gridX >= 0 && gridX < meta.width && gridY >= 0 && gridY < meta.height) {
+        mapping[py * width + px] = gridY * meta.width + gridX;
+      }
+    }
+  }
+  return mapping;
+};
+
 const OBS_TIMELINE_RANGE_MINUTES = 360;
 const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 맞춘 자동 갱신
 
 // --- 방송모드 ---
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
 const BROADCAST_CACHE_LIMIT = 130; // 전 구간 재생을 위해 모든 프레임을 캐시
+const MAX_KIM_LEAD_HOURS = 72;
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 
 // 기본(포털) 초기 화면: 남한 전체. 방송모드: 서해 상 접근 강수까지 보이는 광역 구도.
@@ -707,9 +745,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const transitionAnimationRef = useRef(null);
   const accumSurfaceLayerRef = useRef(null);
   const mappingsRef = useRef(null);
+  const kimMappingRef = useRef(null);
   const imageDataRef = useRef(null);
   const frameCacheRef = useRef(new Map());
   const pendingRef = useRef(new Map());
+  const kimCacheRef = useRef(new Map());
+  const kimPendingRef = useRef(new Map());
+  const kimMetaRef = useRef(null);
+  const kimFramesRef = useRef([]);
   const renderTokenRef = useRef(0);
   const [frames, setFrames] = useState([]);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -725,7 +768,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
-  const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'accum' | 'satellite'
+  const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'kim' | 'accum' | 'satellite'
+  const [kimMeta, setKimMeta] = useState(null);
+  const [kimFrames, setKimFrames] = useState([]);
+  const [kimIndex, setKimIndex] = useState(0);
+  const [kimStatus, setKimStatus] = useState('idle'); // idle | loading | ready | error
+  const [kimError, setKimError] = useState('');
+  const [kimRefreshTick, setKimRefreshTick] = useState(0);
+  const [kimPlayIntervalMs, setKimPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
   const [accumDays, setAccumDays] = useState(1);
   const [accumHours, setAccumHours] = useState([]);
   const [accumIndex, setAccumIndex] = useState(0);
@@ -745,6 +795,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const accumWas3dRef = useRef(false);
   const accumPreviousPitchRef = useRef(0);
   const isAccumView = isBroadcast && broadcastView === 'accum';
+  const isKimView = isBroadcast && broadcastView === 'kim';
   const isSatelliteView = isBroadcast && broadcastView === 'satellite';
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
 
@@ -778,6 +829,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [manualRefreshTick, setManualRefreshTick] = useState(0);
   const lastRefreshTokenRef = useRef(refreshToken);
   const lastManualRefreshTickRef = useRef(0);
+  const lastKimRefreshTickRef = useRef(0);
   const lastBuildSignatureRef = useRef('');
   const framesRef = useRef([]);
   const frameIndexRef = useRef(0);
@@ -956,7 +1008,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       }
       const imageData = imageDataRef.current;
       const pixels = imageData.data;
-      const dataMap = frame.kind === 'obs' ? mappings.radarMap : mappings.qpfMap;
+      const dataMap =
+        frame.kind === 'obs'
+          ? mappings.radarMap
+          : frame.kind === 'kim'
+            ? kimMappingRef.current
+            : mappings.qpfMap;
+      if (!dataMap) {
+        return;
+      }
       const { buckets } = frame;
 
       for (let index = 0; index < dataMap.length; index++) {
@@ -1071,6 +1131,92 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     pending.set(frameDef.key, promise);
     return promise;
   }, [isBroadcast, rememberFrameBuckets]);
+
+  const rememberKimBuckets = useCallback((key, buckets) => {
+    const cache = kimCacheRef.current;
+    if (cache.has(key)) cache.delete(key);
+    cache.set(key, buckets);
+    while (cache.size > 72) {
+      cache.delete(cache.keys().next().value);
+    }
+  }, []);
+
+  const loadKimFrameData = useCallback(
+    (frameDef) => {
+      const cache = kimCacheRef.current;
+      if (cache.has(frameDef.key)) {
+        const buckets = cache.get(frameDef.key);
+        cache.delete(frameDef.key);
+        cache.set(frameDef.key, buckets);
+        return Promise.resolve(buckets);
+      }
+      if (kimPendingRef.current.has(frameDef.key)) {
+        return kimPendingRef.current.get(frameDef.key);
+      }
+      const request = fetchKimRainFrame(frameDef.baseTime, frameDef.leadHour)
+        .then((data) => {
+          rememberKimBuckets(frameDef.key, data.buckets);
+          return data.buckets;
+        })
+        .finally(() => kimPendingRef.current.delete(frameDef.key));
+      kimPendingRef.current.set(frameDef.key, request);
+      return request;
+    },
+    [rememberKimBuckets],
+  );
+
+  // 완성된 최신 KIM 주기(+1~+72시간)를 선택하고 첫 표출 프레임을 준비한다.
+  useEffect(() => {
+    if (!isKimView) return undefined;
+    let isActive = true;
+    const isManualRefresh = kimRefreshTick !== lastKimRefreshTickRef.current;
+    lastKimRefreshTickRef.current = kimRefreshTick;
+
+    const initializeKim = async () => {
+      setIsPlaying(false);
+      if (
+        !isManualRefresh &&
+        kimMetaRef.current &&
+        kimFramesRef.current.length === MAX_KIM_LEAD_HOURS &&
+        kimMappingRef.current
+      ) {
+        setKimStatus('ready');
+        return;
+      }
+      setKimStatus('loading');
+      setKimError('');
+      if (isManualRefresh) {
+        kimCacheRef.current.clear();
+        kimPendingRef.current.clear();
+      }
+      try {
+        const meta = await fetchLatestKimRainMeta({ refresh: isManualRefresh });
+        const nextFrames = buildKimRainFrames(meta);
+        const nowMs = Date.now();
+        let nextIndex = nextFrames.findIndex((frame) => frame.validTime?.getTime() >= nowMs);
+        if (nextIndex < 0) nextIndex = nextFrames.length - 1;
+        kimMappingRef.current = buildKimPixelMapping(CANVAS_WIDTH, canvasHeight, meta);
+        await loadKimFrameData(nextFrames[nextIndex]);
+        if (!isActive) return;
+        kimMetaRef.current = meta;
+        kimFramesRef.current = nextFrames;
+        setKimMeta(meta);
+        setKimFrames(nextFrames);
+        setKimIndex(nextIndex);
+        setKimStatus('ready');
+      } catch (error) {
+        if (isActive) {
+          setKimStatus('error');
+          setKimError(error.message);
+        }
+      }
+    };
+
+    initializeKim();
+    return () => {
+      isActive = false;
+    };
+  }, [canvasHeight, isKimView, kimRefreshTick, loadKimFrameData]);
 
   // 초기 로딩 및 상단 새로고침(refreshToken 변경) 시 타임라인 재구성
   useEffect(() => {
@@ -1229,9 +1375,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
   }, []);
 
-  // 현재 프레임 렌더링 (누적 강수량 뷰에서는 레이더 렌더를 중단)
+  // 현재 프레임 렌더링 (누적/KIM 뷰에서는 레이더 렌더를 중단)
   useEffect(() => {
-    if (isAccumView) {
+    if (isAccumView || isKimView) {
       return;
     }
     const frameDef = frames[frameIndex];
@@ -1247,7 +1393,52 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
       })
       .catch(() => {});
-  }, [frames, frameIndex, status, renderFrame, loadFrameData, isAccumView]);
+  }, [frames, frameIndex, status, renderFrame, loadFrameData, isAccumView, isKimView]);
+
+  useEffect(() => {
+    if (!isKimView || kimStatus !== 'ready') return;
+    const frameDef = kimFrames[kimIndex];
+    if (!frameDef) return;
+    const token = ++renderTokenRef.current;
+    loadKimFrameData(frameDef)
+      .then((buckets) => {
+        if (renderTokenRef.current === token) {
+          renderFrame({ ...frameDef, buckets });
+        }
+      })
+      .catch((error) => {
+        setKimStatus('error');
+        setKimError(error.message);
+      });
+  }, [isKimView, kimFrames, kimIndex, kimStatus, loadKimFrameData, renderFrame]);
+
+  // 현재 이후 예측을 먼저 받고, 과거가 된 모델 초반 프레임은 마지막에 채운다.
+  useEffect(() => {
+    if (!isKimView || kimStatus !== 'ready' || kimFrames.length === 0) return undefined;
+    let isCancelled = false;
+    const firstFutureIndex = Math.max(
+      0,
+      kimFrames.findIndex((frame) => frame.validTime?.getTime() >= Date.now()),
+    );
+    const queue = [
+      ...kimFrames.slice(firstFutureIndex),
+      ...kimFrames.slice(0, firstFutureIndex),
+    ].filter((frame) => !kimCacheRef.current.has(frame.key));
+    let cursor = 0;
+    const pump = () => {
+      if (isCancelled || cursor >= queue.length) return;
+      const frame = queue[cursor];
+      cursor += 1;
+      loadKimFrameData(frame)
+        .catch(() => {})
+        .finally(() => window.setTimeout(pump, 120));
+    };
+    pump();
+    pump();
+    return () => {
+      isCancelled = true;
+    };
+  }, [isKimView, kimFrames, kimStatus, loadKimFrameData]);
 
   // 슬라이더 이동 시 바로 앞뒤 프레임만 가볍게 미리 받아 과거 6시간 탐색을 부드럽게 한다.
   useEffect(() => {
@@ -1288,15 +1479,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   useEffect(() => {
     playIntervalRef.current = isAccumView
       ? Math.max(60, Math.round((playDurationSec * 1000) / Math.max(1, accumHours.length)))
+      : isKimView
+        ? kimPlayIntervalMs
       : isBroadcast
         ? playIntervalMs
         : PLAY_INTERVAL_MS;
-  }, [accumHours.length, isAccumView, isBroadcast, playDurationSec, playIntervalMs]);
+  }, [accumHours.length, isAccumView, isBroadcast, isKimView, kimPlayIntervalMs, playDurationSec, playIntervalMs]);
 
   // 방송모드는 선택 지점부터 목표 지점까지를 설정한 재생 길이에 맞춰 진행한다.
   useEffect(() => {
-    if (isAccumView) {
-      return undefined; // 누적 뷰 재생은 별도 효과에서
+    if (isAccumView || isKimView) {
+      return undefined; // 누적/KIM 뷰 재생은 별도 효과에서
     }
     if (!isPlaying || frames.length === 0) {
       return undefined;
@@ -1308,7 +1501,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       );
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [isPlaying, frames.length, isBroadcast, playIntervalMs, isAccumView]);
+  }, [isPlaying, frames.length, isBroadcast, playIntervalMs, isAccumView, isKimView]);
 
   // 누적 강수량 뷰: 기간 처음→끝을 재생 길이에 맞춰 진행하고 끝에서 멈춘다.
   useEffect(() => {
@@ -1328,12 +1521,26 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     }
   }, [isAccumView, isPlaying, accumIndex, accumHours.length]);
 
-  // 방송모드 재생은 목표 지점(현재 또는 예측 끝)에 도달하면 멈춘다.
   useEffect(() => {
-    if (!isAccumView && isBroadcast && isPlaying && playTarget !== null && frameIndex >= playTarget) {
+    if (!isKimView || !isPlaying || kimFrames.length < 2) return undefined;
+    const timer = window.setInterval(() => {
+      setKimIndex((previous) => Math.min(previous + 1, kimFrames.length - 1));
+    }, kimPlayIntervalMs);
+    return () => window.clearInterval(timer);
+  }, [isKimView, isPlaying, kimFrames.length, kimPlayIntervalMs]);
+
+  useEffect(() => {
+    if (isKimView && isPlaying && kimIndex >= kimFrames.length - 1) {
       setIsPlaying(false);
     }
-  }, [isBroadcast, isPlaying, playTarget, frameIndex, isAccumView]);
+  }, [isKimView, isPlaying, kimIndex, kimFrames.length]);
+
+  // 방송모드 재생은 목표 지점(현재 또는 예측 끝)에 도달하면 멈춘다.
+  useEffect(() => {
+    if (!isAccumView && !isKimView && isBroadcast && isPlaying && playTarget !== null && frameIndex >= playTarget) {
+      setIsPlaying(false);
+    }
+  }, [isBroadcast, isPlaying, playTarget, frameIndex, isAccumView, isKimView]);
 
   // 관측 프레임은 선택 지점→현재, 예측 프레임은 선택 지점→예측 끝으로 재생한다.
   const handlePlayButton = () => {
@@ -1348,6 +1555,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       if (accumIndex >= accumHours.length - 1) {
         setAccumIndex(0);
       }
+      setIsPlaying(true);
+      return;
+    }
+    if (isKimView) {
+      if (kimFrames.length < 2 || kimStatus !== 'ready') return;
+      const startIndex = kimIndex >= kimFrames.length - 1 ? 0 : kimIndex;
+      if (startIndex !== kimIndex) setKimIndex(startIndex);
+      const transitionCount = Math.max(1, kimFrames.length - 1 - startIndex);
+      setKimPlayIntervalMs(Math.max(60, Math.round((playDurationSec * 1000) / transitionCount)));
       setIsPlaying(true);
       return;
     }
@@ -1422,6 +1638,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
   const handleRadarRefresh = useCallback(() => {
     setManualRefreshTick((tick) => tick + 1);
+  }, []);
+
+  const handleKimRefresh = useCallback(() => {
+    setKimRefreshTick((tick) => tick + 1);
   }, []);
 
   // ---------- 누적 강수량 뷰 ----------
@@ -2356,6 +2576,30 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     });
   }, [baseTimeMs, timelineMaxOffset, timelineMinOffset, timelineSpan]);
 
+  const currentKimFrame = kimFrames[kimIndex] ?? null;
+  const kimThumbPercent = kimFrames.length > 1 ? (kimIndex / (kimFrames.length - 1)) * 100 : 50;
+  const kimTicks = useMemo(() => {
+    if (kimFrames.length < 2) return [];
+    const span = kimFrames.length - 1;
+    return kimFrames
+      .map((frame, index) => ({ frame, index }))
+      .map(({ frame, index }) => {
+        const isLabeled = index === 0 || frame.leadHour % 12 === 0;
+        const dateLabel =
+          isLabeled && (index === 0 || frame.validTime.getHours() === 0)
+            ? `${frame.validTime.getMonth() + 1}.${frame.validTime.getDate()}`
+            : '';
+        return {
+          key: frame.key,
+          position: (index / span) * 100,
+          isLabeled,
+          label: isLabeled ? formatHourMinute(frame.validTime) : '',
+          dateLabel,
+          offsetMinutes: frame.leadHour * 60,
+        };
+      });
+  }, [kimFrames]);
+
   const toggleFullscreen = useCallback(async () => {
     if (fullscreenMode) {
       if (fullscreenMode === 'native' && document.fullscreenElement) {
@@ -2565,7 +2809,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
   // 방송모드에서는 끊김 없는 재생을 위해 전 구간 프레임을 미리 받아 둔다.
   useEffect(() => {
-    if (!isBroadcast || status !== 'ready') {
+    if (!isBroadcast || broadcastView !== 'radar' || status !== 'ready') {
       return undefined;
     }
     cacheLimitRef.current = BROADCAST_CACHE_LIMIT;
@@ -2590,7 +2834,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       isCancelled = true;
       cacheLimitRef.current = FRAME_CACHE_LIMIT;
     };
-  }, [isBroadcast, status, frames, loadFrameData]);
+  }, [broadcastView, isBroadcast, status, frames, loadFrameData]);
 
   // 컨트롤바(재생 버튼 + 슬라이더 + 눈금). 방송모드에서는 어두운 배경 위에 얹는다.
   const renderTimeline = (broadcast) => (
@@ -2598,7 +2842,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       <button
         type="button"
         onClick={handlePlayButton}
-        disabled={status !== 'ready'}
+        disabled={isAccumView ? accumStatus !== 'ready' : isKimView ? kimStatus !== 'ready' : status !== 'ready'}
         className={`flex shrink-0 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:opacity-40 ${
           broadcast ? 'h-12 w-12 -translate-x-1/2' : 'h-10 w-10'
         }`}
@@ -2627,7 +2871,18 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             </span>
           </div>
         ) : null}
-        {!isAccumView && currentFrame ? (
+        {isKimView && currentKimFrame ? (
+          <div
+            className="pointer-events-none absolute top-0"
+            style={{ left: `${Math.min(Math.max(kimThumbPercent, 6), 94)}%` }}
+          >
+            <span className="inline-block -translate-x-1/2 whitespace-nowrap rounded-full bg-emerald-600 px-2.5 py-1 text-[11px] font-bold tabular-nums text-white shadow-sm">
+              예상 {currentKimFrame.validTime.getMonth() + 1}/{currentKimFrame.validTime.getDate()}{' '}
+              {formatHourMinute(currentKimFrame.validTime)}
+            </span>
+          </div>
+        ) : null}
+        {!isAccumView && !isKimView && currentFrame ? (
           <div
             className="pointer-events-none absolute top-0"
             style={{ left: `${Math.min(Math.max(thumbPercent, 6), 94)}%` }}
@@ -2644,33 +2899,42 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         ) : null}
         <input
           type="range"
-          min={isAccumView ? 0 : timelineMinOffset}
-          max={isAccumView ? Math.max(accumHours.length - 1, 1) : timelineMaxOffset}
-          step={isAccumView ? 1 : 5}
-          value={isAccumView ? accumIndex : currentOffset}
+          min={isAccumView || isKimView ? 0 : timelineMinOffset}
+          max={
+            isAccumView
+              ? Math.max(accumHours.length - 1, 1)
+              : isKimView
+                ? Math.max(kimFrames.length - 1, 1)
+                : timelineMaxOffset
+          }
+          step={isAccumView || isKimView ? 1 : 5}
+          value={isAccumView ? accumIndex : isKimView ? kimIndex : currentOffset}
           onChange={(event) => {
             if (isAccumView) {
               setIsPlaying(false);
               setAccumIndex(Number(event.target.value));
+            } else if (isKimView) {
+              setIsPlaying(false);
+              setKimIndex(Number(event.target.value));
             } else {
               handleTimelineChange(Number(event.target.value));
             }
           }}
-          disabled={isAccumView ? accumStatus !== 'ready' : status !== 'ready'}
+          disabled={isAccumView ? accumStatus !== 'ready' : isKimView ? kimStatus !== 'ready' : status !== 'ready'}
           className={`relative z-10 w-full cursor-pointer appearance-none rounded-full accent-[#0033a0] ${
             broadcast ? 'broadcast-radar-range h-2.5' : 'h-2'
           }`}
           style={{
-            background: isAccumView
+            background: isAccumView || isKimView
               ? '#3b71b8'
               : `linear-gradient(to right, #64748b ${currentPercent}%, #2563eb ${currentPercent}%)`,
           }}
         />
         <div className="relative mt-1 h-9">
-          {(isAccumView ? accumTicks : timelineTicks).map(
+          {(isAccumView ? accumTicks : isKimView ? kimTicks : timelineTicks).map(
             ({ offsetMinutes, key, position, isLabeled, label, dateLabel }) => (
             <div
-              key={isAccumView ? key : offsetMinutes}
+              key={isAccumView || isKimView ? key : offsetMinutes}
               className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
               style={{ left: `${position}%` }}
             >
@@ -2708,11 +2972,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     </div>
   );
 
-  // 방송모드 뷰 전환(레이더/강수량/위성) — 레이더·강수량 화면과 위성 화면 양쪽에서 쓴다
+  // 방송모드 뷰 전환 — 지도 화면과 위성 화면 양쪽에서 쓴다.
   const broadcastViewPills = (
     <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
       {[
         { id: 'radar', label: '레이더' },
+        { id: 'kim', label: '강수 예상' },
         { id: 'accum', label: '강수량' },
         { id: 'satellite', label: '위성' },
       ].map(({ id, label }) => {
@@ -2731,6 +2996,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               isActive
                 ? id === 'accum'
                   ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30'
+                  : id === 'kim'
+                    ? 'bg-emerald-400 text-slate-950 shadow-md shadow-emerald-950/30'
                   : id === 'satellite'
                     ? 'bg-violet-400 text-slate-950 shadow-md shadow-violet-950/30'
                     : 'bg-cyan-400 text-slate-950 shadow-md shadow-cyan-950/30'
@@ -2798,12 +3065,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                 'h-[calc(100dvh-31rem)] min-h-[280px] w-full sm:h-[60vh] sm:min-h-[420px]'
           }
         />
-        {status === 'loading' && frames.length === 0 ? (
+        {!isAccumView && !isKimView && !isSatelliteView && status === 'loading' && frames.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-sm font-medium text-slate-500">
             레이더 자료를 불러오는 중입니다…
           </div>
         ) : null}
-        {status === 'error' ? (
+        {!isAccumView && !isKimView && !isSatelliteView && status === 'error' ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/80 px-6 text-center text-sm font-medium text-red-500">
             {statusMessage || '레이더 자료를 불러오지 못했습니다.'}
           </div>
@@ -2816,6 +3083,16 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         {isAccumView && accumStatus === 'error' ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/45 px-6 text-center text-sm font-semibold text-red-200">
             {accumError || '누적 강수량 자료를 불러오지 못했습니다.'}
+          </div>
+        ) : null}
+        {isKimView && kimStatus === 'loading' ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/35 text-sm font-semibold text-white backdrop-blur-[1px]">
+            KIM 72시간 강수 예상도를 불러오는 중입니다…
+          </div>
+        ) : null}
+        {isKimView && kimStatus === 'error' ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/45 px-6 text-center text-sm font-semibold text-red-200">
+            {kimError || 'KIM 강수 예상도를 불러오지 못했습니다.'}
           </div>
         ) : null}
 
@@ -2867,9 +3144,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     textShadow: '0 2px 6px rgba(0,0,0,0.35)',
                   }}
                 >
-                  {isAccumView ? '누적 강수량' : '레이더 영상'}
+                  {isAccumView ? '누적 강수량' : isKimView ? '강수 예상도' : '레이더 영상'}
                 </span>
-                {(isAccumView ? currentAccumHour : currentFrame) ? (
+                {(isAccumView ? currentAccumHour : isKimView ? currentKimFrame : currentFrame) ? (
                   <div
                     className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap"
                     style={{ gap: '0.6vw' }}
@@ -2882,15 +3159,34 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                         textShadow: '0 2px 5px rgba(0,0,0,0.3)',
                       }}
                     >
-                      {formatHourMinute(isAccumView ? currentAccumHour : currentFrame.validTime)}
+                      {formatHourMinute(
+                        isAccumView
+                          ? currentAccumHour
+                          : isKimView
+                            ? currentKimFrame.validTime
+                            : currentFrame.validTime,
+                      )}
                     </span>
                     <span
                       className="font-semibold text-[#bdd6fb]"
                       style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
                     >
-                      {formatBroadcastDate(isAccumView ? currentAccumHour : currentFrame.validTime)}
+                      {formatBroadcastDate(
+                        isAccumView
+                          ? currentAccumHour
+                          : isKimView
+                            ? currentKimFrame.validTime
+                            : currentFrame.validTime,
+                      )}
                     </span>
-                    {!isAccumView && currentFrame?.kind === 'fct' ? (
+                    {isKimView ? (
+                      <span
+                        className="rounded bg-emerald-300 px-1.5 py-0.5 text-xs font-black text-emerald-950"
+                        title={`KIM ${kimMeta?.gridKm ?? 3} km · ${kimMeta?.baseTime ?? ''} 기준`}
+                      >
+                        KIM {kimMeta?.gridKm ?? 3}km
+                      </span>
+                    ) : !isAccumView && currentFrame?.kind === 'fct' ? (
                       <span className="rounded bg-[#f4c542] px-1.5 py-0.5 text-xs font-black text-[#102a43]">
                         예측
                       </span>
@@ -3133,13 +3429,16 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                 {!isAccumView ? (
                   <button
                     type="button"
-                    onClick={handleRadarRefresh}
-                    disabled={status === 'loading'}
+                    onClick={isKimView ? handleKimRefresh : handleRadarRefresh}
+                    disabled={isKimView ? kimStatus === 'loading' : status === 'loading'}
                     className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/55 text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75 disabled:cursor-wait disabled:opacity-60"
-                    aria-label="레이더 영상 새로고침"
-                    title="레이더 영상 새로고침"
+                    aria-label={isKimView ? '강수 예상도 새로고침' : '레이더 영상 새로고침'}
+                    title={isKimView ? '강수 예상도 새로고침' : '레이더 영상 새로고침'}
                   >
-                    <RefreshCw size={18} className={status === 'loading' ? 'animate-spin' : ''} />
+                    <RefreshCw
+                      size={18}
+                      className={(isKimView ? kimStatus : status) === 'loading' ? 'animate-spin' : ''}
+                    />
                   </button>
                 ) : null}
               </div>

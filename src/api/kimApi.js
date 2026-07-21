@@ -1,0 +1,93 @@
+const KIM_RAIN_ENDPOINT = '/api/kim-rain';
+const REQUEST_TIMEOUT_MS = 30000;
+
+const parseErrorResponse = async (response, fallback) => {
+  try {
+    const payload = await response.json();
+    return payload.error || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const fetchWithTimeout = async (url) => {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('KIM 강수 예상도 요청 시간이 초과되었습니다.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+};
+
+export const parseKimTime = (value) => {
+  if (!/^\d{12}$/.test(value ?? '')) return null;
+  return new Date(
+    Number(value.slice(0, 4)),
+    Number(value.slice(4, 6)) - 1,
+    Number(value.slice(6, 8)),
+    Number(value.slice(8, 10)),
+    Number(value.slice(10, 12)),
+  );
+};
+
+export const fetchLatestKimRainMeta = async ({ refresh = false } = {}) => {
+  const query = new URLSearchParams({ meta: 'latest' });
+  if (refresh) query.set('_refresh', '1');
+  const response = await fetchWithTimeout(`${KIM_RAIN_ENDPOINT}?${query}`);
+  if (!response.ok) {
+    throw new Error(
+      await parseErrorResponse(response, `KIM 예측 주기 요청 실패 (${response.status})`),
+    );
+  }
+  const meta = await response.json();
+  if (!meta.baseTime || !Array.isArray(meta.frames) || meta.frames.length !== 72) {
+    throw new Error('KIM 72시간 예측 주기 정보가 올바르지 않습니다.');
+  }
+  return meta;
+};
+
+export const buildKimRainFrames = (meta) =>
+  meta.frames.map(({ leadHour, validTime }) => ({
+    key: `kim-${meta.baseTime}-${leadHour}`,
+    kind: 'kim',
+    baseTime: meta.baseTime,
+    leadHour,
+    validTime: parseKimTime(validTime),
+  }));
+
+export const fetchKimRainFrame = async (baseTime, leadHour, { refresh = false } = {}) => {
+  const query = new URLSearchParams({ baseTime, leadHour: String(leadHour) });
+  if (refresh) query.set('_refresh', '1');
+  const response = await fetchWithTimeout(`${KIM_RAIN_ENDPOINT}?${query}`);
+  if (!response.ok) {
+    throw new Error(
+      await parseErrorResponse(response, `KIM +${leadHour}시간 자료 요청 실패 (${response.status})`),
+    );
+  }
+  const buckets = new Uint8Array(await response.arrayBuffer());
+  const width = Number(response.headers.get('X-Kim-Width'));
+  const height = Number(response.headers.get('X-Kim-Height'));
+  if (!width || !height || buckets.length !== width * height) {
+    throw new Error('KIM 시간당 강수 격자 크기가 올바르지 않습니다.');
+  }
+  return {
+    buckets,
+    width,
+    height,
+    baseTime: response.headers.get('X-Kim-Base-Time') || baseTime,
+    validTime: parseKimTime(response.headers.get('X-Kim-Valid-Time')),
+    leadHour: Number(response.headers.get('X-Kim-Lead-Hour')),
+    originX: Number(response.headers.get('X-Kim-Origin-X')),
+    originY: Number(response.headers.get('X-Kim-Origin-Y')),
+    gridKm: Number(response.headers.get('X-Kim-Grid-Km')),
+    unit: response.headers.get('X-Kim-Unit') || 'mm/h',
+    conversion: response.headers.get('X-Kim-Conversion') || '',
+  };
+};
+

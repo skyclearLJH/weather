@@ -28,6 +28,10 @@ import {
   onRequestGet as gk2aIrGet,
   onRequestOptions as gk2aIrOptions,
 } from './functions/api/gk2a-ir.js';
+import {
+  onRequestGet as kimRainGet,
+  onRequestOptions as kimRainOptions,
+} from './functions/api/kim-rain.js';
 
 const sendFunctionResponse = async (response, res) => {
   res.statusCode = response.status;
@@ -89,6 +93,14 @@ const localFunctionsPlugin = (env) => ({
       };
 
       try {
+        if (requestUrl.pathname === '/api/kim-rain') {
+          const response = req.method === 'OPTIONS'
+            ? await kimRainOptions(context)
+            : await kimRainGet(context);
+          await sendFunctionResponse(response, res);
+          return;
+        }
+
         if (requestUrl.pathname === '/api/gk2a-ir') {
           const response = req.method === 'OPTIONS'
             ? await gk2aIrOptions(context)
