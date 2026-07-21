@@ -608,6 +608,65 @@ const buildKimPixelMapping = (width, height, meta) => {
   return { baseIndex, fractionX, fractionY, gridWidth: meta.width };
 };
 
+const KIM_CUBIC_WEIGHTS = Array.from({ length: 256 }, (_, index) => {
+  const t = index / 255;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return [
+    -0.5 * t + t2 - 0.5 * t3,
+    1 - 2.5 * t2 + 1.5 * t3,
+    0.5 * t + 2 * t2 - 1.5 * t3,
+    -0.5 * t2 + 0.5 * t3,
+  ];
+});
+
+const sampleKimCubicRow = (values, offset, weights) =>
+  values[offset] * weights[0] +
+  values[offset + 1] * weights[1] +
+  values[offset + 2] * weights[2] +
+  values[offset + 3] * weights[3];
+
+const sampleKimRainBicubic = (values, sourceIndex, fxByte, fyByte, gridWidth) => {
+  const x = sourceIndex % gridWidth;
+  const y = Math.floor(sourceIndex / gridWidth);
+  const gridHeight = Math.floor(values.length / gridWidth);
+  const fx = fxByte / 255;
+  const fy = fyByte / 255;
+
+  if (x < 1 || x + 2 >= gridWidth || y < 1 || y + 2 >= gridHeight) {
+    const topIndex = sourceIndex + gridWidth;
+    const lower = values[sourceIndex] * (1 - fx) + values[sourceIndex + 1] * fx;
+    const upper = values[topIndex] * (1 - fx) + values[topIndex + 1] * fx;
+    return lower * (1 - fy) + upper * fy;
+  }
+
+  const wx = KIM_CUBIC_WEIGHTS[fxByte];
+  const wy = KIM_CUBIC_WEIGHTS[fyByte];
+  const rowStart = sourceIndex - gridWidth - 1;
+  const row0 = sampleKimCubicRow(values, rowStart, wx);
+  const row1 = sampleKimCubicRow(values, rowStart + gridWidth, wx);
+  const row2 = sampleKimCubicRow(values, rowStart + gridWidth * 2, wx);
+  const row3 = sampleKimCubicRow(values, rowStart + gridWidth * 3, wx);
+  const interpolated =
+    row0 * wy[0] + row1 * wy[1] + row2 * wy[2] + row3 * wy[3];
+
+  // Clamp cubic ringing so smoothed contours do not invent stronger rainfall peaks.
+  const topIndex = sourceIndex + gridWidth;
+  const localMin = Math.min(
+    values[sourceIndex],
+    values[sourceIndex + 1],
+    values[topIndex],
+    values[topIndex + 1],
+  );
+  const localMax = Math.max(
+    values[sourceIndex],
+    values[sourceIndex + 1],
+    values[topIndex],
+    values[topIndex + 1],
+  );
+  return Math.min(localMax, Math.max(localMin, interpolated));
+};
+
 const OBS_TIMELINE_RANGE_MINUTES = 360;
 const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 맞춘 자동 갱신
 
@@ -1115,14 +1174,18 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             pixels[pixelOffset + 3] = 0;
             continue;
           }
-          const fx = fractionX[index] / 255;
-          const fy = fractionY[index] / 255;
-          const topIndex = sourceIndex + gridWidth;
-          const lower =
-            frame.values[sourceIndex] * (1 - fx) + frame.values[sourceIndex + 1] * fx;
-          const upper =
-            frame.values[topIndex] * (1 - fx) + frame.values[topIndex + 1] * fx;
-          const encoded = Math.min(65535, Math.round(lower * (1 - fy) + upper * fy));
+          const encoded = Math.min(
+            65535,
+            Math.round(
+              sampleKimRainBicubic(
+                frame.values,
+                sourceIndex,
+                fractionX[index],
+                fractionY[index],
+                gridWidth,
+              ),
+            ),
+          );
           if (encoded < 5) {
             pixels[pixelOffset + 3] = 0;
             continue;
