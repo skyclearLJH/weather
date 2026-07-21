@@ -626,11 +626,6 @@ const BROADCAST_MAP_BOUNDS = [
   [121.5, 32.1],
   [133.5, 39.5],
 ];
-// Keep the full East Asia overlay available, but enter KIM view with Korea at broadcast scale.
-const KIM_MAP_BOUNDS = [
-  [117.0, 32.0],
-  [136.5, 40.7],
-];
 
 const formatBroadcastDate = (time) =>
   `${time.getMonth() + 1}/${time.getDate()} (${WEEKDAY_LABELS[time.getDay()]})`;
@@ -653,6 +648,38 @@ const MAP_COLOR_THEMES = {
     provinceBorder: '#4a5568',
     interKoreanSeamOpacity: 1,
   },
+};
+
+const fitBroadcastFlatView = (map, duration = 0) => {
+  map.setBearing(0);
+  map.setPitch(0);
+  map.fitBounds(BROADCAST_MAP_BOUNDS, { padding: 0, duration });
+};
+
+const applyMapColorTheme = (map, theme) => {
+  const properties = [
+    ['sea', 'background-color', theme.sea],
+    ['neighbor-land', 'fill-color', theme.neighborLand],
+    ['inter-korean-seam', 'fill-color', theme.neighborLand],
+    ['inter-korean-seam', 'fill-opacity', theme.interKoreanSeamOpacity],
+    ['neighbor-coast', 'line-color', theme.neighborCoast],
+    ['land', 'fill-color', theme.land],
+    ['province-border', 'line-color', theme.provinceBorder],
+    ['province-border', 'line-opacity', 0],
+  ];
+  let applied = 0;
+
+  properties.forEach(([layerId, property, value]) => {
+    if (!map.getLayer(layerId)) return;
+    try {
+      map.setPaintProperty(layerId, property, value);
+      applied += 1;
+    } catch {
+      // Style layers can briefly be unavailable while fullscreen layout settles.
+    }
+  });
+  if (applied > 0) map.triggerRepaint();
+  return applied === properties.length;
 };
 
 const formatHourMinute = (validTime) =>
@@ -1008,7 +1035,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
   }, [canvasHeight]);
 
-  // KIM은 실제 3 km 지역모델의 동아시아 전체 도메인으로 캔버스와 지도를 확장한다.
+  // KIM 캔버스는 동아시아 전체를 유지하되, 방송 화면의 첫 구도는 세 자료가 같게 맞춘다.
   useEffect(() => {
     const applyDomain = () => {
       const map = mapRef.current;
@@ -1021,10 +1048,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         [bounds.lonMax, bounds.latMin],
         [bounds.lonMin, bounds.latMin],
       ]);
-      map.fitBounds(
-        isKimView ? KIM_MAP_BOUNDS : isBroadcast ? BROADCAST_MAP_BOUNDS : KOREA_MAP_BOUNDS,
-        { padding: isKimView ? 8 : isBroadcast ? 0 : 12, duration: 650 },
-      );
+      if (isBroadcast) {
+        fitBroadcastFlatView(map, 650);
+      } else {
+        map.setBearing(0);
+        map.setPitch(0);
+        map.fitBounds(KOREA_MAP_BOUNDS, { padding: 12, duration: 650 });
+      }
       return true;
     };
 
@@ -1033,7 +1063,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       if (applyDomain()) window.clearInterval(timer);
     }, 200);
     return () => window.clearInterval(timer);
-  }, [isBroadcast, isKimView]);
+  }, [broadcastView, isBroadcast, isKimView]);
 
   // 픽셀 매핑 준비 (무거운 계산이라 렌더 이후 한 번만)
   useEffect(() => {
@@ -2781,8 +2811,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
         map.resize();
         if (isBroadcast) {
-          map.fitBounds(BROADCAST_MAP_BOUNDS, { padding: 0, duration: 0 });
+          fitBroadcastFlatView(map);
         } else {
+          map.setBearing(0);
+          map.setPitch(0);
           map.fitBounds(KOREA_MAP_BOUNDS, { padding: 12, duration: 0 });
         }
       }, delay),
@@ -2845,43 +2877,37 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     }
   }, [isBroadcast]);
 
-  // 방송모드 지도 배색 전환 (스타일 로딩 전이면 준비되는 대로 적용)
+  // 방송모드 지도 배색 전환. 일반 화면에서 이미 생성된 지도에도 전환 완료까지 재적용한다.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) {
       return undefined;
     }
     const theme = isBroadcast ? MAP_COLOR_THEMES.broadcast : MAP_COLOR_THEMES.default;
-    const applyTheme = () => {
-      try {
-        map.setPaintProperty('sea', 'background-color', theme.sea);
-        map.setPaintProperty('neighbor-land', 'fill-color', theme.neighborLand);
-        map.setPaintProperty('inter-korean-seam', 'fill-color', theme.neighborLand);
-        map.setPaintProperty(
-          'inter-korean-seam',
-          'fill-opacity',
-          theme.interKoreanSeamOpacity,
-        );
-        map.setPaintProperty('neighbor-coast', 'line-color', theme.neighborCoast);
-        map.setPaintProperty('land', 'fill-color', theme.land);
-        map.setPaintProperty('province-border', 'line-color', theme.provinceBorder);
-        map.setPaintProperty('province-border', 'line-opacity', 0);
-        return true;
-      } catch {
-        return false;
-      }
+    const applyTheme = () => applyMapColorTheme(map, theme);
+    let isListening = false;
+    const stopStyleRetry = () => {
+      if (!isListening) return;
+      map.off('load', retryUntilReady);
+      map.off('styledata', retryUntilReady);
+      isListening = false;
+    };
+    const retryUntilReady = () => {
+      if (applyTheme()) stopStyleRetry();
     };
 
-    if (map.isStyleLoaded() && applyTheme()) {
-      return undefined;
+    if (!applyTheme()) {
+      isListening = true;
+      map.on('load', retryUntilReady);
+      map.on('styledata', retryUntilReady);
     }
-    const retry = () => {
-      if (applyTheme()) {
-        map.off('styledata', retry);
-      }
+    const timers = [80, 300, 800, 1500].map((delay) =>
+      window.setTimeout(applyTheme, delay),
+    );
+    return () => {
+      stopStyleRetry();
+      timers.forEach((timer) => window.clearTimeout(timer));
     };
-    map.on('styledata', retry);
-    return () => map.off('styledata', retry);
   }, [isBroadcast]);
 
   // 방송모드에서는 끊김 없는 재생을 위해 전 구간 프레임을 미리 받아 둔다.

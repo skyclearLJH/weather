@@ -23,6 +23,16 @@ const TIMELINE_HOURS = 12;
 const STEP_MINUTES = 10;
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
+const DOKDO_GEOJSON = {
+  type: 'FeatureCollection',
+  features: [
+    {
+      type: 'Feature',
+      properties: { name: '독도' },
+      geometry: { type: 'Point', coordinates: [131.86956, 37.24078] },
+    },
+  ],
+};
 
 // 휘도온도(°C) → 표시 강도/의사 운정고도
 const BT_CLEAR_C = 15; // 이보다 따뜻하면 구름 없음 취급
@@ -582,6 +592,18 @@ function SatelliteView({ menuSlot = null }) {
       layer.convHighlight = convHighlightRef.current;
       cloudLayerRef.current = layer;
       map.addLayer(layer);
+      map.addSource('satellite-dokdo', { type: 'geojson', data: DOKDO_GEOJSON });
+      map.addLayer({
+        id: 'satellite-dokdo-dot',
+        type: 'circle',
+        source: 'satellite-dokdo',
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3.2, 1.1, 6, 1.6, 9, 2],
+          'circle-color': '#f8fafc',
+          'circle-stroke-color': '#263244',
+          'circle-stroke-width': 0.7,
+        },
+      });
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
       layer.setConvRange(...pendingConvRangeRef.current);
       for (const area of ['ko', 'fd']) {
