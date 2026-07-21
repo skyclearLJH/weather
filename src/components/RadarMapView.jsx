@@ -890,6 +890,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const isFullscreen = fullscreenMode !== null;
   // 방송모드: 전체화면 + 방송 그래픽 레이아웃 (PC 전용)
   const [isBroadcast, setIsBroadcast] = useState(initialBroadcast);
+  const [isBroadcastMapReady, setIsBroadcastMapReady] = useState(initialBroadcast);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
@@ -2806,6 +2807,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
   // 모바일 전체화면은 컨테이너 변경 후 남한 전체 경계를 다시 맞춰 위아래 구도를 채운다.
   useEffect(() => {
+    if (isBroadcast) {
+      return undefined;
+    }
     const timers = [120, 500].map((delay) =>
       window.setTimeout(() => {
         const map = mapRef.current;
@@ -2814,7 +2818,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
 
         map.resize();
-        if (isBroadcast || !window.matchMedia('(max-width: 767px)').matches) {
+        if (!window.matchMedia('(max-width: 767px)').matches) {
           return;
         }
 
@@ -2858,36 +2862,62 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
   }, [isBroadcast]);
 
-  // 방송모드 진입·해제 시 각 모드의 기본 구도로 화면을 다시 잡는다.
-  // 전체화면 상태 갱신과 렌더가 겹쳐도 취소되지 않도록 isBroadcast에만 반응하고,
-  // 전환 완료 시점이 브라우저마다 달라 두 번(멱등) 적용해 최종 크기에서 확정한다.
-  const previousBroadcastRef = useRef(false);
+  // 최종 전체화면 크기에서 지도를 맞춘 뒤 첫 렌더가 끝나면 전환 화면을 공개한다.
   useEffect(() => {
-    if (previousBroadcastRef.current === isBroadcast) {
+    if (!isBroadcast || !isFullscreen || isBroadcastMapReady) {
       return undefined;
     }
-    previousBroadcastRef.current = isBroadcast;
+    const map = mapRef.current;
+    const container = mapContainerRef.current;
+    if (!map || !container) {
+      return undefined;
+    }
 
-    const timers = [500, 1300].map((delay) =>
-      window.setTimeout(() => {
-        const map = mapRef.current;
-        if (!map) {
-          return;
-        }
-        map.resize();
-        if (isBroadcast) {
-          fitBroadcastFlatView(map);
-        } else {
-          map.setBearing(0);
-          map.setPitch(0);
-          map.fitBounds(KOREA_MAP_BOUNDS, { padding: 12, duration: 0 });
-        }
-      }, delay),
-    );
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [isBroadcast]);
+    let firstFrame = 0;
+    let secondFrame = 0;
+    let fallbackTimer = 0;
+    let revealPending = false;
+    let finished = false;
+    const reveal = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(fallbackTimer);
+      setIsBroadcastMapReady(true);
+    };
+    const alignMap = () => {
+      if (finished) return;
+      map.resize();
+      fitBroadcastFlatView(map);
+      if (!revealPending) {
+        revealPending = true;
+        map.once('render', reveal);
+        fallbackTimer = window.setTimeout(reveal, 250);
+      }
+      map.triggerRepaint();
+    };
+    const scheduleAlignment = () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      firstFrame = window.requestAnimationFrame(() => {
+        secondFrame = window.requestAnimationFrame(alignMap);
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleAlignment);
+    resizeObserver.observe(container);
+    scheduleAlignment();
+
+    return () => {
+      finished = true;
+      resizeObserver.disconnect();
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(fallbackTimer);
+      map.off('render', reveal);
+    };
+  }, [isBroadcast, isBroadcastMapReady, isFullscreen]);
 
   const enterBroadcastMode = useCallback(() => {
+    setIsBroadcastMapReady(false);
     setIsBroadcast(true);
     if (!fullscreenMode) {
       toggleFullscreen();
@@ -3222,16 +3252,21 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         </div>
       ) : null}
 
-      <div className={`relative ${isFullscreen ? 'min-h-0 flex-1' : ''}`}>
+      <div
+        className={`relative ${isFullscreen ? 'min-h-0 flex-1' : ''} ${
+          isBroadcast ? 'bg-[#46536a]' : ''
+        }`}
+      >
         <div
           ref={mapContainerRef}
-          className={
+          className={`${
             isFullscreen
               ? 'h-full w-full'
               : // 모바일에서는 카드 전체(헤더+지도+컨트롤바)가 한 화면에 들어오도록
                 // 지도 높이를 화면 높이에서 나머지 UI 높이를 뺀 값으로 잡는다.
                 'h-[calc(100dvh-31rem)] min-h-[280px] w-full sm:h-[60vh] sm:min-h-[420px]'
-          }
+          } ${isBroadcast && !isBroadcastMapReady ? 'opacity-0' : 'opacity-100'}`}
+          style={{ backgroundColor: isBroadcast ? MAP_COLOR_THEMES.broadcast.sea : undefined }}
         />
         {!isAccumView && !isKimView && !isSatelliteView && status === 'loading' && frames.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-sm font-medium text-slate-500">
