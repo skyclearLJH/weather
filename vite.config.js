@@ -97,8 +97,12 @@ const localFunctionsPlugin = (env) => ({
           return;
         }
 
-        if (requestUrl.pathname.startsWith('/api/kma/')) {
-          const kmaPath = requestUrl.pathname.replace(/^\/api\/kma\/?/, '');
+        // 방송모드(누적 강수량 등)는 별도 키 라우트를 쓰므로 로컬에서도 함께 열어준다.
+        if (
+          requestUrl.pathname.startsWith('/api/kma/') ||
+          requestUrl.pathname.startsWith('/api/kma-broadcast/')
+        ) {
+          const kmaPath = requestUrl.pathname.replace(/^\/api\/kma(-broadcast)?\/?/, '');
           const response = req.method === 'OPTIONS'
             ? await kmaProxyOptions(context)
             : await kmaProxyRequest({

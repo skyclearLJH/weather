@@ -1488,10 +1488,55 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       });
       const maskData = maskContext.getImageData(0, 0, latticeW, latticeH).data;
 
+      // 해안 거리(2-pass 체임퍼 거리변환): 서해안처럼 만·해협·섬이 많은 곳은 바다 노드가
+      // 13km 안에 관측소가 없어 공백으로 남았다. 육지에서 가까운 바다는 육지와 같은 넓은
+      // 보간을 적용해 육지 값에서 자연스럽게 이어지도록 채운다(강화도·태안반도 주변 공백 해소).
+      const landFlag = new Uint8Array(latticeW * latticeH);
+      for (let i = 0; i < landFlag.length; i++) {
+        landFlag[i] = maskData[i * 4 + 3] > 0 ? 1 : 0;
+      }
+      const coastDist = new Float32Array(latticeW * latticeH);
+      const INF = 1e9;
+      for (let i = 0; i < coastDist.length; i++) {
+        coastDist[i] = landFlag[i] ? 0 : INF;
+      }
+      const D1 = 1;
+      const D2 = Math.SQRT2;
+      for (let y = 0; y < latticeH; y++) {
+        for (let x = 0; x < latticeW; x++) {
+          const i = y * latticeW + x;
+          let d = coastDist[i];
+          if (y > 0) {
+            d = Math.min(d, coastDist[i - latticeW] + D1);
+            if (x > 0) d = Math.min(d, coastDist[i - latticeW - 1] + D2);
+            if (x < latticeW - 1) d = Math.min(d, coastDist[i - latticeW + 1] + D2);
+          }
+          if (x > 0) d = Math.min(d, coastDist[i - 1] + D1);
+          coastDist[i] = d;
+        }
+      }
+      for (let y = latticeH - 1; y >= 0; y--) {
+        for (let x = latticeW - 1; x >= 0; x--) {
+          const i = y * latticeW + x;
+          let d = coastDist[i];
+          if (y < latticeH - 1) {
+            d = Math.min(d, coastDist[i + latticeW] + D1);
+            if (x > 0) d = Math.min(d, coastDist[i + latticeW - 1] + D2);
+            if (x < latticeW - 1) d = Math.min(d, coastDist[i + latticeW + 1] + D2);
+          }
+          if (x < latticeW - 1) d = Math.min(d, coastDist[i + 1] + D1);
+          coastDist[i] = d;
+        }
+      }
+
       const NEIGHBORS = 10;
       const CUTOFF_LAND_PX = 100; // 육지는 넓게 보간해 결측 관측소 주변의 빈 영역을 최소화한다.
-      const CUTOFF_SEA_PX = 13; // 바다: 섬 관측점 주변만
+      const CUTOFF_SEA_PX = 13; // 먼바다: 섬 관측점 주변만
       const FADE_START_PX = 9;
+      // 연안 바다(해안에서 ~8km까지)는 육지와 동일하게 꽉 채우고, ~19km까지 서서히 옅어진다.
+      // 1 캔버스 px ≈ 1km.
+      const COAST_FILL_FULL_PX = 8;
+      const COAST_FILL_MAX_PX = 19;
       const neighborIdx = new Int16Array(latticeW * latticeH * NEIGHBORS).fill(-1);
       const neighborW = new Float32Array(latticeW * latticeH * NEIGHBORS);
       const nodeAlpha = new Uint8Array(latticeW * latticeH);
@@ -1500,8 +1545,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         const py = ly * STEP + STEP / 2;
         for (let lx = 0; lx < latticeW; lx++) {
           const node = ly * latticeW + lx;
-          const isLand = maskData[node * 4 + 3] > 0;
-          const cutoff = isLand ? CUTOFF_LAND_PX : CUTOFF_SEA_PX;
+          const isLand = landFlag[node] === 1;
+          const coastPx = coastDist[node] * STEP; // 격자 단위 → 캔버스 px(≈km)
+          const isCoastal = !isLand && coastPx <= COAST_FILL_MAX_PX;
+          // 연안 바다도 육지와 같은 넓은 보간 반경을 써서 육지 값이 이어지게 한다.
+          const useLandFill = isLand || isCoastal;
+          const cutoff = useLandFill ? CUTOFF_LAND_PX : CUTOFF_SEA_PX;
           const px = lx * STEP + STEP / 2;
           const candidates = [];
           const cx = Math.floor(px / CELL);
@@ -1522,8 +1571,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               }
             }
           }
-          // 드문 육지 공백은 더 먼 관측소까지 단계적으로 찾아 외삽한다.
-          if (isLand && candidates.length === 0) {
+          // 드문 육지·연안 공백은 더 먼 관측소까지 단계적으로 찾아 외삽한다.
+          if (useLandFill && candidates.length === 0) {
             for (let radius = bucketRadius + 1; radius <= 7 && candidates.length === 0; radius++) {
               for (let dx = -radius; dx <= radius; dx++) {
                 for (const dy of [-radius, radius]) {
@@ -1561,15 +1610,24 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           if (isLand) {
             nodeAlpha[node] = OVERLAY_ALPHA;
           } else {
+            // 섬 관측점 주변 페이드(기존)와 해안 거리 기반 페이드 중 진한 쪽을 쓴다.
             const nearest = Math.sqrt(candidates[0][0]);
-            const fade =
+            const islandFade =
               nearest <= FADE_START_PX
                 ? 1
                 : Math.max(
                     0,
                     1 - (nearest - FADE_START_PX) / (CUTOFF_SEA_PX - FADE_START_PX),
                   );
-            nodeAlpha[node] = Math.round(OVERLAY_ALPHA * fade);
+            const coastFade = !isCoastal
+              ? 0
+              : coastPx <= COAST_FILL_FULL_PX
+                ? 1
+                : Math.max(
+                    0,
+                    1 - (coastPx - COAST_FILL_FULL_PX) / (COAST_FILL_MAX_PX - COAST_FILL_FULL_PX),
+                  );
+            nodeAlpha[node] = Math.round(OVERLAY_ALPHA * Math.max(islandFade, coastFade));
           }
         }
       }
