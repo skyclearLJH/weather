@@ -168,11 +168,25 @@ export const floorToTenMinutesUtc = (date) => {
 };
 
 // 과거 12시간 타임라인 (오래된 것 → 최신 순, 10분 간격)
+// GK2A는 매일 15:20 UTC(=00:20 KST) 한 슬롯만 전구 관측을 건너뛴다(위성 정비 시간).
+// NOAA 버킷 하루치(144슬롯)를 훑어 이 슬롯만 항상 비어 있음을 확인했다. 앞으로도
+// 생기지 않는 자료라 타임라인에서 아예 제외한다 — 그대로 두면 재생이 그 지점에서
+// 끊기고 "아직 준비되지 않은 시각입니다"가 잘못 뜬다.
+const SAT_DAILY_GAP_UTC = { hour: 15, minute: 20 };
+
+export const isSatGapSlot = (date) =>
+  date.getUTCHours() === SAT_DAILY_GAP_UTC.hour &&
+  date.getUTCMinutes() === SAT_DAILY_GAP_UTC.minute;
+
 export const buildSatTimeline = (latestDate, hours = 12, stepMinutes = 10) => {
   const frames = [];
   const count = Math.floor((hours * 60) / stepMinutes);
   for (let i = count; i >= 0; i--) {
-    frames.push(new Date(latestDate.getTime() - i * stepMinutes * 60 * 1000));
+    const frame = new Date(latestDate.getTime() - i * stepMinutes * 60 * 1000);
+    if (isSatGapSlot(frame)) {
+      continue;
+    }
+    frames.push(frame);
   }
   return frames;
 };
@@ -263,6 +277,11 @@ export const probeLatestSatDate = async () => {
   // 폴백: 원본 생성 지연(~12분)을 고려해 15분 전부터 거꾸로 최대 12슬롯 시도
   let candidate = floorToTenMinutesUtc(new Date(Date.now() - 15 * 60 * 1000));
   for (let i = 0; i < 12; i++) {
+    if (isSatGapSlot(candidate)) {
+      // 매일 비는 슬롯은 시도하지 않고 건너뛴다
+      candidate = new Date(candidate.getTime() - 10 * 60 * 1000);
+      continue;
+    }
     try {
       await fetchSatFrame(candidate, 'ko');
       return candidate;
