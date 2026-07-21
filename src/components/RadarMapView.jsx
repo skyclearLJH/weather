@@ -1538,15 +1538,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         return dist;
       };
 
-      const DILATE_CELLS = 2; // ≈4km: 연안 섬을 본토 덩어리에 붙인다
-      const MIN_LAND_COMPONENT = 200; // ≈800km²: 본토·제주만 (백령도·연평도·울릉도 제외)
-      const anyLandDist = chamfer(landFlag);
-      // 팽창 마스크에서 연결 요소를 찾아 큰 덩어리에 속한 육지만 남긴다.
+      // 연결 요소는 팽창 없이 '실제 육지'에서만 찾는다. 마스크를 팽창시켜 묶으면 서해처럼
+      // 섬이 줄지어 있는 곳에서 섬→섬→본토로 사슬처럼 이어져 낙월면 같은 먼 섬무리까지
+      // 본토로 취급되고, 그 주변에 연안 띠가 원처럼 둘러져 링으로 보였다.
+      const MIN_LAND_COMPONENT = 200; // ≈800km²: 본토·제주만 (강화도 이하 섬은 시드에서 제외)
       const label = new Int32Array(nodeCount).fill(-1);
       const componentSize = [];
       const stack = [];
       for (let start = 0; start < nodeCount; start++) {
-        if (label[start] !== -1 || anyLandDist[start] > DILATE_CELLS) continue;
+        if (label[start] !== -1 || !landFlag[start]) continue;
         const id = componentSize.length;
         let size = 0;
         label[start] = id;
@@ -1563,7 +1563,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               const ny = y + dy;
               if (nx < 0 || nx >= latticeW || ny < 0 || ny >= latticeH) continue;
               const n = ny * latticeW + nx;
-              if (label[n] !== -1 || anyLandDist[n] > DILATE_CELLS) continue;
+              if (label[n] !== -1 || !landFlag[n]) continue;
               label[n] = id;
               stack.push(n);
             }
@@ -1583,10 +1583,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       const CUTOFF_LAND_PX = 100; // 육지는 넓게 보간해 결측 관측소 주변의 빈 영역을 최소화한다.
       const CUTOFF_SEA_PX = 13; // 먼바다: 섬 관측점 주변만
       const FADE_START_PX = 9;
-      // 연안 바다(해안에서 ~8km까지)는 육지와 동일하게 꽉 채우고, ~19km까지 서서히 옅어진다.
-      // 1 캔버스 px ≈ 1km.
-      const COAST_FILL_FULL_PX = 8;
-      const COAST_FILL_MAX_PX = 19;
+      // 연안 바다(본토 해안에서 ~6km까지)는 육지와 동일하게 꽉 채우고, ~22km까지 길게
+      // 옅어진다. 페이드가 짧으면 띠 끝이 선처럼 보이므로 넉넉히 준다. 1 캔버스 px ≈ 1km.
+      const COAST_FILL_FULL_PX = 6;
+      const COAST_FILL_MAX_PX = 22;
       const neighborIdx = new Int16Array(latticeW * latticeH * NEIGHBORS).fill(-1);
       const neighborW = new Float32Array(latticeW * latticeH * NEIGHBORS);
       const nodeAlpha = new Uint8Array(latticeW * latticeH);
@@ -1682,7 +1682,19 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
       }
 
-      return { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW, nodeAlpha };
+      return {
+        latticeW,
+        latticeH,
+        NEIGHBORS,
+        neighborIdx,
+        neighborW,
+        nodeAlpha,
+        // 진단용(육지/본토/해안거리) — 표출에는 쓰지 않는다
+        landFlag,
+        mainlandFlag,
+        coastDist,
+        STEP,
+      };
     },
     [canvasHeight],
   );
@@ -1753,6 +1765,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           values[index] = previousValue + (nextValue - previousValue) * blend;
         }
       });
+
+      if (import.meta.env.DEV) {
+        window.__accumValues = { values, stations };
+      }
 
       const { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW, nodeAlpha } = idw;
       const interpolateNodeValue = (node) => {
@@ -2030,6 +2046,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
         if (!accumIdwRef.current) {
           accumIdwRef.current = buildAccumIdw(accumStationsRef.current);
+          if (import.meta.env.DEV) {
+            window.__accumIdw = accumIdwRef.current;
+            window.__accumStations = accumStationsRef.current;
+          }
         }
         if (!isActive) {
           return;
