@@ -1488,46 +1488,96 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       });
       const maskData = maskContext.getImageData(0, 0, latticeW, latticeH).data;
 
-      // 해안 거리(2-pass 체임퍼 거리변환): 서해안처럼 만·해협·섬이 많은 곳은 바다 노드가
-      // 13km 안에 관측소가 없어 공백으로 남았다. 육지에서 가까운 바다는 육지와 같은 넓은
-      // 보간을 적용해 육지 값에서 자연스럽게 이어지도록 채운다(강화도·태안반도 주변 공백 해소).
-      const landFlag = new Uint8Array(latticeW * latticeH);
-      for (let i = 0; i < landFlag.length; i++) {
+      // 서해안처럼 만·해협이 많은 곳은 바다 노드가 13km 안에 관측소가 없어 공백으로 남았다.
+      // 본토에서 가까운 바다는 육지와 같은 넓은 보간을 적용해 육지 값에서 자연스럽게
+      // 이어지도록 채운다(강화도·태안반도 주변 공백 해소).
+      //
+      // 단, 기준을 '모든 육지'로 잡으면 백령도·연평도 같은 외딴 섬 주변 바다까지 먼 육지
+      // 관측소를 끌어와 큰 후광(팔레트 단계가 겹쳐 링으로 보임)이 생긴다. 그래서 마스크를
+      // 살짝 팽창시켜 연안 섬(강화도·안면도 등)을 본토와 한 덩어리로 묶은 뒤, 일정 크기
+      // 이상인 덩어리(본토·제주)만 연안 채움의 기준으로 삼는다. 외딴 섬은 기존처럼
+      // 관측점 주변 13km 블롭으로만 표출된다.
+      const nodeCount = latticeW * latticeH;
+      const landFlag = new Uint8Array(nodeCount);
+      for (let i = 0; i < nodeCount; i++) {
         landFlag[i] = maskData[i * 4 + 3] > 0 ? 1 : 0;
       }
-      const coastDist = new Float32Array(latticeW * latticeH);
       const INF = 1e9;
-      for (let i = 0; i < coastDist.length; i++) {
-        coastDist[i] = landFlag[i] ? 0 : INF;
-      }
       const D1 = 1;
       const D2 = Math.SQRT2;
-      for (let y = 0; y < latticeH; y++) {
-        for (let x = 0; x < latticeW; x++) {
-          const i = y * latticeW + x;
-          let d = coastDist[i];
-          if (y > 0) {
-            d = Math.min(d, coastDist[i - latticeW] + D1);
-            if (x > 0) d = Math.min(d, coastDist[i - latticeW - 1] + D2);
-            if (x < latticeW - 1) d = Math.min(d, coastDist[i - latticeW + 1] + D2);
+      // 2-pass 체임퍼 거리변환 (격자 단위)
+      const chamfer = (seedFlag) => {
+        const dist = new Float32Array(nodeCount);
+        for (let i = 0; i < nodeCount; i++) dist[i] = seedFlag[i] ? 0 : INF;
+        for (let y = 0; y < latticeH; y++) {
+          for (let x = 0; x < latticeW; x++) {
+            const i = y * latticeW + x;
+            let d = dist[i];
+            if (y > 0) {
+              d = Math.min(d, dist[i - latticeW] + D1);
+              if (x > 0) d = Math.min(d, dist[i - latticeW - 1] + D2);
+              if (x < latticeW - 1) d = Math.min(d, dist[i - latticeW + 1] + D2);
+            }
+            if (x > 0) d = Math.min(d, dist[i - 1] + D1);
+            dist[i] = d;
           }
-          if (x > 0) d = Math.min(d, coastDist[i - 1] + D1);
-          coastDist[i] = d;
         }
-      }
-      for (let y = latticeH - 1; y >= 0; y--) {
-        for (let x = latticeW - 1; x >= 0; x--) {
-          const i = y * latticeW + x;
-          let d = coastDist[i];
-          if (y < latticeH - 1) {
-            d = Math.min(d, coastDist[i + latticeW] + D1);
-            if (x > 0) d = Math.min(d, coastDist[i + latticeW - 1] + D2);
-            if (x < latticeW - 1) d = Math.min(d, coastDist[i + latticeW + 1] + D2);
+        for (let y = latticeH - 1; y >= 0; y--) {
+          for (let x = latticeW - 1; x >= 0; x--) {
+            const i = y * latticeW + x;
+            let d = dist[i];
+            if (y < latticeH - 1) {
+              d = Math.min(d, dist[i + latticeW] + D1);
+              if (x > 0) d = Math.min(d, dist[i + latticeW - 1] + D2);
+              if (x < latticeW - 1) d = Math.min(d, dist[i + latticeW + 1] + D2);
+            }
+            if (x < latticeW - 1) d = Math.min(d, dist[i + 1] + D1);
+            dist[i] = d;
           }
-          if (x < latticeW - 1) d = Math.min(d, coastDist[i + 1] + D1);
-          coastDist[i] = d;
         }
+        return dist;
+      };
+
+      const DILATE_CELLS = 2; // ≈4km: 연안 섬을 본토 덩어리에 붙인다
+      const MIN_LAND_COMPONENT = 200; // ≈800km²: 본토·제주만 (백령도·연평도·울릉도 제외)
+      const anyLandDist = chamfer(landFlag);
+      // 팽창 마스크에서 연결 요소를 찾아 큰 덩어리에 속한 육지만 남긴다.
+      const label = new Int32Array(nodeCount).fill(-1);
+      const componentSize = [];
+      const stack = [];
+      for (let start = 0; start < nodeCount; start++) {
+        if (label[start] !== -1 || anyLandDist[start] > DILATE_CELLS) continue;
+        const id = componentSize.length;
+        let size = 0;
+        label[start] = id;
+        stack.push(start);
+        while (stack.length > 0) {
+          const i = stack.pop();
+          size++;
+          const x = i % latticeW;
+          const y = (i - x) / latticeW;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = x + dx;
+              const ny = y + dy;
+              if (nx < 0 || nx >= latticeW || ny < 0 || ny >= latticeH) continue;
+              const n = ny * latticeW + nx;
+              if (label[n] !== -1 || anyLandDist[n] > DILATE_CELLS) continue;
+              label[n] = id;
+              stack.push(n);
+            }
+          }
+        }
+        componentSize.push(size);
       }
+      const mainlandFlag = new Uint8Array(nodeCount);
+      for (let i = 0; i < nodeCount; i++) {
+        const id = label[i];
+        mainlandFlag[i] =
+          landFlag[i] && id >= 0 && componentSize[id] >= MIN_LAND_COMPONENT ? 1 : 0;
+      }
+      const coastDist = chamfer(mainlandFlag);
 
       const NEIGHBORS = 10;
       const CUTOFF_LAND_PX = 100; // 육지는 넓게 보간해 결측 관측소 주변의 빈 영역을 최소화한다.
