@@ -1689,11 +1689,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         neighborIdx,
         neighborW,
         nodeAlpha,
-        // 진단용(육지/본토/해안거리) — 표출에는 쓰지 않는다
         landFlag,
         mainlandFlag,
         coastDist,
         STEP,
+        coastFillMaxPx: COAST_FILL_MAX_PX,
       };
     },
     [canvasHeight],
@@ -1770,7 +1770,19 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         window.__accumValues = { values, stations };
       }
 
-      const { latticeW, latticeH, NEIGHBORS, neighborIdx, neighborW, nodeAlpha } = idw;
+      const {
+        latticeW,
+        latticeH,
+        NEIGHBORS,
+        neighborIdx,
+        neighborW,
+        nodeAlpha,
+        coastDist,
+        STEP: latticeStep,
+        coastFillMaxPx,
+      } = idw;
+      // 본토 육지와 그 연안 띠 안쪽인가 — 3D에서 이 범위는 항상 면으로 이어 그린다.
+      const isOnMainSurface = (node) => coastDist[node] * latticeStep <= coastFillMaxPx;
       const interpolateNodeValue = (node) => {
         const baseIndex = node * NEIGHBORS;
         let weightSum = 0;
@@ -1876,7 +1888,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             const lx = sampleOffset + gridX * ACCUM_EXTRUSION_STRIDE;
             if (lx >= latticeW) continue;
             const node = ly * latticeW + lx;
-            if (nodeAlpha[node] === 0 || isNearSinglePillarIsland(lx, ly)) continue;
+            if (nodeAlpha[node] === 0) continue;
+            // 섬 억제는 먼바다에서만. 본토·연안 띠까지 파내면 서해안처럼 섬이 많은 곳에서
+            // 강화군·영종·단원구·충남 해안에 구멍이 뚫리고, 그 원이 도메인 경계와 만나
+            // 반원처럼 보였다. 육지 값이 바다까지 이어지도록 이 범위는 면을 유지한다.
+            if (!isOnMainSurface(node) && isNearSinglePillarIsland(lx, ly)) continue;
             const gridIndex = gridY * sampleWidth + gridX;
             validGrid[gridIndex] = 1;
             rawGrid[gridIndex] = interpolateNodeValue(node);
