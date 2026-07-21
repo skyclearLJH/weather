@@ -2851,7 +2851,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     if (!map) {
       return undefined;
     }
-    const theme = isBroadcast ? MAP_COLOR_THEMES.broadcast : MAP_COLOR_THEMES.default;
+    const theme =
+      isKimView || !isBroadcast
+        ? MAP_COLOR_THEMES.default
+        : MAP_COLOR_THEMES.broadcast;
     const applyTheme = () => {
       try {
         map.setPaintProperty('sea', 'background-color', theme.sea);
@@ -2882,7 +2885,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
     map.on('styledata', retry);
     return () => map.off('styledata', retry);
-  }, [isBroadcast]);
+  }, [isBroadcast, isKimView]);
 
   // 방송모드에서는 끊김 없는 재생을 위해 전 구간 프레임을 미리 받아 둔다.
   useEffect(() => {

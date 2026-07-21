@@ -32,7 +32,7 @@ const SOURCE_GRID = {
   originY: 418.1600076203328,
 };
 const DOWNSAMPLE = 2;
-const SMOOTHING_PASSES = 2;
+const SMOOTHING_PASSES = 1;
 const OUTPUT_GRID = {
   width: SOURCE_GRID.width / DOWNSAMPLE,
   height: SOURCE_GRID.height / DOWNSAMPLE,
@@ -80,7 +80,7 @@ const getEdgeCache = () =>
 
 const cacheKey = (requestUrl, suffix) => {
   const url = new URL(requestUrl);
-  return new Request(`${url.origin}/__kim-rain-cache/v4/${suffix}`);
+  return new Request(`${url.origin}/__kim-rain-cache/v5/${suffix}`);
 };
 
 const putCache = (context, key, response) => {
