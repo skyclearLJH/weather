@@ -41,7 +41,7 @@ import {
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
-const KIM_VIEW_BOUNDS = { lonMin: 124.5, lonMax: 132.1, latMin: 31.75, latMax: 39.2 };
+const KIM_VIEW_BOUNDS = { lonMin: 118.2, lonMax: 133.8, latMin: 30.7, latMax: 45.2 };
 const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
 const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';

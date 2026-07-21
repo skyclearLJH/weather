@@ -19,19 +19,26 @@ const corsHeaders = {
 };
 
 const KIM_HEADER_URL = 'https://apihub.kma.go.kr/api/typ06/cgi-bin/url/nph-nwp_header';
-const KIM_LDAPS_URL =
-  'https://apihub.kma.go.kr/api/typ02/openApi/KIMModelInfoService/getKIMLdapsUnisAll';
+const KIM_DOWNLOAD_URL = 'https://apihub.kma.go.kr/api/typ06/url/nwp_vars_down.php';
 const MAX_LEAD_HOUR = 48;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const COMPLETE_CYCLE_CACHE_SECONDS = 5 * 60;
 const FRAME_CACHE_SECONDS = 7 * 24 * 60 * 60;
-const DOWNSAMPLE = 1;
+// KMA l010 GRIB uses a 1 km Lambert grid whose lower-left point is 119.82288E, 30.77852N.
+const SOURCE_GRID = {
+  width: 1176,
+  height: 1536,
+  gridKm: 1,
+  originX: 587.5923527533838,
+  originY: 767.6189673632407,
+};
+const DOWNSAMPLE = 2;
 const SMOOTHING_PASSES = 1;
 const LOCAL_KOREA_BOUNDS = {
-  lonMin: 124.5,
-  lonMax: 132.1,
-  latMin: 31.75,
-  latMax: 39.2,
+  lonMin: 118.2,
+  lonMax: 133.8,
+  latMin: 30.7,
+  latMax: 45.2,
 };
 
 class KimNoDataError extends Error {
@@ -66,7 +73,7 @@ const getEdgeCache = () =>
 
 const cacheKey = (requestUrl, suffix) => {
   const url = new URL(requestUrl);
-  return new Request(`${url.origin}/__kim-rain-cache/v6/${suffix}`);
+  return new Request(`${url.origin}/__kim-rain-cache/v8/${suffix}`);
 };
 
 const putCache = (context, key, response) => {
@@ -146,110 +153,71 @@ const fetchLatestCycleHeader = async (context, baseTime) => {
   }
 };
 
-const parseCachedKimGrid = async (response) => {
-  const width = Number(response.headers.get('X-Kim-Width'));
-  const height = Number(response.headers.get('X-Kim-Height'));
-  const buffer = await response.arrayBuffer();
-  const values = new Uint16Array(buffer);
-  if (!width || !height || values.length !== width * height) {
-    throw new Error('KIM 국지모델 캐시 격자 크기가 올바르지 않습니다.');
+const parseFullGridBinary = (buffer) => {
+  const bytes = new Uint8Array(buffer);
+  const newlineIndex = bytes.indexOf(10);
+  if (newlineIndex < 0 || newlineIndex + 9 > bytes.length) {
+    throw new Error('KIM 국지모델 바이너리 헤더가 올바르지 않습니다.');
+  }
+  const headerOffset = newlineIndex + 1;
+  const view = new DataView(buffer, headerOffset);
+  const width = view.getUint32(0, true);
+  const height = view.getUint32(4, true);
+  const dataOffset = headerOffset + 8;
+  if (
+    width !== SOURCE_GRID.width ||
+    height !== SOURCE_GRID.height ||
+    dataOffset + width * height * 4 > buffer.byteLength
+  ) {
+    throw new Error(`KIM 국지모델 격자 크기가 올바르지 않습니다. (${width}x${height})`);
   }
   return {
-    width,
-    height,
-    gridKm: Number(response.headers.get('X-Kim-Grid-Km')),
-    originX: Number(response.headers.get('X-Kim-Origin-X')),
-    originY: Number(response.headers.get('X-Kim-Origin-Y')),
-    validTime: response.headers.get('X-Kim-Valid-Time'),
-    values,
+    ...SOURCE_GRID,
+    values: new Float32Array(buffer, dataOffset, width * height),
   };
-};
-
-const encodeCumulativeValues = (valueText, expectedLength) => {
-  const source = String(valueText ?? '').split(',');
-  if (source.length !== expectedLength) {
-    throw new Error(
-      `KIM 국지모델 강수 격자 개수가 올바르지 않습니다. (${source.length}/${expectedLength})`,
-    );
-  }
-  const encoded = new Uint16Array(expectedLength);
-  for (let index = 0; index < expectedLength; index += 1) {
-    const value = Number(source[index]);
-    encoded[index] =
-      Number.isFinite(value) && value >= 0
-        ? Math.min(65534, Math.round(value * 10))
-        : 65535;
-  }
-  return encoded;
 };
 
 const fetchKimCumulative = async (context, baseTime, leadHour) => {
   const edgeCache = getEdgeCache();
-  const key = cacheKey(context.request.url, `raw-local/${baseTime}/${leadHour}`);
+  const key = cacheKey(context.request.url, `raw-local-full/${baseTime}/${leadHour}`);
   const cached = edgeCache ? await edgeCache.match(key) : null;
-  if (cached) return parseCachedKimGrid(cached);
+  if (cached) return parseFullGridBinary(await cached.arrayBuffer());
 
   const authKey = readAuthKey(context.env);
   if (!authKey) throw new Error('방송모드 기상청 인증키가 설정되지 않았습니다.');
   const query = new URLSearchParams({
-    baseTime,
-    leadHour: String(leadHour),
-    dataTypeCd: 'Rain',
-    dataType: 'JSON',
+    nwp: 'l010',
+    sub: 'unis',
+    vars: 'apcp',
+    tmfc: formatUtcCycle(baseTime),
+    ef: String(leadHour),
+    dataType: 'BIN',
     authKey,
   });
-  const response = await fetch(`${KIM_LDAPS_URL}?${query}`, {
+  const response = await fetch(`${KIM_DOWNLOAD_URL}?${query}`, {
     signal: AbortSignal.timeout(40000),
   });
   if (response.status === 403) throw new Error('KIM 국지모델 API 활용 권한이 없습니다.');
   if (!response.ok) throw new Error(`KIM 국지모델 요청 실패 (${response.status})`);
-  const payload = await response.json();
-  const resultCode = payload?.response?.header?.resultCode;
-  if (resultCode !== '00') {
-    throw new KimNoDataError(
-      payload?.response?.header?.resultMsg || 'KIM 국지모델 자료가 아직 생산되지 않았습니다.',
-    );
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength < 1000) {
+    throw new KimNoDataError(new TextDecoder().decode(buffer).trim());
   }
-  const items = payload?.response?.body?.items?.item;
-  const item = Array.isArray(items) ? items[0] : items;
-  const width = Number(item?.xdim);
-  const height = Number(item?.ydim);
-  const gridKm = Number(item?.gridKm);
-  const originX = Number(item?.x0);
-  const originY = Number(item?.y0);
-  if (!width || !height || !gridKm || !Number.isFinite(originX) || !Number.isFinite(originY)) {
-    throw new Error('KIM 국지모델 격자 메타데이터가 올바르지 않습니다.');
-  }
-  const values = encodeCumulativeValues(item.value, width * height);
-  const parsed = {
-    width,
-    height,
-    gridKm,
-    originX,
-    originY,
-    validTime: item.fcstTime,
-    values,
-  };
+  const parsed = parseFullGridBinary(buffer);
   putCache(
     context,
     key,
-    new Response(values.buffer, {
+    new Response(buffer, {
       headers: {
         'Content-Type': 'application/octet-stream',
         'Cache-Control': `public, max-age=${FRAME_CACHE_SECONDS}`,
-        'X-Kim-Width': String(width),
-        'X-Kim-Height': String(height),
-        'X-Kim-Grid-Km': String(gridKm),
-        'X-Kim-Origin-X': String(originX),
-        'X-Kim-Origin-Y': String(originY),
-        'X-Kim-Valid-Time': item.fcstTime,
       },
     }),
   );
   return parsed;
 };
 
-const isValidRainValue = (value) => value !== 65535;
+const isValidRainValue = (value) => Number.isFinite(value) && value > -100;
 
 const isCumulativePair = (currentValues, previousValues) => {
   let comparable = 0;
@@ -260,7 +228,7 @@ const isCumulativePair = (currentValues, previousValues) => {
     const previous = previousValues[index];
     if (!isValidRainValue(current) || !isValidRainValue(previous)) continue;
     comparable += 1;
-    if (current + 1 >= previous) nonDecreasing += 1;
+    if (current + 0.01 >= previous) nonDecreasing += 1;
   }
   return comparable > 0 && nonDecreasing / comparable >= 0.97;
 };
@@ -329,11 +297,12 @@ const buildHourlyGrid = (currentGrid, previousGrid) => {
             (outY * DOWNSAMPLE + dy) * currentGrid.width + outX * DOWNSAMPLE + dx;
           const current = currentGrid.values[index];
           const previous = previousGrid.values[index];
-          if (!isValidRainValue(current)) continue;
-          const hourly =
-            cumulative && isValidRainValue(previous)
-              ? Math.max(0, current - previous) / 10
-              : Math.max(0, current) / 10;
+          if (!isValidRainValue(current) || (cumulative && !isValidRainValue(previous))) {
+            continue;
+          }
+          const hourly = cumulative
+            ? Math.max(0, current - previous)
+            : Math.max(0, current);
           sum += hourly;
           count += 1;
         }
@@ -367,20 +336,19 @@ const buildLatestMeta = async (context) => {
   for (const baseTime of buildRecentCycleTimes()) {
     try {
       await fetchLatestCycleHeader(context, baseTime);
-      const sourceGrid = await fetchKimCumulative(context, baseTime, 0);
       const baseMs = parseKstTm(baseTime);
       return {
         baseTime,
-        gridKm: sourceGrid.gridKm * DOWNSAMPLE,
-        width: Math.floor(sourceGrid.width / DOWNSAMPLE),
-        height: Math.floor(sourceGrid.height / DOWNSAMPLE),
-        originX: (sourceGrid.originX - (DOWNSAMPLE - 1) / 2) / DOWNSAMPLE,
-        originY: (sourceGrid.originY - (DOWNSAMPLE - 1) / 2) / DOWNSAMPLE,
+        gridKm: SOURCE_GRID.gridKm * DOWNSAMPLE,
+        width: Math.floor(SOURCE_GRID.width / DOWNSAMPLE),
+        height: Math.floor(SOURCE_GRID.height / DOWNSAMPLE),
+        originX: (SOURCE_GRID.originX - (DOWNSAMPLE - 1) / 2) / DOWNSAMPLE,
+        originY: (SOURCE_GRID.originY - (DOWNSAMPLE - 1) / 2) / DOWNSAMPLE,
         bounds: LOCAL_KOREA_BOUNDS,
-        sourceGridKm: sourceGrid.gridKm,
-        sourceWidth: sourceGrid.width,
-        sourceHeight: sourceGrid.height,
-        sourceUnit: 'mm',
+        sourceGridKm: SOURCE_GRID.gridKm,
+        sourceWidth: SOURCE_GRID.width,
+        sourceHeight: SOURCE_GRID.height,
+        sourceUnit: 'kg/m^2',
         unit: 'mm/h',
         encoding: 'uint16-centimm-le',
         domain: 'local-korea',
@@ -438,7 +406,7 @@ export const onRequestGet = async (context) => {
 
     const refresh = url.searchParams.get('_refresh') === '1';
     const edgeCache = getEdgeCache();
-    const key = cacheKey(context.request.url, `hourly-local-smooth/${baseTime}/${leadHour}`);
+    const key = cacheKey(context.request.url, `hourly-local-full-smooth/${baseTime}/${leadHour}`);
     if (!refresh && edgeCache) {
       const cached = await edgeCache.match(key);
       if (cached) return cached;
@@ -459,7 +427,7 @@ export const onRequestGet = async (context) => {
         'Content-Type': 'application/octet-stream',
         'Cache-Control': `public, max-age=3600, s-maxage=${FRAME_CACHE_SECONDS}`,
         'X-Kim-Base-Time': baseTime,
-        'X-Kim-Valid-Time': currentGrid.validTime || formatKstTm(baseMs + leadHour * 60 * 60 * 1000),
+        'X-Kim-Valid-Time': formatKstTm(baseMs + leadHour * 60 * 60 * 1000),
         'X-Kim-Lead-Hour': String(leadHour),
         'X-Kim-Width': String(width),
         'X-Kim-Height': String(height),
