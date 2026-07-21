@@ -52,14 +52,16 @@ export const fetchLatestKimRainMeta = async ({ refresh = false } = {}) => {
   return meta;
 };
 
-export const buildKimRainFrames = (meta) =>
-  meta.frames.map(({ leadHour, validTime }) => ({
-    key: `kim-${meta.baseTime}-${leadHour}`,
-    kind: 'kim',
-    baseTime: meta.baseTime,
-    leadHour,
-    validTime: parseKimTime(validTime),
-  }));
+export const buildKimRainFrames = (meta, fromTime = new Date()) =>
+  meta.frames
+    .map(({ leadHour, validTime }) => ({
+      key: `kim-${meta.baseTime}-${leadHour}`,
+      kind: 'kim',
+      baseTime: meta.baseTime,
+      leadHour,
+      validTime: parseKimTime(validTime),
+    }))
+    .filter((frame) => frame.validTime && frame.validTime.getTime() >= fromTime.getTime());
 
 export const fetchKimRainFrame = async (baseTime, leadHour, { refresh = false } = {}) => {
   const query = new URLSearchParams({ baseTime, leadHour: String(leadHour) });
@@ -70,14 +72,17 @@ export const fetchKimRainFrame = async (baseTime, leadHour, { refresh = false } 
       await parseErrorResponse(response, `KIM +${leadHour}시간 자료 요청 실패 (${response.status})`),
     );
   }
-  const buckets = new Uint8Array(await response.arrayBuffer());
+  const buffer = await response.arrayBuffer();
   const width = Number(response.headers.get('X-Kim-Width'));
   const height = Number(response.headers.get('X-Kim-Height'));
-  if (!width || !height || buckets.length !== width * height) {
+  const encoding = response.headers.get('X-Kim-Encoding') || '';
+  const values =
+    encoding === 'uint16-centimm-le' ? new Uint16Array(buffer) : new Uint8Array(buffer);
+  if (!width || !height || values.length !== width * height) {
     throw new Error('KIM 시간당 강수 격자 크기가 올바르지 않습니다.');
   }
   return {
-    buckets,
+    values,
     width,
     height,
     baseTime: response.headers.get('X-Kim-Base-Time') || baseTime,
@@ -88,6 +93,7 @@ export const fetchKimRainFrame = async (baseTime, leadHour, { refresh = false } 
     gridKm: Number(response.headers.get('X-Kim-Grid-Km')),
     unit: response.headers.get('X-Kim-Unit') || 'mm/h',
     conversion: response.headers.get('X-Kim-Conversion') || '',
+    encoding,
+    domain: response.headers.get('X-Kim-Domain') || '',
   };
 };
-

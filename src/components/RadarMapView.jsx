@@ -41,6 +41,7 @@ import {
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
+const KIM_VIEW_BOUNDS = { lonMin: 103.9, lonMax: 148.1, latMin: 25.2, latMax: 49.8 };
 const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
 const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
@@ -570,10 +571,12 @@ const buildPixelMappings = (width, height) => {
 
 // KIM 3 km 격자는 (126E, 38N) 원점 좌표가 x0/y0로 주어지며 y축은 북쪽으로 증가한다.
 const buildKimPixelMapping = (width, height, meta) => {
-  const { lonMin, lonMax, latMin, latMax } = VIEW_BOUNDS;
+  const { lonMin, lonMax, latMin, latMax } = KIM_VIEW_BOUNDS;
   const yTop = mercatorY(latMax);
   const yBottom = mercatorY(latMin);
-  const mapping = new Int32Array(width * height).fill(-1);
+  const baseIndex = new Int32Array(width * height).fill(-1);
+  const fractionX = new Uint8Array(width * height);
+  const fractionY = new Uint8Array(width * height);
   const sinTheta = new Float64Array(width);
   const cosTheta = new Float64Array(width);
 
@@ -590,14 +593,19 @@ const buildKimPixelMapping = (width, height, meta) => {
     for (let px = 0; px < width; px += 1) {
       const xKm = rho * sinTheta[px];
       const yKm = LCC_RHO0_KM - rho * cosTheta[px];
-      const gridX = Math.round(xKm / meta.gridKm + meta.originX);
-      const gridY = Math.round(yKm / meta.gridKm + meta.originY);
-      if (gridX >= 0 && gridX < meta.width && gridY >= 0 && gridY < meta.height) {
-        mapping[py * width + px] = gridY * meta.width + gridX;
+      const gridX = xKm / meta.gridKm + meta.originX;
+      const gridY = yKm / meta.gridKm + meta.originY;
+      const left = Math.floor(gridX);
+      const bottom = Math.floor(gridY);
+      if (left >= 0 && left + 1 < meta.width && bottom >= 0 && bottom + 1 < meta.height) {
+        const pixelIndex = py * width + px;
+        baseIndex[pixelIndex] = bottom * meta.width + left;
+        fractionX[pixelIndex] = Math.round((gridX - left) * 255);
+        fractionY[pixelIndex] = Math.round((gridY - bottom) * 255);
       }
     }
   }
-  return mapping;
+  return { baseIndex, fractionX, fractionY, gridWidth: meta.width };
 };
 
 const OBS_TIMELINE_RANGE_MINUTES = 360;
@@ -606,7 +614,6 @@ const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 �
 // --- 방송모드 ---
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
 const BROADCAST_CACHE_LIMIT = 130; // 전 구간 재생을 위해 모든 프레임을 캐시
-const MAX_KIM_LEAD_HOURS = 72;
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 
 // 기본(포털) 초기 화면: 남한 전체. 방송모드: 서해 상 접근 강수까지 보이는 광역 구도.
@@ -618,6 +625,10 @@ const KOREA_MAP_BOUNDS = [
 const BROADCAST_MAP_BOUNDS = [
   [121.5, 32.1],
   [133.5, 39.5],
+];
+const KIM_MAP_BOUNDS = [
+  [KIM_VIEW_BOUNDS.lonMin, KIM_VIEW_BOUNDS.latMin],
+  [KIM_VIEW_BOUNDS.lonMax, KIM_VIEW_BOUNDS.latMax],
 ];
 
 const formatBroadcastDate = (time) =>
@@ -668,6 +679,35 @@ const LEGEND_LABELS = [0, 1, 5, 10, 30, 50, 100, 150];
 
 const getPaletteColorByValue = (value) =>
   RAIN_PALETTE.find((item) => item.min === value)?.color ?? [0, 0, 0];
+
+const getContinuousRainColor = (value) => {
+  if (value < 0.05) return null;
+  if (value <= RAIN_PALETTE[0].min) return RAIN_PALETTE[0].color;
+  for (let index = 1; index < RAIN_PALETTE.length; index += 1) {
+    const lower = RAIN_PALETTE[index - 1];
+    const upper = RAIN_PALETTE[index];
+    if (value <= upper.min) {
+      const ratio = (value - lower.min) / (upper.min - lower.min);
+      return lower.color.map((channel, channelIndex) =>
+        Math.round(channel + (upper.color[channelIndex] - channel) * ratio),
+      );
+    }
+  }
+  return RAIN_PALETTE.at(-1).color;
+};
+
+const KIM_RAIN_COLOR_LUT = (() => {
+  const lookup = new Uint8Array(65536 * 3);
+  for (let encoded = 5; encoded < 65536; encoded += 1) {
+    const color = getContinuousRainColor(encoded / 100);
+    if (!color) continue;
+    const offset = encoded * 3;
+    lookup[offset] = color[0];
+    lookup[offset + 1] = color[1];
+    lookup[offset + 2] = color[2];
+  }
+  return lookup;
+})();
 
 const getLegendLabelPosition = (value) => {
   const exactStop = LEGEND_SCALE_STOPS.find((item) => item.value === value);
@@ -751,8 +791,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const pendingRef = useRef(new Map());
   const kimCacheRef = useRef(new Map());
   const kimPendingRef = useRef(new Map());
-  const kimMetaRef = useRef(null);
-  const kimFramesRef = useRef([]);
   const renderTokenRef = useRef(0);
   const [frames, setFrames] = useState([]);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -969,6 +1007,33 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
   }, [canvasHeight]);
 
+  // KIM은 실제 3 km 지역모델의 동아시아 전체 도메인으로 캔버스와 지도를 확장한다.
+  useEffect(() => {
+    const applyDomain = () => {
+      const map = mapRef.current;
+      const source = map?.getSource('radar-overlay');
+      if (!map || !source?.setCoordinates) return false;
+      const bounds = isKimView ? KIM_VIEW_BOUNDS : VIEW_BOUNDS;
+      source.setCoordinates([
+        [bounds.lonMin, bounds.latMax],
+        [bounds.lonMax, bounds.latMax],
+        [bounds.lonMax, bounds.latMin],
+        [bounds.lonMin, bounds.latMin],
+      ]);
+      map.fitBounds(
+        isKimView ? KIM_MAP_BOUNDS : isBroadcast ? BROADCAST_MAP_BOUNDS : KOREA_MAP_BOUNDS,
+        { padding: isKimView ? 8 : isBroadcast ? 0 : 12, duration: 650 },
+      );
+      return true;
+    };
+
+    if (applyDomain()) return undefined;
+    const timer = window.setInterval(() => {
+      if (applyDomain()) window.clearInterval(timer);
+    }, 200);
+    return () => window.clearInterval(timer);
+  }, [isBroadcast, isKimView]);
+
   // 픽셀 매핑 준비 (무거운 계산이라 렌더 이후 한 번만)
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1008,29 +1073,51 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       }
       const imageData = imageDataRef.current;
       const pixels = imageData.data;
-      const dataMap =
-        frame.kind === 'obs'
-          ? mappings.radarMap
-          : frame.kind === 'kim'
-            ? kimMappingRef.current
-            : mappings.qpfMap;
-      if (!dataMap) {
-        return;
-      }
-      const { buckets } = frame;
-
-      for (let index = 0; index < dataMap.length; index++) {
-        const offset = index * 4;
-        const sourceIndex = dataMap[index];
-        const bucket = sourceIndex >= 0 ? buckets[sourceIndex] : 0;
-        if (bucket > 0) {
-          const [r, g, b] = RAIN_PALETTE[bucket - 1].color;
-          pixels[offset] = r;
-          pixels[offset + 1] = g;
-          pixels[offset + 2] = b;
-          pixels[offset + 3] = OVERLAY_ALPHA;
-        } else {
-          pixels[offset + 3] = 0;
+      if (frame.kind === 'kim') {
+        const mapping = kimMappingRef.current;
+        if (!mapping || !frame.values) return;
+        const { baseIndex, fractionX, fractionY, gridWidth } = mapping;
+        for (let index = 0; index < baseIndex.length; index += 1) {
+          const pixelOffset = index * 4;
+          const sourceIndex = baseIndex[index];
+          if (sourceIndex < 0) {
+            pixels[pixelOffset + 3] = 0;
+            continue;
+          }
+          const fx = fractionX[index] / 255;
+          const fy = fractionY[index] / 255;
+          const topIndex = sourceIndex + gridWidth;
+          const lower =
+            frame.values[sourceIndex] * (1 - fx) + frame.values[sourceIndex + 1] * fx;
+          const upper =
+            frame.values[topIndex] * (1 - fx) + frame.values[topIndex + 1] * fx;
+          const encoded = Math.min(65535, Math.round(lower * (1 - fy) + upper * fy));
+          if (encoded < 5) {
+            pixels[pixelOffset + 3] = 0;
+            continue;
+          }
+          const colorOffset = encoded * 3;
+          pixels[pixelOffset] = KIM_RAIN_COLOR_LUT[colorOffset];
+          pixels[pixelOffset + 1] = KIM_RAIN_COLOR_LUT[colorOffset + 1];
+          pixels[pixelOffset + 2] = KIM_RAIN_COLOR_LUT[colorOffset + 2];
+          pixels[pixelOffset + 3] = Math.round(OVERLAY_ALPHA * Math.min(1, encoded / 10));
+        }
+      } else {
+        const dataMap = frame.kind === 'obs' ? mappings.radarMap : mappings.qpfMap;
+        const { buckets } = frame;
+        for (let index = 0; index < dataMap.length; index += 1) {
+          const offset = index * 4;
+          const sourceIndex = dataMap[index];
+          const bucket = sourceIndex >= 0 ? buckets[sourceIndex] : 0;
+          if (bucket > 0) {
+            const [r, g, b] = RAIN_PALETTE[bucket - 1].color;
+            pixels[offset] = r;
+            pixels[offset + 1] = g;
+            pixels[offset + 2] = b;
+            pixels[offset + 3] = OVERLAY_ALPHA;
+          } else {
+            pixels[offset + 3] = 0;
+          }
         }
       }
 
@@ -1132,10 +1219,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return promise;
   }, [isBroadcast, rememberFrameBuckets]);
 
-  const rememberKimBuckets = useCallback((key, buckets) => {
+  const rememberKimValues = useCallback((key, values) => {
     const cache = kimCacheRef.current;
     if (cache.has(key)) cache.delete(key);
-    cache.set(key, buckets);
+    cache.set(key, values);
     while (cache.size > 72) {
       cache.delete(cache.keys().next().value);
     }
@@ -1145,24 +1232,24 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     (frameDef) => {
       const cache = kimCacheRef.current;
       if (cache.has(frameDef.key)) {
-        const buckets = cache.get(frameDef.key);
+        const values = cache.get(frameDef.key);
         cache.delete(frameDef.key);
-        cache.set(frameDef.key, buckets);
-        return Promise.resolve(buckets);
+        cache.set(frameDef.key, values);
+        return Promise.resolve(values);
       }
       if (kimPendingRef.current.has(frameDef.key)) {
         return kimPendingRef.current.get(frameDef.key);
       }
       const request = fetchKimRainFrame(frameDef.baseTime, frameDef.leadHour)
         .then((data) => {
-          rememberKimBuckets(frameDef.key, data.buckets);
-          return data.buckets;
+          rememberKimValues(frameDef.key, data.values);
+          return data.values;
         })
         .finally(() => kimPendingRef.current.delete(frameDef.key));
       kimPendingRef.current.set(frameDef.key, request);
       return request;
     },
-    [rememberKimBuckets],
+    [rememberKimValues],
   );
 
   // 완성된 최신 KIM 주기(+1~+72시간)를 선택하고 첫 표출 프레임을 준비한다.
@@ -1174,15 +1261,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
     const initializeKim = async () => {
       setIsPlaying(false);
-      if (
-        !isManualRefresh &&
-        kimMetaRef.current &&
-        kimFramesRef.current.length === MAX_KIM_LEAD_HOURS &&
-        kimMappingRef.current
-      ) {
-        setKimStatus('ready');
-        return;
-      }
       setKimStatus('loading');
       setKimError('');
       if (isManualRefresh) {
@@ -1191,18 +1269,16 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       }
       try {
         const meta = await fetchLatestKimRainMeta({ refresh: isManualRefresh });
-        const nextFrames = buildKimRainFrames(meta);
-        const nowMs = Date.now();
-        let nextIndex = nextFrames.findIndex((frame) => frame.validTime?.getTime() >= nowMs);
-        if (nextIndex < 0) nextIndex = nextFrames.length - 1;
+        const nextFrames = buildKimRainFrames(meta, new Date());
+        if (nextFrames.length === 0) {
+          throw new Error('현재 이후의 KIM 강수 예상 프레임이 없습니다.');
+        }
         kimMappingRef.current = buildKimPixelMapping(CANVAS_WIDTH, canvasHeight, meta);
-        await loadKimFrameData(nextFrames[nextIndex]);
+        await loadKimFrameData(nextFrames[0]);
         if (!isActive) return;
-        kimMetaRef.current = meta;
-        kimFramesRef.current = nextFrames;
         setKimMeta(meta);
         setKimFrames(nextFrames);
-        setKimIndex(nextIndex);
+        setKimIndex(0);
         setKimStatus('ready');
       } catch (error) {
         if (isActive) {
@@ -1401,9 +1477,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     if (!frameDef) return;
     const token = ++renderTokenRef.current;
     loadKimFrameData(frameDef)
-      .then((buckets) => {
+      .then((values) => {
         if (renderTokenRef.current === token) {
-          renderFrame({ ...frameDef, buckets });
+          renderFrame({ ...frameDef, values });
         }
       })
       .catch((error) => {
@@ -3087,7 +3163,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         ) : null}
         {isKimView && kimStatus === 'loading' ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/35 text-sm font-semibold text-white backdrop-blur-[1px]">
-            KIM 72시간 강수 예상도를 불러오는 중입니다…
+            KIM 동아시아 강수 예상도를 불러오는 중입니다…
           </div>
         ) : null}
         {isKimView && kimStatus === 'error' ? (
@@ -3182,9 +3258,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     {isKimView ? (
                       <span
                         className="rounded bg-emerald-300 px-1.5 py-0.5 text-xs font-black text-emerald-950"
-                        title={`KIM ${kimMeta?.gridKm ?? 3} km · ${kimMeta?.baseTime ?? ''} 기준`}
+                        title={`KIM ${kimMeta?.sourceGridKm ?? 3} km · ${kimMeta?.baseTime ?? ''} 기준`}
                       >
-                        KIM {kimMeta?.gridKm ?? 3}km
+                        KIM {kimMeta?.sourceGridKm ?? 3}km
                       </span>
                     ) : !isAccumView && currentFrame?.kind === 'fct' ? (
                       <span className="rounded bg-[#f4c542] px-1.5 py-0.5 text-xs font-black text-[#102a43]">
