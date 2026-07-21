@@ -41,7 +41,7 @@ import {
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
-const KIM_VIEW_BOUNDS = { lonMin: 103.9, lonMax: 148.1, latMin: 25.2, latMax: 49.8 };
+const KIM_VIEW_BOUNDS = { lonMin: 124.5, lonMax: 132.1, latMin: 31.75, latMax: 39.2 };
 const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
 const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
@@ -569,7 +569,7 @@ const buildPixelMappings = (width, height) => {
   return { radarMap, qpfMap };
 };
 
-// KIM 3 km 격자는 (126E, 38N) 원점 좌표가 x0/y0로 주어지며 y축은 북쪽으로 증가한다.
+// KIM 국지 격자는 (126E, 38N) 원점 좌표가 x0/y0로 주어지며 y축은 북쪽으로 증가한다.
 const buildKimPixelMapping = (width, height, meta) => {
   const { lonMin, lonMax, latMin, latMax } = KIM_VIEW_BOUNDS;
   const yTop = mercatorY(latMax);
@@ -713,6 +713,18 @@ const fitBroadcastFlatView = (map, duration = 0) => {
   map.setBearing(0);
   map.setPitch(0);
   map.fitBounds(BROADCAST_MAP_BOUNDS, { padding: 0, duration });
+};
+
+const fitKimLocalView = (map, duration = 0) => {
+  map.setBearing(0);
+  map.setPitch(0);
+  map.fitBounds(
+    [
+      [KIM_VIEW_BOUNDS.lonMin, KIM_VIEW_BOUNDS.latMin],
+      [KIM_VIEW_BOUNDS.lonMax, KIM_VIEW_BOUNDS.latMax],
+    ],
+    { padding: 0, duration },
+  );
 };
 
 const applyMapColorTheme = (map, theme) => {
@@ -1095,7 +1107,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
   }, [canvasHeight]);
 
-  // KIM 캔버스는 동아시아 전체를 유지하되, 방송 화면의 첫 구도는 세 자료가 같게 맞춘다.
+  // KIM 캔버스는 국지모델이 제공하는 한반도 전체 영역에 맞춘다.
   useEffect(() => {
     const applyDomain = () => {
       const map = mapRef.current;
@@ -1109,7 +1121,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         [bounds.lonMin, bounds.latMin],
       ]);
       if (isBroadcast) {
-        fitBroadcastFlatView(map, 650);
+        if (isKimView) {
+          fitKimLocalView(map, 650);
+        } else {
+          fitBroadcastFlatView(map, 650);
+        }
       } else {
         map.setBearing(0);
         map.setPitch(0);
@@ -1347,7 +1363,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     [rememberKimValues],
   );
 
-  // 완성된 최신 KIM 주기(+1~+72시간)를 선택하고 첫 표출 프레임을 준비한다.
+  // 완성된 최신 KIM 국지모델 주기를 선택하고 현재 이후 첫 프레임을 준비한다.
   useEffect(() => {
     if (!isKimView) return undefined;
     let isActive = true;
@@ -3290,7 +3306,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         ) : null}
         {isKimView && kimStatus === 'loading' ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/35 text-sm font-semibold text-white backdrop-blur-[1px]">
-            KIM 동아시아 강수 예상도를 불러오는 중입니다…
+            KIM 국지모델 강수 예상도를 불러오는 중입니다…
           </div>
         ) : null}
         {isKimView && kimStatus === 'error' ? (
@@ -3385,9 +3401,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     {isKimView ? (
                       <span
                         className="rounded bg-emerald-300 px-1.5 py-0.5 text-xs font-black text-emerald-950"
-                        title={`KIM ${kimMeta?.sourceGridKm ?? 3} km · ${kimMeta?.baseTime ?? ''} 기준`}
+                        title={`KIM ${kimMeta?.sourceGridKm ?? 1} km · ${kimMeta?.baseTime ?? ''} 기준`}
                       >
-                        KIM {kimMeta?.sourceGridKm ?? 3}km
+                        KIM {kimMeta?.sourceGridKm ?? 1}km
                       </span>
                     ) : !isAccumView && currentFrame?.kind === 'fct' ? (
                       <span className="rounded bg-[#f4c542] px-1.5 py-0.5 text-xs font-black text-[#102a43]">

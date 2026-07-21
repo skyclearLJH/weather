@@ -1,5 +1,5 @@
 const KIM_RAIN_ENDPOINT = '/api/kim-rain';
-const REQUEST_TIMEOUT_MS = 30000;
+const REQUEST_TIMEOUT_MS = 50000;
 
 const parseErrorResponse = async (response, fallback) => {
   try {
@@ -46,8 +46,8 @@ export const fetchLatestKimRainMeta = async ({ refresh = false } = {}) => {
     );
   }
   const meta = await response.json();
-  if (!meta.baseTime || !Array.isArray(meta.frames) || meta.frames.length !== 72) {
-    throw new Error('KIM 72시간 예측 주기 정보가 올바르지 않습니다.');
+  if (!meta.baseTime || !Array.isArray(meta.frames) || meta.frames.length === 0) {
+    throw new Error('KIM 국지모델 예측 주기 정보가 올바르지 않습니다.');
   }
   return meta;
 };

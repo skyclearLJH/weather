@@ -19,33 +19,19 @@ const corsHeaders = {
 };
 
 const KIM_HEADER_URL = 'https://apihub.kma.go.kr/api/typ06/cgi-bin/url/nph-nwp_header';
-const KIM_DOWNLOAD_URL = 'https://apihub.kma.go.kr/api/typ06/url/nwp_vars_down.php';
-const MAX_LEAD_HOUR = 72;
+const KIM_LDAPS_URL =
+  'https://apihub.kma.go.kr/api/typ02/openApi/KIMModelInfoService/getKIMLdapsUnisAll';
+const MAX_LEAD_HOUR = 48;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const COMPLETE_CYCLE_CACHE_SECONDS = 5 * 60;
 const FRAME_CACHE_SECONDS = 7 * 24 * 60 * 60;
-const SOURCE_GRID = {
-  width: 1050,
-  height: 840,
-  gridKm: 3,
-  originX: 525.4288656399325,
-  originY: 418.1600076203328,
-};
-const DOWNSAMPLE = 2;
+const DOWNSAMPLE = 1;
 const SMOOTHING_PASSES = 1;
-const OUTPUT_GRID = {
-  width: SOURCE_GRID.width / DOWNSAMPLE,
-  height: SOURCE_GRID.height / DOWNSAMPLE,
-  gridKm: SOURCE_GRID.gridKm * DOWNSAMPLE,
-  // Each output value is the average of a 2x2 source-cell block.
-  originX: (SOURCE_GRID.originX - 0.5) / DOWNSAMPLE,
-  originY: (SOURCE_GRID.originY - 0.5) / DOWNSAMPLE,
-};
-const EAST_ASIA_BOUNDS = {
-  lonMin: 103.96,
-  lonMax: 148.06,
-  latMin: 25.25,
-  latMax: 49.71,
+const LOCAL_KOREA_BOUNDS = {
+  lonMin: 124.5,
+  lonMax: 132.1,
+  latMin: 31.75,
+  latMax: 39.2,
 };
 
 class KimNoDataError extends Error {
@@ -80,7 +66,7 @@ const getEdgeCache = () =>
 
 const cacheKey = (requestUrl, suffix) => {
   const url = new URL(requestUrl);
-  return new Request(`${url.origin}/__kim-rain-cache/v5/${suffix}`);
+  return new Request(`${url.origin}/__kim-rain-cache/v6/${suffix}`);
 };
 
 const putCache = (context, key, response) => {
@@ -142,7 +128,7 @@ const fetchLatestCycleHeader = async (context, baseTime) => {
   if (!authKey) throw new Error('방송모드 기상청 인증키가 설정되지 않았습니다.');
   const query = new URLSearchParams({
     model: 'kim',
-    nwp: 'r030',
+    nwp: 'l010',
     sub: 'unis',
     tmfc: formatUtcCycle(baseTime),
     ef: String(MAX_LEAD_HOUR),
@@ -160,72 +146,110 @@ const fetchLatestCycleHeader = async (context, baseTime) => {
   }
 };
 
-const parseFullGridBinary = (buffer) => {
-  const bytes = new Uint8Array(buffer);
-  const newlineIndex = bytes.indexOf(10);
-  if (newlineIndex < 0 || newlineIndex + 9 > bytes.length) {
-    throw new Error('KIM 전체영역 바이너리 헤더가 올바르지 않습니다.');
-  }
-  const headerOffset = newlineIndex + 1;
-  const view = new DataView(buffer, headerOffset);
-  const width = view.getUint32(0, true);
-  const height = view.getUint32(4, true);
-  const dataOffset = headerOffset + 8;
-  if (
-    width !== SOURCE_GRID.width ||
-    height !== SOURCE_GRID.height ||
-    dataOffset + width * height * 4 > buffer.byteLength
-  ) {
-    throw new Error(`KIM 전체영역 격자 크기가 올바르지 않습니다. (${width}x${height})`);
+const parseCachedKimGrid = async (response) => {
+  const width = Number(response.headers.get('X-Kim-Width'));
+  const height = Number(response.headers.get('X-Kim-Height'));
+  const buffer = await response.arrayBuffer();
+  const values = new Uint16Array(buffer);
+  if (!width || !height || values.length !== width * height) {
+    throw new Error('KIM 국지모델 캐시 격자 크기가 올바르지 않습니다.');
   }
   return {
     width,
     height,
-    values: new Float32Array(buffer, dataOffset, width * height),
+    gridKm: Number(response.headers.get('X-Kim-Grid-Km')),
+    originX: Number(response.headers.get('X-Kim-Origin-X')),
+    originY: Number(response.headers.get('X-Kim-Origin-Y')),
+    validTime: response.headers.get('X-Kim-Valid-Time'),
+    values,
   };
+};
+
+const encodeCumulativeValues = (valueText, expectedLength) => {
+  const source = String(valueText ?? '').split(',');
+  if (source.length !== expectedLength) {
+    throw new Error(
+      `KIM 국지모델 강수 격자 개수가 올바르지 않습니다. (${source.length}/${expectedLength})`,
+    );
+  }
+  const encoded = new Uint16Array(expectedLength);
+  for (let index = 0; index < expectedLength; index += 1) {
+    const value = Number(source[index]);
+    encoded[index] =
+      Number.isFinite(value) && value >= 0
+        ? Math.min(65534, Math.round(value * 10))
+        : 65535;
+  }
+  return encoded;
 };
 
 const fetchKimCumulative = async (context, baseTime, leadHour) => {
   const edgeCache = getEdgeCache();
-  const key = cacheKey(context.request.url, `raw-full/${baseTime}/${leadHour}`);
+  const key = cacheKey(context.request.url, `raw-local/${baseTime}/${leadHour}`);
   const cached = edgeCache ? await edgeCache.match(key) : null;
-  if (cached) return parseFullGridBinary(await cached.arrayBuffer());
+  if (cached) return parseCachedKimGrid(cached);
 
   const authKey = readAuthKey(context.env);
   if (!authKey) throw new Error('방송모드 기상청 인증키가 설정되지 않았습니다.');
   const query = new URLSearchParams({
-    nwp: 'r030',
-    sub: 'unis',
-    vars: 'apcp',
-    tmfc: formatUtcCycle(baseTime),
-    ef: String(leadHour),
-    dataType: 'BIN',
+    baseTime,
+    leadHour: String(leadHour),
+    dataTypeCd: 'Rain',
+    dataType: 'JSON',
     authKey,
   });
-  const response = await fetch(`${KIM_DOWNLOAD_URL}?${query}`, {
-    signal: AbortSignal.timeout(25000),
+  const response = await fetch(`${KIM_LDAPS_URL}?${query}`, {
+    signal: AbortSignal.timeout(40000),
   });
-  if (response.status === 403) throw new Error('KIM 전체영역 API 활용 권한이 없습니다.');
-  if (!response.ok) throw new Error(`KIM 전체영역 요청 실패 (${response.status})`);
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength < 1000) {
-    throw new KimNoDataError(new TextDecoder().decode(buffer).trim());
+  if (response.status === 403) throw new Error('KIM 국지모델 API 활용 권한이 없습니다.');
+  if (!response.ok) throw new Error(`KIM 국지모델 요청 실패 (${response.status})`);
+  const payload = await response.json();
+  const resultCode = payload?.response?.header?.resultCode;
+  if (resultCode !== '00') {
+    throw new KimNoDataError(
+      payload?.response?.header?.resultMsg || 'KIM 국지모델 자료가 아직 생산되지 않았습니다.',
+    );
   }
-  const parsed = parseFullGridBinary(buffer);
+  const items = payload?.response?.body?.items?.item;
+  const item = Array.isArray(items) ? items[0] : items;
+  const width = Number(item?.xdim);
+  const height = Number(item?.ydim);
+  const gridKm = Number(item?.gridKm);
+  const originX = Number(item?.x0);
+  const originY = Number(item?.y0);
+  if (!width || !height || !gridKm || !Number.isFinite(originX) || !Number.isFinite(originY)) {
+    throw new Error('KIM 국지모델 격자 메타데이터가 올바르지 않습니다.');
+  }
+  const values = encodeCumulativeValues(item.value, width * height);
+  const parsed = {
+    width,
+    height,
+    gridKm,
+    originX,
+    originY,
+    validTime: item.fcstTime,
+    values,
+  };
   putCache(
     context,
     key,
-    new Response(buffer, {
+    new Response(values.buffer, {
       headers: {
         'Content-Type': 'application/octet-stream',
         'Cache-Control': `public, max-age=${FRAME_CACHE_SECONDS}`,
+        'X-Kim-Width': String(width),
+        'X-Kim-Height': String(height),
+        'X-Kim-Grid-Km': String(gridKm),
+        'X-Kim-Origin-X': String(originX),
+        'X-Kim-Origin-Y': String(originY),
+        'X-Kim-Valid-Time': item.fcstTime,
       },
     }),
   );
   return parsed;
 };
 
-const isValidRainValue = (value) => Number.isFinite(value) && value > -100;
+const isValidRainValue = (value) => value !== 65535;
 
 const isCumulativePair = (currentValues, previousValues) => {
   let comparable = 0;
@@ -236,7 +260,7 @@ const isCumulativePair = (currentValues, previousValues) => {
     const previous = previousValues[index];
     if (!isValidRainValue(current) || !isValidRainValue(previous)) continue;
     comparable += 1;
-    if (current + 0.01 >= previous) nonDecreasing += 1;
+    if (current + 1 >= previous) nonDecreasing += 1;
   }
   return comparable > 0 && nonDecreasing / comparable >= 0.97;
 };
@@ -287,64 +311,79 @@ const buildHourlyGrid = (currentGrid, previousGrid) => {
   ) {
     throw new Error('KIM 직전·현재 격자 크기가 일치하지 않습니다.');
   }
+  const outputWidth = Math.floor(currentGrid.width / DOWNSAMPLE);
+  const outputHeight = Math.floor(currentGrid.height / DOWNSAMPLE);
+  const outputGridKm = currentGrid.gridKm * DOWNSAMPLE;
+  const centerShift = (DOWNSAMPLE - 1) / 2;
+  const outputOriginX = (currentGrid.originX - centerShift) / DOWNSAMPLE;
+  const outputOriginY = (currentGrid.originY - centerShift) / DOWNSAMPLE;
   const cumulative = isCumulativePair(currentGrid.values, previousGrid.values);
-  const downsampled = new Float32Array(OUTPUT_GRID.width * OUTPUT_GRID.height);
-  for (let outY = 0; outY < OUTPUT_GRID.height; outY += 1) {
-    for (let outX = 0; outX < OUTPUT_GRID.width; outX += 1) {
+  const downsampled = new Float32Array(outputWidth * outputHeight);
+  for (let outY = 0; outY < outputHeight; outY += 1) {
+    for (let outX = 0; outX < outputWidth; outX += 1) {
       let sum = 0;
       let count = 0;
       for (let dy = 0; dy < DOWNSAMPLE; dy += 1) {
         for (let dx = 0; dx < DOWNSAMPLE; dx += 1) {
           const index =
-            (outY * DOWNSAMPLE + dy) * SOURCE_GRID.width + outX * DOWNSAMPLE + dx;
+            (outY * DOWNSAMPLE + dy) * currentGrid.width + outX * DOWNSAMPLE + dx;
           const current = currentGrid.values[index];
           const previous = previousGrid.values[index];
           if (!isValidRainValue(current)) continue;
           const hourly =
             cumulative && isValidRainValue(previous)
-              ? Math.max(0, current - previous)
-              : Math.max(0, current);
+              ? Math.max(0, current - previous) / 10
+              : Math.max(0, current) / 10;
           sum += hourly;
           count += 1;
         }
       }
-      downsampled[outY * OUTPUT_GRID.width + outX] = count > 0 ? sum / count : 0;
+      downsampled[outY * outputWidth + outX] = count > 0 ? sum / count : 0;
     }
   }
 
   const smoothed = smoothGrid(
     downsampled,
-    OUTPUT_GRID.width,
-    OUTPUT_GRID.height,
+    outputWidth,
+    outputHeight,
     SMOOTHING_PASSES,
   );
   const encoded = new Uint16Array(smoothed.length);
   for (let index = 0; index < smoothed.length; index += 1) {
     encoded[index] = Math.min(65535, Math.round(Math.max(0, smoothed[index]) * 100));
   }
-  return { values: encoded, cumulative };
+  return {
+    values: encoded,
+    cumulative,
+    width: outputWidth,
+    height: outputHeight,
+    gridKm: outputGridKm,
+    originX: outputOriginX,
+    originY: outputOriginY,
+  };
 };
 
 const buildLatestMeta = async (context) => {
   for (const baseTime of buildRecentCycleTimes()) {
     try {
       await fetchLatestCycleHeader(context, baseTime);
+      const sourceGrid = await fetchKimCumulative(context, baseTime, 0);
       const baseMs = parseKstTm(baseTime);
       return {
         baseTime,
-        gridKm: OUTPUT_GRID.gridKm,
-        width: OUTPUT_GRID.width,
-        height: OUTPUT_GRID.height,
-        originX: OUTPUT_GRID.originX,
-        originY: OUTPUT_GRID.originY,
-        bounds: EAST_ASIA_BOUNDS,
-        sourceGridKm: SOURCE_GRID.gridKm,
-        sourceWidth: SOURCE_GRID.width,
-        sourceHeight: SOURCE_GRID.height,
-        sourceUnit: 'kg/m^2',
+        gridKm: sourceGrid.gridKm * DOWNSAMPLE,
+        width: Math.floor(sourceGrid.width / DOWNSAMPLE),
+        height: Math.floor(sourceGrid.height / DOWNSAMPLE),
+        originX: (sourceGrid.originX - (DOWNSAMPLE - 1) / 2) / DOWNSAMPLE,
+        originY: (sourceGrid.originY - (DOWNSAMPLE - 1) / 2) / DOWNSAMPLE,
+        bounds: LOCAL_KOREA_BOUNDS,
+        sourceGridKm: sourceGrid.gridKm,
+        sourceWidth: sourceGrid.width,
+        sourceHeight: sourceGrid.height,
+        sourceUnit: 'mm',
         unit: 'mm/h',
         encoding: 'uint16-centimm-le',
-        domain: 'east-asia',
+        domain: 'local-korea',
         smoothingPasses: SMOOTHING_PASSES,
         accumulation: 'cumulative difference',
         maxLeadHour: MAX_LEAD_HOUR,
@@ -360,7 +399,7 @@ const buildLatestMeta = async (context) => {
       if (!(error instanceof KimNoDataError)) throw error;
     }
   }
-  throw new KimNoDataError('최근 완성된 KIM 72시간 전체영역 주기를 찾지 못했습니다.');
+  throw new KimNoDataError('최근 완성된 KIM 국지 48시간 예측 주기를 찾지 못했습니다.');
 };
 
 export const onRequestOptions = async () =>
@@ -394,12 +433,12 @@ export const onRequestGet = async (context) => {
       leadHour < 1 ||
       leadHour > MAX_LEAD_HOUR
     ) {
-      return jsonResponse({ error: 'baseTime과 1~72 범위의 leadHour가 필요합니다.' }, 400);
+      return jsonResponse({ error: 'baseTime과 1~48 범위의 leadHour가 필요합니다.' }, 400);
     }
 
     const refresh = url.searchParams.get('_refresh') === '1';
     const edgeCache = getEdgeCache();
-    const key = cacheKey(context.request.url, `hourly-smooth/${baseTime}/${leadHour}`);
+    const key = cacheKey(context.request.url, `hourly-local-smooth/${baseTime}/${leadHour}`);
     if (!refresh && edgeCache) {
       const cached = await edgeCache.match(key);
       if (cached) return cached;
@@ -409,7 +448,10 @@ export const onRequestGet = async (context) => {
       fetchKimCumulative(context, baseTime, leadHour),
       fetchKimCumulative(context, baseTime, leadHour - 1),
     ]);
-    const { values, cumulative } = buildHourlyGrid(currentGrid, previousGrid);
+    const { values, cumulative, width, height, originX, originY, gridKm } = buildHourlyGrid(
+      currentGrid,
+      previousGrid,
+    );
     const baseMs = parseKstTm(baseTime);
     const response = new Response(values.buffer, {
       headers: {
@@ -417,17 +459,17 @@ export const onRequestGet = async (context) => {
         'Content-Type': 'application/octet-stream',
         'Cache-Control': `public, max-age=3600, s-maxage=${FRAME_CACHE_SECONDS}`,
         'X-Kim-Base-Time': baseTime,
-        'X-Kim-Valid-Time': formatKstTm(baseMs + leadHour * 60 * 60 * 1000),
+        'X-Kim-Valid-Time': currentGrid.validTime || formatKstTm(baseMs + leadHour * 60 * 60 * 1000),
         'X-Kim-Lead-Hour': String(leadHour),
-        'X-Kim-Width': String(OUTPUT_GRID.width),
-        'X-Kim-Height': String(OUTPUT_GRID.height),
-        'X-Kim-Origin-X': String(OUTPUT_GRID.originX),
-        'X-Kim-Origin-Y': String(OUTPUT_GRID.originY),
-        'X-Kim-Grid-Km': String(OUTPUT_GRID.gridKm),
+        'X-Kim-Width': String(width),
+        'X-Kim-Height': String(height),
+        'X-Kim-Origin-X': String(originX),
+        'X-Kim-Origin-Y': String(originY),
+        'X-Kim-Grid-Km': String(gridKm),
         'X-Kim-Unit': 'mm/h',
         'X-Kim-Conversion': cumulative ? 'cumulative-difference' : 'direct-hourly',
         'X-Kim-Encoding': 'uint16-centimm-le',
-        'X-Kim-Domain': 'east-asia',
+        'X-Kim-Domain': 'local-korea',
       },
     });
     putCache(context, key, response);
