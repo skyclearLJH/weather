@@ -628,8 +628,8 @@ const BROADCAST_MAP_BOUNDS = [
 ];
 // Keep the full East Asia overlay available, but enter KIM view with Korea at broadcast scale.
 const KIM_MAP_BOUNDS = [
-  [118.0, 31.2],
-  [136.5, 42.3],
+  [117.0, 32.0],
+  [136.5, 40.7],
 ];
 
 const formatBroadcastDate = (time) =>
