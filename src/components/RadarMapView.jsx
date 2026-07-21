@@ -646,11 +646,11 @@ const MAP_COLOR_THEMES = {
     interKoreanSeamOpacity: 0,
   },
   broadcast: {
-    sea: '#dbe6ef',
-    neighborLand: '#eceae6',
-    neighborCoast: '#c3c8ce',
-    land: '#ffffff',
-    provinceBorder: '#a5aeb9',
+    sea: '#46536a',
+    neighborLand: '#828c9c',
+    neighborCoast: '#5d6879',
+    land: '#eef0f2',
+    provinceBorder: '#4a5568',
     interKoreanSeamOpacity: 1,
   },
 };
@@ -2851,10 +2851,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     if (!map) {
       return undefined;
     }
-    const theme =
-      isKimView || !isBroadcast
-        ? MAP_COLOR_THEMES.default
-        : MAP_COLOR_THEMES.broadcast;
+    const theme = isBroadcast ? MAP_COLOR_THEMES.broadcast : MAP_COLOR_THEMES.default;
     const applyTheme = () => {
       try {
         map.setPaintProperty('sea', 'background-color', theme.sea);
@@ -2885,7 +2882,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     };
     map.on('styledata', retry);
     return () => map.off('styledata', retry);
-  }, [isBroadcast, isKimView]);
+  }, [isBroadcast]);
 
   // 방송모드에서는 끊김 없는 재생을 위해 전 구간 프레임을 미리 받아 둔다.
   useEffect(() => {
