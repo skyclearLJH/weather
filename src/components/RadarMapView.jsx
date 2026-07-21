@@ -2691,9 +2691,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return kimFrames
       .map((frame, index) => ({ frame, index }))
       .map(({ frame, index }) => {
-        const isLabeled = index === 0 || frame.leadHour % 12 === 0;
+        const hour = frame.validTime.getHours();
+        const isEndpoint = index === 0 || index === span;
+        const isLabeled = isEndpoint || hour === 0 || hour === 12;
         const dateLabel =
-          isLabeled && (index === 0 || frame.validTime.getHours() === 0)
+          isLabeled && (index === 0 || hour === 0)
             ? `${frame.validTime.getMonth() + 1}.${frame.validTime.getDate()}`
             : '';
         return {
