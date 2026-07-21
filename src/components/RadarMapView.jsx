@@ -646,11 +646,11 @@ const MAP_COLOR_THEMES = {
     interKoreanSeamOpacity: 0,
   },
   broadcast: {
-    sea: '#46536a',
-    neighborLand: '#828c9c',
-    neighborCoast: '#5d6879',
-    land: '#eef0f2',
-    provinceBorder: '#4a5568',
+    sea: '#dbe6ef',
+    neighborLand: '#eceae6',
+    neighborCoast: '#c3c8ce',
+    land: '#ffffff',
+    provinceBorder: '#a5aeb9',
     interKoreanSeamOpacity: 1,
   },
 };
