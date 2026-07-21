@@ -605,7 +605,13 @@ const buildKimPixelMapping = (width, height, meta) => {
       }
     }
   }
-  return { baseIndex, fractionX, fractionY, gridWidth: meta.width };
+  return {
+    baseIndex,
+    fractionX,
+    fractionY,
+    gridWidth: meta.width,
+    gridHeight: meta.height,
+  };
 };
 
 const KIM_CUBIC_WEIGHTS = Array.from({ length: 256 }, (_, index) => {
@@ -713,18 +719,6 @@ const fitBroadcastFlatView = (map, duration = 0) => {
   map.setBearing(0);
   map.setPitch(0);
   map.fitBounds(BROADCAST_MAP_BOUNDS, { padding: 0, duration });
-};
-
-const fitKimLocalView = (map, duration = 0) => {
-  map.setBearing(0);
-  map.setPitch(0);
-  map.fitBounds(
-    [
-      [KIM_VIEW_BOUNDS.lonMin, KIM_VIEW_BOUNDS.latMin],
-      [KIM_VIEW_BOUNDS.lonMax, KIM_VIEW_BOUNDS.latMax],
-    ],
-    { padding: 0, duration },
-  );
 };
 
 const applyMapColorTheme = (map, theme) => {
@@ -1121,11 +1115,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         [bounds.lonMin, bounds.latMin],
       ]);
       if (isBroadcast) {
-        if (isKimView) {
-          fitKimLocalView(map, 650);
-        } else {
-          fitBroadcastFlatView(map, 650);
-        }
+        fitBroadcastFlatView(map, 650);
       } else {
         map.setBearing(0);
         map.setPitch(0);
@@ -1353,6 +1343,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       }
       const request = fetchKimRainFrame(frameDef.baseTime, frameDef.leadHour)
         .then((data) => {
+          const mapping = kimMappingRef.current;
+          if (
+            mapping &&
+            (data.width !== mapping.gridWidth || data.height !== mapping.gridHeight)
+          ) {
+            throw new Error('KIM 강수 격자 버전이 일치하지 않습니다. 새로고침해 주세요.');
+          }
           rememberKimValues(frameDef.key, data.values);
           return data.values;
         })

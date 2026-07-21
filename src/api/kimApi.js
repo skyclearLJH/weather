@@ -1,4 +1,5 @@
 const KIM_RAIN_ENDPOINT = '/api/kim-rain';
+const KIM_GRID_VERSION = 'l010-v2';
 const REQUEST_TIMEOUT_MS = 50000;
 
 const parseErrorResponse = async (response, fallback) => {
@@ -37,7 +38,7 @@ export const parseKimTime = (value) => {
 };
 
 export const fetchLatestKimRainMeta = async ({ refresh = false } = {}) => {
-  const query = new URLSearchParams({ meta: 'latest' });
+  const query = new URLSearchParams({ meta: 'latest', v: KIM_GRID_VERSION });
   if (refresh) query.set('_refresh', '1');
   const response = await fetchWithTimeout(`${KIM_RAIN_ENDPOINT}?${query}`);
   if (!response.ok) {
@@ -55,7 +56,7 @@ export const fetchLatestKimRainMeta = async ({ refresh = false } = {}) => {
 export const buildKimRainFrames = (meta, fromTime = new Date()) =>
   meta.frames
     .map(({ leadHour, validTime }) => ({
-      key: `kim-${meta.baseTime}-${leadHour}`,
+      key: `kim-${KIM_GRID_VERSION}-${meta.baseTime}-${leadHour}`,
       kind: 'kim',
       baseTime: meta.baseTime,
       leadHour,
@@ -64,7 +65,11 @@ export const buildKimRainFrames = (meta, fromTime = new Date()) =>
     .filter((frame) => frame.validTime && frame.validTime.getTime() >= fromTime.getTime());
 
 export const fetchKimRainFrame = async (baseTime, leadHour, { refresh = false } = {}) => {
-  const query = new URLSearchParams({ baseTime, leadHour: String(leadHour) });
+  const query = new URLSearchParams({
+    baseTime,
+    leadHour: String(leadHour),
+    v: KIM_GRID_VERSION,
+  });
   if (refresh) query.set('_refresh', '1');
   const response = await fetchWithTimeout(`${KIM_RAIN_ENDPOINT}?${query}`);
   if (!response.ok) {
