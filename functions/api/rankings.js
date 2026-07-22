@@ -29,6 +29,12 @@ const ASOS_DAILY_RN_60M_MAX_TM_INDEX = 42;
 const PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT = 42;
 const PRECIPITATION_MAX_ONE_HOUR_PRIORITY_FETCH_LIMIT = 30;
 const PRECIPITATION_MAX_ONE_HOUR_CLOSED_RECHECK_MS = 30 * 60 * 1000;
+// 당일(열린 구간): 정밀 계산이 이 시간보다 최근이고 값이 커지지 않았으면 재계산을 건너뛴다.
+// 호출량을 늘리지 않고, 아낀 몫을 아직 정밀 계산이 안 된 지점에 배정하기 위한 값.
+const PRECIPITATION_MAX_ONE_HOUR_OPEN_RECHECK_MS = 20 * 60 * 1000;
+// 화면에 펼쳐 보이는 순위 개수(App.jsx RANKING_EXPANDED_LIMIT과 맞춘다).
+// 일 강수량이 이 순위의 값보다 낮으면 60분 최대가 그보다 클 수 없어 후보에서 뺀다.
+const PRECIPITATION_MAX_ONE_HOUR_VISIBLE_LIMIT = 30;
 const AWS_MINUTE_RANGE_REQUEST_TIMEOUT_MS = 12000;
 const RANKING_CACHE_VERSION = 'v8';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
@@ -404,6 +410,7 @@ const createPrecipitationMaxOneHourAggregate = (day, previous) => ({
   sampledTimes: Array.isArray(previous?.sampledTimes) ? [...previous.sampledTimes] : [],
   exactUpTo: { ...(previous?.exactUpTo ?? {}) },
   exactCheckedAt: { ...(previous?.exactCheckedAt ?? {}) },
+  exactValue: { ...(previous?.exactValue ?? {}) },
 });
 
 const mergePrecipitationMaxOneHourRows = (aggregate, observedAt, rows = []) => {
@@ -773,9 +780,12 @@ const parseAwsStationMinuteSeries = (rawText) =>
 // 중간에 결측된 지점도 과거 구간의 정밀 계산 대상에서 빠지지 않는다.
 const buildExactFetchCandidates = (aggregate, dayTotals, windowEnd, isClosedWindow) => {
   const potentials = new Map();
+  // 일 강수량이 있는 지점은 '60분 최대 ≤ 일 강수량'이 보장되므로 상한으로 쓸 수 있다.
+  const boundedByDayTotal = new Set();
   dayTotals.forEach(({ stationId, total }) => {
     if (Number.isFinite(total) && total > 0) {
       potentials.set(stationId, total);
+      boundedByDayTotal.add(stationId);
     }
   });
   Object.values(aggregate.stations ?? {}).forEach((item) => {
@@ -785,12 +795,28 @@ const buildExactFetchCandidates = (aggregate, dayTotals, windowEnd, isClosedWind
     }
   });
 
+  // (B) 표시 순위에 닿을 수 없는 지점은 후보에서 제외한다. 상한(일 강수량)이 현재
+  // 알려진 값들의 표시 하한보다 낮으면 정밀 계산을 해도 목록에 못 들어온다.
+  // 상한을 모르는 지점(일 강수량 결측)은 안전하게 남겨 둔다.
+  const knownValues = Object.values(aggregate.stations ?? {})
+    .map((item) => item.value)
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => right - left);
+  const visibleFloor = knownValues[PRECIPITATION_MAX_ONE_HOUR_VISIBLE_LIMIT - 1] ?? 0;
+  const reachable = (stationId, potential) =>
+    !boundedByDayTotal.has(stationId) || potential >= visibleFloor;
+
   const candidates = [...potentials.entries()]
+    .filter(([stationId, potential]) => reachable(stationId, potential))
     .map(([stationId, potential]) => ({
       stationId,
       potential,
       exactUpTo: aggregate.exactUpTo?.[stationId] ?? '',
       exactCheckedAt: aggregate.exactCheckedAt?.[stationId] ?? '',
+      exactValue: aggregate.exactValue?.[stationId],
+      // 재계산 판단은 '샘플링으로 관측된 60분 값'과만 비교한다. potential에는 일 강수량이
+      // 섞여 있어(항상 60분 최대보다 큼) 비교에 쓰면 건너뛰기가 영영 발동하지 않는다.
+      sampledValue: aggregate.stations?.[stationId]?.value,
     }))
     .filter(({ exactUpTo, exactCheckedAt }) => {
       if (!isClosedWindow) {
@@ -817,7 +843,26 @@ const buildExactFetchCandidates = (aggregate, dayTotals, windowEnd, isClosedWind
       .slice(0, PRECIPITATION_MAX_ONE_HOUR_EXACT_FETCH_LIMIT);
   }
 
-  const priority = candidates.slice(0, PRECIPITATION_MAX_ONE_HOUR_PRIORITY_FETCH_LIMIT);
+  // (A) 최근에 정밀 계산했고 그 뒤로 값이 커지지 않은 지점은 이번 회차에서 건너뛴다.
+  // 상위 지점을 15분마다 반복 계산하던 몫이 아직 한 번도 계산 못 한 지점으로 넘어간다.
+  const needsExactRefresh = ({ exactCheckedAt, exactValue, sampledValue }) => {
+    if (!exactCheckedAt || !Number.isFinite(exactValue)) {
+      return true;
+    }
+    const checkedAt = Date.parse(exactCheckedAt);
+    if (!Number.isFinite(checkedAt)) {
+      return true;
+    }
+    if (Date.now() - checkedAt >= PRECIPITATION_MAX_ONE_HOUR_OPEN_RECHECK_MS) {
+      return true;
+    }
+    // 샘플링 값이 정밀 계산 결과를 넘어섰다면 새 비가 온 것이므로 다시 계산한다.
+    return Number.isFinite(sampledValue) && sampledValue > exactValue + 0.05;
+  };
+
+  const priority = candidates
+    .filter(needsExactRefresh)
+    .slice(0, PRECIPITATION_MAX_ONE_HOUR_PRIORITY_FETCH_LIMIT);
   const priorityStationIds = new Set(priority.map((item) => item.stationId));
   const rotation = candidates
     .filter((item) => !priorityStationIds.has(item.stationId))
@@ -913,6 +958,9 @@ const refreshExactStationMaxima = async (
 
     if (coveredThrough) {
       aggregate.exactCheckedAt[stationId] = new Date().toISOString();
+      // 정밀 계산이 산출한 값 자체를 남긴다. 이후 샘플링 값이 이보다 커지지 않았다면
+      // 새로 온 비가 없다는 뜻이라 재계산을 건너뛰고 그 몫을 미계산 지점에 돌린다.
+      aggregate.exactValue[stationId] = best ? best.value : 0;
       hasChanged = true;
     }
   });
