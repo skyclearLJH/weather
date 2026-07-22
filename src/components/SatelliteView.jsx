@@ -688,7 +688,8 @@ function SatelliteView({ menuSlot = null }) {
     (async () => {
       let pair;
       try {
-        pair = await fetchSatFramePair(currentDate);
+        // 선택한 한 장은 30분 묶음 전체를 기다리지 않고 먼저 표시한다.
+        pair = await fetchSatFramePair(currentDate, true);
       } catch (error) {
         if (!active) return;
         pendingFramesRef.current.ko = null;

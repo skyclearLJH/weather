@@ -352,10 +352,11 @@ const fetchDirectPair = async (dateUtc) => {
   return parsePairFrame(await response.arrayBuffer(), dateUtc);
 };
 
-export const fetchSatFramePair = (dateUtc) => {
+export const fetchSatFramePair = (dateUtc, preferSingle = false) => {
   const key = formatSatDateUtc(dateUtc);
   if (PAIR_CACHE.has(key)) return PAIR_CACHE.get(key);
   const promise = (async () => {
+    if (preferSingle) return fetchDirectPair(dateUtc);
     try {
       const bundle = await fetchSatBundle(bundleStartFor(dateUtc));
       const bundled = bundle.get(key);
