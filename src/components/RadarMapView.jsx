@@ -1604,10 +1604,19 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       0,
       kimFrames.findIndex((frame) => frame.validTime?.getTime() >= Date.now()),
     );
-    const queue = [
+    const orderedFrames = [
       ...kimFrames.slice(firstFutureIndex),
       ...kimFrames.slice(0, firstFutureIndex),
-    ].filter((frame) => !kimCacheRef.current.has(frame.key));
+    ];
+    const hasR2Availability = orderedFrames.some(
+      (frame) => frame.isPrecomputed !== null,
+    );
+    const nearbyKeys = new Set(orderedFrames.slice(0, 3).map((frame) => frame.key));
+    const queue = orderedFrames.filter(
+      (frame) =>
+        !kimCacheRef.current.has(frame.key) &&
+        (!hasR2Availability || frame.isPrecomputed || nearbyKeys.has(frame.key)),
+    );
     let cursor = 0;
     const pump = () => {
       if (isCancelled || cursor >= queue.length) return;

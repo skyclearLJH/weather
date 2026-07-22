@@ -21,6 +21,14 @@ Cloudflare KV 기반 사전 계산 캐시를 사용할 수 있습니다.
 - Worker 설정 예시: `wrangler.weather-cache.example.toml`
 - 운영/복구 문서: `docs/weather-cache.md`
 
+## KIM Rain Cache
+
+KIM model frames use a separate persistent R2 precompute cache.
+
+- Worker: `workers/kim-precompute.js`
+- Worker config: `wrangler.kim-cache.toml`
+- Operations and rollback: `docs/kim-rain-cache.md`
+
 ## Auto Push
 
 이 저장소는 `.githooks/post-commit` 훅을 사용합니다.

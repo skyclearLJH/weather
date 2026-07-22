@@ -53,16 +53,21 @@ export const fetchLatestKimRainMeta = async ({ refresh = false } = {}) => {
   return meta;
 };
 
-export const buildKimRainFrames = (meta, fromTime = new Date()) =>
-  meta.frames
+export const buildKimRainFrames = (meta, fromTime = new Date()) => {
+  const precomputedLeadHours = Array.isArray(meta.precomputedLeadHours)
+    ? new Set(meta.precomputedLeadHours.map(Number))
+    : null;
+  return meta.frames
     .map(({ leadHour, validTime }) => ({
       key: `kim-${KIM_GRID_VERSION}-${meta.baseTime}-${leadHour}`,
       kind: 'kim',
       baseTime: meta.baseTime,
       leadHour,
       validTime: parseKimTime(validTime),
+      isPrecomputed: precomputedLeadHours?.has(Number(leadHour)) ?? null,
     }))
     .filter((frame) => frame.validTime && frame.validTime.getTime() >= fromTime.getTime());
+};
 
 export const fetchKimRainFrame = async (baseTime, leadHour, { refresh = false } = {}) => {
   const query = new URLSearchParams({

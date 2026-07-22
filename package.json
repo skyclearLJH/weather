@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cf:kim:deploy": "npx wrangler@4 deploy --config wrangler.kim-cache.toml",
+    "cf:kim:status": "npx wrangler@4 tail weathernow-kim-precompute"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
