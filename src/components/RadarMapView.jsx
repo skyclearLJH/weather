@@ -38,6 +38,7 @@ import {
   fetchKimRainFrame,
   fetchLatestKimRainMeta,
 } from '../api/kimApi';
+import { fetchServerPrecipitationCurrentRankings } from '../api/weatherApi';
 
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
@@ -929,6 +930,44 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const isAccumView = isBroadcast && broadcastView === 'accum';
   const isKimView = isBroadcast && broadcastView === 'kim';
   const isSatelliteView = isBroadcast && broadcastView === 'satellite';
+  const isRadarView = isBroadcast && broadcastView === 'radar';
+  // 레이더 화면 위 '시간당 강수량' 최다 5지점 표 (체크박스로 켜고 끈다).
+  // 자료는 일반 페이지 '강수량 > 60분 현재'와 같은 서버 랭킹(precipitation-current)을 쓴다.
+  const [showHourlyTop5, setShowHourlyTop5] = useState(false);
+  const [hourlyTop5, setHourlyTop5] = useState([]);
+
+  useEffect(() => {
+    if (!isRadarView || !showHourlyTop5) {
+      return undefined;
+    }
+    let isActive = true;
+
+    const load = async () => {
+      try {
+        const data = await fetchServerPrecipitationCurrentRankings();
+        if (!isActive) return;
+        const rows = (data?.oneHour ?? [])
+          .slice(0, 5)
+          .map((item, index) => ({
+            id: `${item.rank ?? index}-${item.name ?? ''}`,
+            // 누적 강수량 표와 같은 '광역 시군(지점명)' 표기를 그대로 쓴다
+            label: formatStationLabel({ name: item.name, address: item.address }),
+            mm: Number.parseFloat(String(item.record ?? '')) || 0,
+          }));
+        setHourlyTop5(rows);
+      } catch {
+        if (isActive) setHourlyTop5([]);
+      }
+    };
+
+    load();
+    // 관측이 10분 단위로 갱신되므로 주기적으로 다시 읽는다.
+    const timer = setInterval(load, 5 * 60 * 1000);
+    return () => {
+      isActive = false;
+      clearInterval(timer);
+    };
+  }, [isRadarView, showHourlyTop5, refreshToken]);
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
 
   const loadAccumAnchor = useCallback((hour) => {
@@ -3460,6 +3499,50 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               </div>
             ) : null}
 
+            {/* 레이더: 시간당 강수량 최다 5지점 (체크박스로 표시) — 누적 표와 같은 위치·형태 */}
+            {isRadarView && showHourlyTop5 && hourlyTop5.length > 0 ? (
+              <div
+                className="pointer-events-none absolute z-20 flex justify-center"
+                style={{
+                  left: '4.4%',
+                  top: 'calc(50% - max(23vh, 140px) - 18.5px)',
+                  width: 'clamp(430px, 29vw, 700px)',
+                }}
+              >
+                <div
+                  className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm"
+                  style={{ width: 'clamp(320px, 22vw, 500px)' }}
+                >
+                  <div
+                    className="border-b border-white/15 px-5 py-[0.7vh] font-black text-white"
+                    style={{ fontSize: 'clamp(15px, 1.15vw, 24px)' }}
+                  >
+                    시간당 강수량
+                  </div>
+                  <div className="divide-y divide-white/10">
+                    {hourlyTop5.map((row, index) => (
+                      <div
+                        key={row.id}
+                        className="flex items-center gap-2.5 px-5 py-[0.9vh]"
+                        style={{ fontSize: 'clamp(16px, 1.25vw, 26px)' }}
+                      >
+                        <span className="w-[1.2em] shrink-0 font-black text-[#f4c542]">
+                          {index + 1}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate font-semibold text-white">
+                          {row.label}
+                        </span>
+                        <span className="shrink-0 font-black tabular-nums text-white">
+                          {row.mm.toFixed(1)}
+                          <span className="ml-0.5 font-semibold text-white/70">mm</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             {/* 좌측 세로 스케일: 레이더(mm/h) 또는 누적 강수량(mm) */}
             <div
               className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
@@ -3651,6 +3734,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     </option>
                   ))}
                 </select>
+                {isRadarView ? (
+                  <label className="flex h-10 cursor-pointer items-center gap-2 rounded-full border border-white/25 bg-slate-900/55 px-3.5 text-sm font-semibold text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75">
+                    <input
+                      type="checkbox"
+                      checked={showHourlyTop5}
+                      onChange={(event) => setShowHourlyTop5(event.target.checked)}
+                      className="h-4 w-4 cursor-pointer accent-[#3d86e8]"
+                    />
+                    시간당 강수량
+                  </label>
+                ) : null}
                 {!isAccumView ? (
                   <button
                     type="button"
