@@ -674,13 +674,24 @@ export const precomputeLatestKimRain = async (
   const precomputedFutureCount = futureFrames.filter((frame) =>
     existingSet.has(frame.leadHour),
   ).length;
-  const storedMeta = {
-    ...latestMeta,
-    generatedAt: new Date().toISOString(),
-    storage: getKimStorageKind(env),
-    precomputedLeadHours,
-  };
-  await writeStoredKimMeta(env, storedMeta);
+  const previousLeadHours = previousMeta?.precomputedLeadHours ?? [];
+  const leadHoursChanged =
+    previousLeadHours.length !== precomputedLeadHours.length ||
+    previousLeadHours.some((leadHour, index) => leadHour !== precomputedLeadHours[index]);
+  const shouldWriteMeta =
+    !previousMeta ||
+    previousMeta.baseTime !== latestMeta.baseTime ||
+    previousMeta.storage !== getKimStorageKind(env) ||
+    leadHoursChanged;
+  const storedMeta = shouldWriteMeta
+    ? {
+        ...latestMeta,
+        generatedAt: new Date().toISOString(),
+        storage: getKimStorageKind(env),
+        precomputedLeadHours,
+      }
+    : previousMeta;
+  if (shouldWriteMeta) await writeStoredKimMeta(env, storedMeta);
   let prunedCycles = [];
   if (previousMeta?.baseTime !== latestMeta.baseTime) {
     prunedCycles = await pruneStoredKimCycles(

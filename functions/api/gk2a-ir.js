@@ -21,6 +21,67 @@ const OUT_WIDTH = SRC_WIDTH / FACTOR;
 const OUT_HEIGHT = SRC_HEIGHT / FACTOR;
 const HISTORICAL_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const RECENT_AGE_MS = 30 * 60 * 1000;
+const SATELLITE_CACHE_VERSION = 'v1';
+const SATELLITE_CACHE_PREFIX = `satellite/gk2a-ir/${SATELLITE_CACHE_VERSION}/pairs/`;
+const SATELLITE_RETENTION_SECONDS = 20 * 60 * 60;
+
+const getSatelliteStore = (env) => {
+  if (env?.DISABLE_PRECOMPUTED_SATELLITE === '1') return null;
+  return env?.SATELLITE_CACHE || env?.KIM_RAIN_CACHE || null;
+};
+
+export const satellitePairKey = (date) => `${SATELLITE_CACHE_PREFIX}${date}.bin.gz`;
+
+const gzipBytes = async (bytes) => {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+};
+
+const gunzipBytes = async (bytes) => {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+};
+
+const readStoredPair = async (env, date) => {
+  const store = getSatelliteStore(env);
+  if (!store) return null;
+  try {
+    const value = await store.get(satellitePairKey(date), 'arrayBuffer');
+    return value ? new Uint8Array(value) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeStoredPair = async (env, date, compressedBytes, rawBytes) => {
+  const store = getSatelliteStore(env);
+  if (!store) return;
+  await store.put(satellitePairKey(date), compressedBytes, {
+    expirationTtl: SATELLITE_RETENTION_SECONDS,
+    metadata: {
+      date,
+      encoding: 'gzip',
+      rawBytes,
+      storedAt: new Date().toISOString(),
+    },
+  });
+};
+
+export const listStoredSatelliteDates = async (env) => {
+  const store = getSatelliteStore(env);
+  if (!store) return [];
+  const dates = [];
+  let cursor;
+  do {
+    const page = await store.list({ prefix: SATELLITE_CACHE_PREFIX, cursor });
+    for (const key of page.keys ?? []) {
+      const match = key.name.match(/(\d{12})\.bin\.gz$/);
+      if (match) dates.push(match[1]);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return dates.sort();
+};
 
 const readAuthKey = (env) =>
   env?.KMA_BROADCAST_AUTH_KEY ||
@@ -173,10 +234,11 @@ const walkFdChunkBtree = (buf, dv, addr, out) => {
 };
 
 // 처리 결과(ko/fd 출력 바이트) 메모리 캐시 — 로컬 개발(엣지 캐시 없음)과
-// 워커 웜 아이솔레이트에서 재계산을 막는다. 프레임당 약 0.9MB × 20프레임.
+// 워커 웜 아이솔레이트에서 재계산을 막는다.
 const FD_OUTPUT_CACHE = new Map(); // `${date}:${area}` → Uint8Array
 const FD_OUTPUT_CACHE_LIMIT = 40;
 const FD_PROCESS_IN_FLIGHT = new Map(); // date → Promise<{ko, fd}>
+const SAT_PAIR_WRITE_IN_FLIGHT = new Map(); // date → Promise<{raw, compressed}>
 
 const rememberOutput = (key, bytes) => {
   FD_OUTPUT_CACHE.set(key, bytes);
@@ -201,6 +263,61 @@ const packOutput = (magic, w, h, data) => {
   head.setUint16(4, w, true);
   head.setUint16(6, h, true);
   new Uint8Array(outBytes.buffer, 8).set(new Uint8Array(data.buffer));
+  return outBytes;
+};
+
+const packPairOutputs = (outputs) => {
+  const outBytes = new Uint8Array(16 + outputs.ko.length + outputs.fd.length);
+  const head = new DataView(outBytes.buffer);
+  outBytes.set([0x47, 0x4b, 0x53, 0x50]); // GKSP
+  head.setUint32(4, outputs.ko.length, true);
+  head.setUint32(8, outputs.fd.length, true);
+  head.setUint32(12, 1, true);
+  outBytes.set(outputs.ko, 16);
+  outBytes.set(outputs.fd, 16 + outputs.ko.length);
+  return outBytes;
+};
+
+const unpackPairOutputs = (pairBytes) => {
+  if (
+    pairBytes.length < 16 ||
+    pairBytes[0] !== 0x47 ||
+    pairBytes[1] !== 0x4b ||
+    pairBytes[2] !== 0x53 ||
+    pairBytes[3] !== 0x50
+  ) {
+    throw new Error('stored satellite pair format is invalid');
+  }
+  const head = new DataView(pairBytes.buffer, pairBytes.byteOffset, pairBytes.byteLength);
+  const koLength = head.getUint32(4, true);
+  const fdLength = head.getUint32(8, true);
+  if (16 + koLength + fdLength !== pairBytes.length) {
+    throw new Error('stored satellite pair length is invalid');
+  }
+  return {
+    ko: pairBytes.slice(16, 16 + koLength),
+    fd: pairBytes.slice(16 + koLength),
+  };
+};
+
+const packSatelliteBundle = (entries) => {
+  const headerBytes = 8 + entries.length * 16;
+  const payloadBytes = entries.reduce((sum, entry) => sum + entry.bytes.length, 0);
+  const outBytes = new Uint8Array(headerBytes + payloadBytes);
+  const head = new DataView(outBytes.buffer);
+  outBytes.set([0x47, 0x4b, 0x53, 0x42]); // GKSB
+  outBytes[4] = 1;
+  outBytes[5] = entries.length;
+  let payloadOffset = headerBytes;
+  entries.forEach((entry, index) => {
+    const descriptorOffset = 8 + index * 16;
+    for (let i = 0; i < 12; i++) {
+      outBytes[descriptorOffset + i] = entry.date.charCodeAt(i);
+    }
+    head.setUint32(descriptorOffset + 12, entry.bytes.length, true);
+    outBytes.set(entry.bytes, payloadOffset);
+    payloadOffset += entry.bytes.length;
+  });
   return outBytes;
 };
 
@@ -405,9 +522,10 @@ const maybeWarmRecentFrames = (context) => {
   }
 };
 
-const buildFrameResponse = (outBytes, isHistorical) => {
+const buildFrameResponse = (outBytes, isHistorical, dataSource = 'live') => {
   const headers = new Headers(corsHeaders);
   headers.set('Content-Type', 'application/octet-stream');
+  headers.set('X-Satellite-Data-Source', dataSource);
   headers.set(
     'Cache-Control',
     isHistorical
@@ -417,14 +535,108 @@ const buildFrameResponse = (outBytes, isHistorical) => {
   return new Response(outBytes, { status: 200, headers });
 };
 
+const buildPairResponse = (compressedBytes, isHistorical, dataSource) => {
+  const headers = new Headers(corsHeaders);
+  headers.set('Content-Type', 'application/octet-stream');
+  headers.set('Content-Encoding', 'gzip');
+  headers.set('X-Gk2a-Frame-Format', 'GKSP');
+  headers.set('X-Satellite-Data-Source', dataSource);
+  headers.set(
+    'Cache-Control',
+    isHistorical
+      ? `public, max-age=3600, s-maxage=${HISTORICAL_CACHE_TTL_SECONDS}`
+      : 'public, max-age=120, s-maxage=120',
+  );
+  return new Response(compressedBytes, { status: 200, headers });
+};
+
+const prepareCompressedPair = (date, outputs) => {
+  if (SAT_PAIR_WRITE_IN_FLIGHT.has(date)) {
+    return SAT_PAIR_WRITE_IN_FLIGHT.get(date);
+  }
+  const promise = (async () => {
+    const raw = packPairOutputs(outputs);
+    const compressed = await gzipBytes(raw);
+    return { raw, compressed };
+  })().finally(() => {
+    SAT_PAIR_WRITE_IN_FLIGHT.delete(date);
+  });
+  SAT_PAIR_WRITE_IN_FLIGHT.set(date, promise);
+  return promise;
+};
+
+const persistPair = async (context, date, outputs) => {
+  const prepared = await prepareCompressedPair(date, outputs);
+  await writeStoredPair(context.env, date, prepared.compressed, prepared.raw.length);
+  return prepared;
+};
+
+const schedulePairPersistence = (context, date, outputs) => {
+  if (!getSatelliteStore(context.env)) return;
+  const task = persistPair(context, date, outputs).catch(() => {});
+  if (typeof context.waitUntil === 'function') context.waitUntil(task);
+};
+
+const rememberOutputs = (date, outputs) => {
+  rememberOutput(`${date}:ko`, outputs.ko);
+  rememberOutput(`${date}:fd`, outputs.fd);
+};
+
+const readStoredOutputs = async (env, date) => {
+  const compressed = await readStoredPair(env, date);
+  if (!compressed) return null;
+  try {
+    const raw = await gunzipBytes(compressed);
+    return { compressed, raw, outputs: unpackPairOutputs(raw) };
+  } catch {
+    return null;
+  }
+};
+
 const makeAreaCacheKey = (date, area) =>
-  new Request(`https://gk2a-ir.internal/frame?date=${date}&area=${area}&v=2`, { method: 'GET' });
+  new Request(`https://gk2a-ir.internal/frame?date=${date}&area=${area}&v=3`, { method: 'GET' });
 
-const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cacheKey) => {
-  let outBytes = FD_OUTPUT_CACHE.get(`${date}:${area}`);
+const makeBundleCacheKey = (bundleStart) =>
+  new Request(`https://gk2a-ir.internal/bundle?start=${bundleStart}&v=1`, { method: 'GET' });
 
-  if (!outBytes) {
-    let outputs;
+const cacheOutputs = (context, edgeCache, date, outputs, isHistorical) => {
+  if (!edgeCache) return;
+  for (const area of ['ko', 'fd']) {
+    const task = edgeCache
+      .put(
+        makeAreaCacheKey(date, area),
+        buildFrameResponse(outputs[area], isHistorical, 'live'),
+      )
+      .catch(() => {});
+    if (typeof context.waitUntil === 'function') context.waitUntil(task);
+  }
+};
+
+const handlePairRequest = async (context, date, isHistorical, edgeCache, cacheKey) => {
+  const stored = await readStoredPair(context.env, date);
+  if (stored) {
+    const response = buildPairResponse(stored, isHistorical, 'kv');
+    if (edgeCache && typeof context.waitUntil === 'function') {
+      context.waitUntil(edgeCache.put(cacheKey, response.clone()).catch(() => {}));
+    }
+    return response;
+  }
+
+  let outputs = null;
+  if (edgeCache) {
+    const [koHit, fdHit] = await Promise.all([
+      edgeCache.match(makeAreaCacheKey(date, 'ko')),
+      edgeCache.match(makeAreaCacheKey(date, 'fd')),
+    ]);
+    if (koHit && fdHit) {
+      outputs = {
+        ko: new Uint8Array(await koHit.arrayBuffer()),
+        fd: new Uint8Array(await fdHit.arrayBuffer()),
+      };
+    }
+  }
+
+  if (!outputs) {
     try {
       outputs = await processFrame(context, date);
     } catch (error) {
@@ -433,15 +645,121 @@ const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cac
         headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
       });
     }
-    rememberOutput(`${date}:ko`, outputs.ko);
-    rememberOutput(`${date}:fd`, outputs.fd);
+  }
+
+  rememberOutputs(date, outputs);
+  cacheOutputs(context, edgeCache, date, outputs, isHistorical);
+  const prepared = await prepareCompressedPair(date, outputs);
+  if (getSatelliteStore(context.env)) {
+    const writeTask = writeStoredPair(
+      context.env,
+      date,
+      prepared.compressed,
+      prepared.raw.length,
+    ).catch(() => {});
+    if (typeof context.waitUntil === 'function') context.waitUntil(writeTask);
+    else await writeTask;
+  }
+  const response = buildPairResponse(prepared.compressed, isHistorical, 'live');
+  if (edgeCache && typeof context.waitUntil === 'function') {
+    context.waitUntil(edgeCache.put(cacheKey, response.clone()).catch(() => {}));
+  }
+  return response;
+};
+
+const formatUtcTimestamp = (timestamp) => {
+  const date = new Date(timestamp);
+  const pad = (value) => String(value).padStart(2, '0');
+  return (
+    `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+    `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`
+  );
+};
+
+const isDailyGapDate = (date) => date.slice(8, 12) === '1520';
+
+const handleBundleRequest = async (context, bundleStart, edgeCache) => {
+  const timestamp = parseUtcDate(bundleStart);
+  if (timestamp === null || Number(bundleStart.slice(10, 12)) % 30 !== 0) {
+    return new Response(JSON.stringify({ error: 'bundle must start on a UTC 00 or 30 minute slot' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const dates = [0, 10, 20]
+    .map((minutes) => formatUtcTimestamp(timestamp + minutes * 60 * 1000))
+    .filter((date) => !isDailyGapDate(date));
+  const cacheKey = makeBundleCacheKey(bundleStart);
+  if (edgeCache) {
+    const hit = await edgeCache.match(cacheKey);
+    if (hit) return hit;
+  }
+
+  const values = await Promise.all(dates.map((date) => readStoredPair(context.env, date)));
+  const entries = dates
+    .map((date, index) => ({ date, bytes: values[index] }))
+    .filter((entry) => entry.bytes);
+  if (entries.length === 0) {
+    return new Response(JSON.stringify({ error: 'satellite bundle is not precomputed yet' }), {
+      status: 404,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+  }
+
+  const complete = entries.length === dates.length;
+  const isHistorical = Date.now() - (timestamp + 30 * 60 * 1000) >= RECENT_AGE_MS;
+  const headers = new Headers(corsHeaders);
+  headers.set('Content-Type', 'application/octet-stream');
+  headers.set('X-Gk2a-Frame-Format', 'GKSB');
+  headers.set('X-Satellite-Data-Source', 'kv');
+  headers.set('X-Satellite-Bundle-Complete', complete ? '1' : '0');
+  headers.set(
+    'Cache-Control',
+    complete && isHistorical
+      ? `public, max-age=3600, s-maxage=${HISTORICAL_CACHE_TTL_SECONDS}`
+      : 'public, max-age=15, s-maxage=15',
+  );
+  const response = new Response(packSatelliteBundle(entries), { status: 200, headers });
+  if (edgeCache && typeof context.waitUntil === 'function') {
+    context.waitUntil(edgeCache.put(cacheKey, response.clone()).catch(() => {}));
+  }
+  return response;
+};
+
+const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cacheKey) => {
+  let outBytes = FD_OUTPUT_CACHE.get(`${date}:${area}`);
+  let dataSource = 'memory';
+
+  if (!outBytes) {
+    let outputs = null;
+    const stored = await readStoredOutputs(context.env, date);
+    if (stored) {
+      outputs = stored.outputs;
+      dataSource = 'kv';
+    } else {
+      try {
+        outputs = await processFrame(context, date);
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: error.httpStatus ?? 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
+      }
+      dataSource = 'live';
+      schedulePairPersistence(context, date, outputs);
+    }
+    rememberOutputs(date, outputs);
     outBytes = outputs[area];
 
     // 반대 영역도 엣지 캐시에 미리 저장 — 곧바로 이어질 요청이 재계산하지 않게
     if (edgeCache) {
       const other = area === 'ko' ? 'fd' : 'ko';
       const putOther = edgeCache
-        .put(makeAreaCacheKey(date, other), buildFrameResponse(outputs[other], isHistorical))
+        .put(
+          makeAreaCacheKey(date, other),
+          buildFrameResponse(outputs[other], isHistorical, dataSource),
+        )
         .catch(() => {});
       if (context.waitUntil) {
         context.waitUntil(putOther);
@@ -449,7 +767,7 @@ const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cac
     }
   }
 
-  const response = buildFrameResponse(outBytes, isHistorical);
+  const response = buildFrameResponse(outBytes, isHistorical, dataSource);
   if (edgeCache) {
     const putPromise = edgeCache.put(cacheKey, response.clone()).catch(() => {});
     if (context.waitUntil) {
@@ -466,13 +784,18 @@ export async function onRequestOptions() {
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   if (url.searchParams.has('latest')) {
-    // 위성 뷰 진입 신호 — 응답과 별개로 최근 프레임을 백그라운드 프리워밍
-    maybeWarmRecentFrames(context);
+    // KV가 없는 로컬/복구 모드에서만 기존 엣지 프리워밍을 유지한다.
+    if (!getSatelliteStore(context.env)) maybeWarmRecentFrames(context);
     return handleLatestRequest();
+  }
+  const edgeCache = globalThis.caches?.default;
+  const bundleStart = url.searchParams.get('bundle');
+  if (bundleStart) {
+    return handleBundleRequest(context, bundleStart, edgeCache);
   }
   const date = url.searchParams.get('date') ?? '';
   const areaParam = url.searchParams.get('area');
-  const area = areaParam === 'fd' || areaParam === 'ko' ? areaParam : 'ea';
+  const area = ['fd', 'ko', 'pair'].includes(areaParam) ? areaParam : 'ea';
   const timestamp = parseUtcDate(date);
 
   if (timestamp === null || timestamp % (10 * 60 * 1000) !== 0) {
@@ -483,14 +806,17 @@ export async function onRequestGet(context) {
   }
 
   const isHistorical = Date.now() - timestamp >= RECENT_AGE_MS;
-  const cacheKey = new Request(`https://gk2a-ir.internal/frame?date=${date}&area=${area}&v=2`, { method: 'GET' });
-  const edgeCache = globalThis.caches?.default;
+  const cacheKey = makeAreaCacheKey(date, area);
 
   if (edgeCache) {
     const hit = await edgeCache.match(cacheKey);
     if (hit) {
       return hit;
     }
+  }
+
+  if (area === 'pair') {
+    return handlePairRequest(context, date, isHistorical, edgeCache, cacheKey);
   }
 
   if (area === 'fd' || area === 'ko') {

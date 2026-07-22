@@ -29,6 +29,15 @@ KIM model frames use a separate persistent KV precompute cache.
 - Worker config: `wrangler.kim-cache.toml`
 - Operations and rollback: `docs/kim-rain-cache.md`
 
+## Satellite Cache
+
+GK2A satellite frames are preprocessed once and retained in the shared
+Cloudflare KV namespace for fast broadcast playback.
+
+- Worker: `workers/satellite-precompute.js`
+- Worker config: `wrangler.satellite-cache.toml`
+- Operations and rollback: `docs/satellite-cache.md`
+
 ## Auto Push
 
 이 저장소는 `.githooks/post-commit` 훅을 사용합니다.

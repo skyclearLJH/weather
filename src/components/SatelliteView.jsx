@@ -13,7 +13,7 @@ import {
   KO_GRID,
   buildSatTimeline,
   fdCellToLonLat,
-  fetchSatFrame,
+  fetchSatFramePair,
   koCellToLonLat,
   probeLatestSatDate,
 } from '../api/satApi';
@@ -686,32 +686,34 @@ function SatelliteView({ menuSlot = null }) {
     let active = true;
 
     (async () => {
-      // KO(정밀)와 FD(전구 배경)를 병렬 로드 — 한쪽이 실패해도 나머지는 표시
-      const [ko, fd] = await Promise.allSettled([
-        fetchSatFrame(currentDate, 'ko'),
-        fetchSatFrame(currentDate, 'fd'),
-      ]);
+      let pair;
+      try {
+        pair = await fetchSatFramePair(currentDate);
+      } catch (error) {
+        if (!active) return;
+        pendingFramesRef.current.ko = null;
+        pendingFramesRef.current.fd = null;
+        cloudLayerRef.current?.setFrame('ko', null);
+        cloudLayerRef.current?.setFrame('fd', null);
+        setStatus(error.message);
+        return;
+      }
       if (!active) return;
       const range = seasonalConvRange(currentDate);
       pendingConvRangeRef.current = range;
       cloudLayerRef.current?.setConvRange(...range);
-      for (const [area, result] of [['ko', ko], ['fd', fd]]) {
-        const data = result.status === 'fulfilled' ? result.value.data : null;
+      for (const area of ['ko', 'fd']) {
+        const data = pair[area].data;
         pendingFramesRef.current[area] = data;
         cloudLayerRef.current?.setFrame(area, data);
       }
-      if (ko.status === 'rejected' && fd.status === 'rejected') {
-        setStatus(ko.reason?.message ?? fd.reason?.message);
-      } else {
-        setStatus(null);
-      }
+      setStatus(null);
     })();
 
     // 인접 프레임 프리페치 (재생·스크럽 반응성)
     const nextDate = timeline[frameIndex + 1];
     if (nextDate) {
-      fetchSatFrame(nextDate, 'ko').catch(() => {});
-      fetchSatFrame(nextDate, 'fd').catch(() => {});
+      fetchSatFramePair(nextDate).catch(() => {});
     }
 
     return () => {
@@ -720,8 +722,8 @@ function SatelliteView({ menuSlot = null }) {
   }, [currentDate, frameIndex, timeline]);
 
   // 타임라인 전 구간을 백그라운드에서 순차 프리페치 — 첫 재생부터 빈 프레임이
-  // 없도록 한다. 프레임당 ko+fd를 함께 요청하고(서버가 원본 1회 다운로드로
-  // 두 출력을 만들어 캐시), 한 프레임씩 순서대로 진행해 서버를 압박하지 않는다.
+  // 없도록 한다. 클라이언트 캐시는 같은 30분 구간의 세 시각을 한 요청으로 받고,
+  // 서버는 각 시각의 ko+fd를 한 쌍으로 제공해 요청 수와 중복 변환을 줄인다.
   //
   // 순서는 '현재 보고 있는 프레임에서 가까운 것부터'다. 서버는 미캐시 프레임을
   // 한 아이솔레이트에서 직렬 처리(processChain)하므로, 항상 최신→과거 고정
@@ -754,10 +756,7 @@ function SatelliteView({ menuSlot = null }) {
         const index = nearestUnfetchedIndex();
         if (index < 0) return; // 전 구간 프리페치 완료
         requested.add(index);
-        await Promise.allSettled([
-          fetchSatFrame(timeline[index], 'ko'),
-          fetchSatFrame(timeline[index], 'fd'),
-        ]);
+        await fetchSatFramePair(timeline[index]).catch(() => {});
       }
     })();
 

@@ -1,0 +1,14 @@
+name = "weathernow-satellite-precompute"
+main = "workers/satellite-precompute.js"
+compatibility_date = "2026-07-22"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+SATELLITE_ORIGIN = "https://weather-ljh.pages.dev"
+SATELLITE_BATCH_SIZE = "2"
+
+[[kv_namespaces]]
+binding = "SATELLITE_CACHE"
+id = "61c05160529a48628ff953ec14ae6049"

@@ -193,10 +193,11 @@ export const buildSatTimeline = (latestDate, hours = 12, stepMinutes = 10) => {
 
 // --- 프레임 로드 ---
 const FRAME_CACHE = new Map();
-// 12시간 타임라인(73프레임) × 2영역(ko/fd) = 146개가 동시에 살아 있어야
-// 재생이 캐시에서 돌므로 여유 있게 잡는다 (90이었을 때 재생 중 캐시가
-// 밀려나 같은 프레임을 반복 재요청했다).
 const FRAME_CACHE_LIMIT = 220;
+const PAIR_CACHE = new Map();
+const PAIR_CACHE_LIMIT = 90;
+const BUNDLE_CACHE = new Map();
+const BUNDLE_CACHE_LIMIT = 30;
 
 // 응답 매직: EA는 'GKIR', FD는 'GKFD', KO는 'GKKO'
 const FRAME_MAGIC = {
@@ -205,7 +206,173 @@ const FRAME_MAGIC = {
   ko: [0x47, 0x4b, 0x4b, 0x4f],
 };
 
+const rememberPromise = (cache, key, promise, limit) => {
+  cache.set(key, promise);
+  promise.catch(() => cache.delete(key));
+  while (cache.size > limit) {
+    cache.delete(cache.keys().next().value);
+  }
+  return promise;
+};
+
+const parseAreaFrame = (input, area, dateUtc) => {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const magic = FRAME_MAGIC[area];
+  if (
+    bytes.length < 8 ||
+    bytes[0] !== magic[0] ||
+    bytes[1] !== magic[1] ||
+    bytes[2] !== magic[2] ||
+    bytes[3] !== magic[3]
+  ) {
+    throw new Error('위성 자료 형식 오류');
+  }
+  const head = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = head.getUint16(4, true);
+  const height = head.getUint16(6, true);
+  if (8 + width * height * 2 !== bytes.length) {
+    throw new Error('위성 자료 길이 오류');
+  }
+  const data = new Uint16Array(bytes.buffer, bytes.byteOffset + 8, width * height);
+  return {
+    key: `${area}:${formatSatDateUtc(dateUtc)}`,
+    date: dateUtc,
+    width,
+    height,
+    data,
+  };
+};
+
+const parsePairFrame = (input, dateUtc) => {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  if (
+    bytes.length < 16 ||
+    bytes[0] !== 0x47 ||
+    bytes[1] !== 0x4b ||
+    bytes[2] !== 0x53 ||
+    bytes[3] !== 0x50
+  ) {
+    throw new Error('위성 묶음 자료 형식 오류');
+  }
+  const head = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const koLength = head.getUint32(4, true);
+  const fdLength = head.getUint32(8, true);
+  if (16 + koLength + fdLength !== bytes.length) {
+    throw new Error('위성 묶음 자료 길이 오류');
+  }
+  const koBytes = bytes.slice(16, 16 + koLength);
+  const fdBytes = bytes.slice(16 + koLength);
+  return {
+    key: formatSatDateUtc(dateUtc),
+    date: dateUtc,
+    ko: parseAreaFrame(koBytes, 'ko', dateUtc),
+    fd: parseAreaFrame(fdBytes, 'fd', dateUtc),
+  };
+};
+
+const gunzipFrame = async (bytes) => {
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error('이 브라우저는 위성 압축 자료를 지원하지 않습니다.');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+};
+
+const bundleStartFor = (dateUtc) => {
+  const start = new Date(dateUtc);
+  start.setUTCMinutes(start.getUTCMinutes() < 30 ? 0 : 30, 0, 0);
+  return formatSatDateUtc(start);
+};
+
+const parseBundle = async (buffer) => {
+  const bytes = new Uint8Array(buffer);
+  if (
+    bytes.length < 8 ||
+    bytes[0] !== 0x47 ||
+    bytes[1] !== 0x4b ||
+    bytes[2] !== 0x53 ||
+    bytes[3] !== 0x42 ||
+    bytes[4] !== 1
+  ) {
+    throw new Error('위성 30분 묶음 자료 형식 오류');
+  }
+  const count = bytes[5];
+  const head = new DataView(buffer);
+  let payloadOffset = 8 + count * 16;
+  const frames = new Map();
+  for (let index = 0; index < count; index++) {
+    const descriptorOffset = 8 + index * 16;
+    let date = '';
+    for (let i = 0; i < 12; i++) {
+      date += String.fromCharCode(bytes[descriptorOffset + i]);
+    }
+    const length = head.getUint32(descriptorOffset + 12, true);
+    if (!/^\d{12}$/.test(date) || payloadOffset + length > bytes.length) {
+      throw new Error('위성 30분 묶음 자료 길이 오류');
+    }
+    const compressed = bytes.slice(payloadOffset, payloadOffset + length);
+    const raw = await gunzipFrame(compressed);
+    frames.set(date, parsePairFrame(raw, parseSatDateUtc(date)));
+    payloadOffset += length;
+  }
+  return frames;
+};
+
+const fetchSatBundle = (bundleStart) => {
+  if (BUNDLE_CACHE.has(bundleStart)) return BUNDLE_CACHE.get(bundleStart);
+  const promise = (async () => {
+    const response = await fetch(`/api/gk2a-ir?bundle=${bundleStart}`, {
+      signal: AbortSignal.timeout(90000),
+    });
+    if (response.status === 404) return new Map();
+    if (!response.ok) throw new Error(`위성 묶음 자료 요청 실패 (${response.status})`);
+    return parseBundle(await response.arrayBuffer());
+  })();
+  return rememberPromise(BUNDLE_CACHE, bundleStart, promise, BUNDLE_CACHE_LIMIT);
+};
+
+const fetchDirectPair = async (dateUtc) => {
+  const date = formatSatDateUtc(dateUtc);
+  const response = await fetch(`/api/gk2a-ir?date=${date}&area=pair`, {
+    signal: AbortSignal.timeout(90000),
+  });
+  if (!response.ok) {
+    let message = `위성 자료 요청 실패 (${response.status})`;
+    try {
+      const detail = await response.json();
+      if (response.status === 404) message = '아직 준비되지 않은 시각입니다.';
+      else if (detail?.error) message = detail.error;
+    } catch {
+      // 본문이 JSON이 아니면 기본 메시지 유지
+    }
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+  return parsePairFrame(await response.arrayBuffer(), dateUtc);
+};
+
+export const fetchSatFramePair = (dateUtc) => {
+  const key = formatSatDateUtc(dateUtc);
+  if (PAIR_CACHE.has(key)) return PAIR_CACHE.get(key);
+  const promise = (async () => {
+    try {
+      const bundle = await fetchSatBundle(bundleStartFor(dateUtc));
+      const bundled = bundle.get(key);
+      if (bundled) return bundled;
+    } catch {
+      // 묶음 캐시가 없거나 손상됐으면 기존 단일 시각 경로로 즉시 대체한다.
+    }
+    return fetchDirectPair(dateUtc);
+  })();
+  return rememberPromise(PAIR_CACHE, key, promise, PAIR_CACHE_LIMIT);
+};
+
 export const fetchSatFrame = async (dateUtc, area = 'ea') => {
+  if (area === 'ko' || area === 'fd') {
+    const pair = await fetchSatFramePair(dateUtc);
+    return pair[area];
+  }
   const key = `${area}:${formatSatDateUtc(dateUtc)}`;
   if (FRAME_CACHE.has(key)) {
     return FRAME_CACHE.get(key);
@@ -231,30 +398,10 @@ export const fetchSatFrame = async (dateUtc, area = 'ea') => {
       error.status = response.status;
       throw error;
     }
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    const magic = FRAME_MAGIC[area];
-    if (
-      bytes.length < 8 ||
-      bytes[0] !== magic[0] || bytes[1] !== magic[1] || bytes[2] !== magic[2] || bytes[3] !== magic[3]
-    ) {
-      throw new Error('위성 자료 형식 오류');
-    }
-    const head = new DataView(buffer);
-    const width = head.getUint16(4, true);
-    const height = head.getUint16(6, true);
-    // 8바이트 헤더 뒤 uint16 — 홀수 오프셋 아님이 보장되므로 직접 뷰 생성
-    const data = new Uint16Array(buffer, 8, width * height);
-    return { key, date: dateUtc, width, height, data };
+    return parseAreaFrame(await response.arrayBuffer(), area, dateUtc);
   })();
 
-  FRAME_CACHE.set(key, promise);
-  promise.catch(() => FRAME_CACHE.delete(key));
-  if (FRAME_CACHE.size > FRAME_CACHE_LIMIT) {
-    const oldest = FRAME_CACHE.keys().next().value;
-    FRAME_CACHE.delete(oldest);
-  }
-  return promise;
+  return rememberPromise(FRAME_CACHE, key, promise, FRAME_CACHE_LIMIT);
 };
 
 // 최신 발표 시각 조회: 서버가 NOAA 목록만 읽어 즉시(수백 ms) 응답한다.
