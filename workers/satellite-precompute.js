@@ -80,9 +80,12 @@ const precompute = async (env) => {
 
   for (const date of targets) {
     try {
-      const response = await fetch(`${origin}/api/gk2a-ir?date=${date}&area=pair`, {
+      const response = await fetch(
+        `${origin}/api/gk2a-ir?date=${date}&area=pair&precompute=1`,
+        {
         signal: AbortSignal.timeout(120000),
-      });
+        },
+      );
       await response.arrayBuffer();
       results.push({
         date,

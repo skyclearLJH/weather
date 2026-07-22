@@ -552,7 +552,7 @@ const buildFrameResponse = (outBytes, isHistorical, dataSource = 'live') => {
 const buildPairResponse = (compressedBytes, isHistorical, dataSource) => {
   const headers = new Headers(corsHeaders);
   headers.set('Content-Type', 'application/octet-stream');
-  headers.set('Content-Encoding', 'gzip');
+  headers.set('X-Satellite-Content-Encoding', 'gzip');
   headers.set('X-Gk2a-Frame-Format', 'GKSP');
   headers.set('X-Satellite-Data-Source', dataSource);
   headers.set(
@@ -563,6 +563,16 @@ const buildPairResponse = (compressedBytes, isHistorical, dataSource) => {
   );
   return new Response(compressedBytes, { status: 200, headers });
 };
+
+const buildPrecomputeResponse = (dataSource) =>
+  new Response(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders,
+      'Cache-Control': 'no-store',
+      'X-Satellite-Data-Source': dataSource,
+    },
+  });
 
 const prepareCompressedPair = (date, outputs) => {
   if (SAT_PAIR_WRITE_IN_FLIGHT.has(date)) {
@@ -626,9 +636,17 @@ const cacheOutputs = (context, edgeCache, date, outputs, isHistorical) => {
   }
 };
 
-const handlePairRequest = async (context, date, isHistorical, edgeCache, cacheKey) => {
+const handlePairRequest = async (
+  context,
+  date,
+  isHistorical,
+  edgeCache,
+  cacheKey,
+  precomputeOnly = false,
+) => {
   const stored = await readStoredPair(context.env, date);
   if (stored) {
+    if (precomputeOnly) return buildPrecomputeResponse('kv');
     const response = buildPairResponse(stored, isHistorical, 'kv');
     if (edgeCache && typeof context.waitUntil === 'function') {
       context.waitUntil(edgeCache.put(cacheKey, response.clone()).catch(() => {}));
@@ -670,10 +688,23 @@ const handlePairRequest = async (context, date, isHistorical, edgeCache, cacheKe
       date,
       prepared.compressed,
       prepared.raw.length,
-    ).catch(() => {});
-    if (typeof context.waitUntil === 'function') context.waitUntil(writeTask);
-    else await writeTask;
+    );
+    if (precomputeOnly) {
+      try {
+        await writeTask;
+      } catch (error) {
+        return new Response(JSON.stringify({ error: `satellite KV write failed: ${error.message}` }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
+      }
+    } else if (typeof context.waitUntil === 'function') {
+      context.waitUntil(writeTask.catch(() => {}));
+    } else {
+      await writeTask.catch(() => {});
+    }
   }
+  if (precomputeOnly) return buildPrecomputeResponse('live');
   const response = buildPairResponse(prepared.compressed, isHistorical, 'live');
   if (edgeCache && typeof context.waitUntil === 'function') {
     context.waitUntil(edgeCache.put(cacheKey, response.clone()).catch(() => {}));
@@ -821,8 +852,9 @@ export async function onRequestGet(context) {
 
   const isHistorical = Date.now() - timestamp >= RECENT_AGE_MS;
   const cacheKey = makeAreaCacheKey(date, area);
+  const precomputeOnly = area === 'pair' && url.searchParams.get('precompute') === '1';
 
-  if (edgeCache) {
+  if (edgeCache && !precomputeOnly) {
     const hit = await edgeCache.match(cacheKey);
     if (hit) {
       return hit;
@@ -830,7 +862,14 @@ export async function onRequestGet(context) {
   }
 
   if (area === 'pair') {
-    return handlePairRequest(context, date, isHistorical, edgeCache, cacheKey);
+    return handlePairRequest(
+      context,
+      date,
+      isHistorical,
+      edgeCache,
+      cacheKey,
+      precomputeOnly,
+    );
   }
 
   if (area === 'fd' || area === 'ko') {

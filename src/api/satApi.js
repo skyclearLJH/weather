@@ -349,7 +349,11 @@ const fetchDirectPair = async (dateUtc) => {
     error.status = response.status;
     throw error;
   }
-  return parsePairFrame(await response.arrayBuffer(), dateUtc);
+  let bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    bytes = await gunzipFrame(bytes);
+  }
+  return parsePairFrame(bytes, dateUtc);
 };
 
 export const fetchSatFramePair = (dateUtc, preferSingle = false) => {
