@@ -75,10 +75,16 @@ const precompute = async (env) => {
   const latest = await getLatest(origin);
   const timeline = buildTimeline(latest);
   const stored = await listStoredDates(store);
-  const targets = timeline.filter((date) => !stored.has(date)).slice(0, batchSize);
-  const results = [];
+  const missing = timeline.filter((date) => !stored.has(date));
+  const targets = [];
+  if (missing.length > 0) {
+    targets.push(missing[0]);
+    for (let index = missing.length - 1; index > 0 && targets.length < batchSize; index--) {
+      targets.push(missing[index]);
+    }
+  }
 
-  for (const date of targets) {
+  const results = await Promise.all(targets.map(async (date) => {
     try {
       const response = await fetch(
         `${origin}/api/gk2a-ir?date=${date}&area=pair&precompute=1`,
@@ -87,16 +93,16 @@ const precompute = async (env) => {
         },
       );
       await response.arrayBuffer();
-      results.push({
+      return {
         date,
         ok: response.ok,
         status: response.status,
         source: response.headers.get('X-Satellite-Data-Source'),
-      });
+      };
     } catch (error) {
-      results.push({ date, ok: false, error: error.message });
+      return { date, ok: false, error: error.message };
     }
-  }
+  }));
 
   return {
     checkedAt: new Date().toISOString(),
