@@ -418,7 +418,12 @@ export const probeLatestSatDate = async () => {
     });
     if (response.ok) {
       const { latest, cachedLatest } = await response.json();
-      const readyLatest = /^\d{12}$/.test(cachedLatest ?? '') ? cachedLatest : latest;
+      // 타임라인 끝은 '실제로 존재하는 최신 관측시각(latest)'을 기준으로 잡는다.
+      // KV에 저장된 최신(cachedLatest)을 기준으로 삼으면, 프리컴퓨트 워커가 잠시라도
+      // 밀릴 때 원본은 멀쩡히 있는데도 컨트롤바 시각이 그 지점에서 얼어붙는다
+      // (2026-07-22: 워커가 밀려 13:30 KST에 고정된 사례). 캐시에 없는 최신 프레임은
+      // 실시간 변환으로 조금 느리게 뜨지만, 그 과정에서 KV에도 기록돼 곧 빨라진다.
+      const readyLatest = /^\d{12}$/.test(latest ?? '') ? latest : cachedLatest;
       if (/^\d{12}$/.test(readyLatest ?? '')) {
         return parseSatDateUtc(readyLatest);
       }
