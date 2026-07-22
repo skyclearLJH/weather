@@ -87,6 +87,13 @@ const isPrecomputedKimDisabled = (env) =>
 const getKimBucket = (env) =>
   !isPrecomputedKimDisabled(env) && env?.KIM_RAIN_CACHE ? env.KIM_RAIN_CACHE : null;
 
+const isKvStorage = (storage) => typeof storage?.getWithMetadata === 'function';
+const getKimStorageKind = (env) => {
+  const storage = getKimBucket(env);
+  if (!storage) return '';
+  return isKvStorage(storage) ? 'kv' : 'r2';
+};
+
 const kimMetaR2Key = () => `kim-rain/${KIM_R2_VERSION}/meta/latest.json`;
 const kimFrameR2Prefix = (baseTime = '') =>
   `kim-rain/${KIM_R2_VERSION}/frames/${baseTime ? `${baseTime}/` : ''}`;
@@ -470,6 +477,7 @@ const buildLatestMeta = async (context) => {
 const readStoredKimMeta = async (env) => {
   const bucket = getKimBucket(env);
   if (!bucket) return null;
+  if (isKvStorage(bucket)) return bucket.get(kimMetaR2Key(), 'json');
   const object = await bucket.get(kimMetaR2Key());
   if (!object) return null;
   try {
@@ -482,6 +490,10 @@ const readStoredKimMeta = async (env) => {
 const writeStoredKimMeta = async (env, meta) => {
   const bucket = getKimBucket(env);
   if (!bucket) return;
+  if (isKvStorage(bucket)) {
+    await bucket.put(kimMetaR2Key(), JSON.stringify(meta));
+    return;
+  }
   await bucket.put(kimMetaR2Key(), JSON.stringify(meta), {
     httpMetadata: {
       contentType: 'application/json; charset=utf-8',
@@ -497,6 +509,18 @@ const writeStoredKimMeta = async (env, meta) => {
 const readStoredKimFrame = async (env, baseTime, leadHour) => {
   const bucket = getKimBucket(env);
   if (!bucket) return null;
+  if (isKvStorage(bucket)) {
+    const { value, metadata } = await bucket.getWithMetadata(
+      kimFrameR2Key(baseTime, leadHour),
+      'arrayBuffer',
+    );
+    if (!value) return null;
+    const frame = customMetadataToFrame(metadata);
+    if (!frame.width || !frame.height || !frame.validTime) return null;
+    return new Response(value, {
+      headers: buildFrameHeaders(frame, 'kv'),
+    });
+  }
   const object = await bucket.get(kimFrameR2Key(baseTime, leadHour));
   if (!object) return null;
   const frame = customMetadataToFrame(object.customMetadata);
@@ -509,6 +533,12 @@ const readStoredKimFrame = async (env, baseTime, leadHour) => {
 const writeStoredKimFrame = async (env, frame) => {
   const bucket = getKimBucket(env);
   if (!bucket) return;
+  if (isKvStorage(bucket)) {
+    await bucket.put(kimFrameR2Key(frame.baseTime, frame.leadHour), frame.values.buffer, {
+      metadata: frameToCustomMetadata(frame),
+    });
+    return;
+  }
   await bucket.put(kimFrameR2Key(frame.baseTime, frame.leadHour), frame.values.buffer, {
     httpMetadata: {
       contentType: 'application/octet-stream',
@@ -523,8 +553,11 @@ const listStoredLeadHours = async (env, baseTime) => {
   if (!bucket) return [];
   const prefix = kimFrameR2Prefix(baseTime);
   const result = await bucket.list({ prefix, limit: MAX_LEAD_HOUR + 1 });
-  return result.objects
-    .map((object) => Number(object.key.slice(prefix.length).replace(/\.bin$/, '')))
+  const keys = isKvStorage(bucket)
+    ? result.keys.map((key) => key.name)
+    : result.objects.map((object) => object.key);
+  return keys
+    .map((key) => Number(key.slice(prefix.length).replace(/\.bin$/, '')))
     .filter((leadHour) => Number.isInteger(leadHour) && leadHour >= 1)
     .sort((left, right) => left - right);
 };
@@ -534,19 +567,25 @@ const pruneStoredKimCycles = async (env, retainedCycles = DEFAULT_RETAINED_CYCLE
   if (!bucket) return [];
   const prefix = kimFrameR2Prefix();
   const result = await bucket.list({ prefix, limit: 1000 });
+  const objectKeys = isKvStorage(bucket)
+    ? result.keys.map((key) => key.name)
+    : result.objects.map((object) => object.key);
   const cycles = [
     ...new Set(
-      result.objects
-        .map((object) => object.key.slice(prefix.length).split('/')[0])
+      objectKeys
+        .map((key) => key.slice(prefix.length).split('/')[0])
         .filter((value) => /^\d{12}$/.test(value)),
     ),
   ].sort().reverse();
   const expiredCycles = cycles.slice(Math.max(1, retainedCycles));
   if (expiredCycles.length === 0) return [];
-  const keys = result.objects
-    .filter((object) => expiredCycles.some((cycle) => object.key.startsWith(`${prefix}${cycle}/`)))
-    .map((object) => object.key);
-  if (keys.length > 0) await bucket.delete(keys);
+  const keys = objectKeys.filter((key) =>
+    expiredCycles.some((cycle) => key.startsWith(`${prefix}${cycle}/`)),
+  );
+  if (keys.length > 0) {
+    if (isKvStorage(bucket)) await Promise.all(keys.map((key) => bucket.delete(key)));
+    else await bucket.delete(keys);
+  }
   return expiredCycles;
 };
 
@@ -567,7 +606,7 @@ export const precomputeLatestKimRain = async (
   } = {},
 ) => {
   const bucket = getKimBucket(env);
-  if (!bucket) throw new Error('KIM_RAIN_CACHE R2 binding is required.');
+  if (!bucket) throw new Error('KIM_RAIN_CACHE storage binding is required.');
   const backgroundTasks = [];
   const context = {
     env,
@@ -638,7 +677,7 @@ export const precomputeLatestKimRain = async (
   const storedMeta = {
     ...latestMeta,
     generatedAt: new Date().toISOString(),
-    storage: 'r2',
+    storage: getKimStorageKind(env),
     precomputedLeadHours,
   };
   await writeStoredKimMeta(env, storedMeta);
@@ -698,7 +737,7 @@ export const onRequestGet = async (context) => {
             storedMeta,
             200,
             `public, max-age=60, s-maxage=${COMPLETE_CYCLE_CACHE_SECONDS}`,
-            { 'X-Kim-Data-Source': 'r2' },
+            { 'X-Kim-Data-Source': getKimStorageKind(context.env) },
           );
         }
       }
@@ -714,7 +753,7 @@ export const onRequestGet = async (context) => {
         liveMeta = {
           ...latestMeta,
           generatedAt: new Date().toISOString(),
-          storage: getKimBucket(context.env) ? 'r2' : undefined,
+          storage: getKimStorageKind(context.env) || undefined,
           precomputedLeadHours:
             storedMeta?.baseTime === latestMeta.baseTime
               ? storedMeta.precomputedLeadHours ?? []
@@ -726,7 +765,7 @@ export const onRequestGet = async (context) => {
           storedMeta,
           200,
           'public, max-age=60, s-maxage=300',
-          { 'X-Kim-Data-Source': 'stale-r2' },
+          { 'X-Kim-Data-Source': `stale-${getKimStorageKind(context.env)}` },
         );
       }
       const response = jsonResponse(

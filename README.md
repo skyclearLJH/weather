@@ -23,7 +23,7 @@ Cloudflare KV 기반 사전 계산 캐시를 사용할 수 있습니다.
 
 ## KIM Rain Cache
 
-KIM model frames use a separate persistent R2 precompute cache.
+KIM model frames use a separate persistent KV precompute cache.
 
 - Worker: `workers/kim-precompute.js`
 - Worker config: `wrangler.kim-cache.toml`

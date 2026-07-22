@@ -3,12 +3,12 @@ main = "workers/kim-precompute.js"
 compatibility_date = "2026-07-22"
 
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/5 * * * *"]
 
 [vars]
-KIM_PRECOMPUTE_BATCH_SIZE = "6"
+KIM_PRECOMPUTE_BATCH_SIZE = "1"
 KIM_RETAINED_CYCLES = "3"
 
-[[r2_buckets]]
+[[kv_namespaces]]
 binding = "KIM_RAIN_CACHE"
-bucket_name = "weathernow-kim-rain"
+id = "61c05160529a48628ff953ec14ae6049"
