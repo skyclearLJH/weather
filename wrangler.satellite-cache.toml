@@ -3,7 +3,7 @@ main = "workers/satellite-precompute.js"
 compatibility_date = "2026-07-22"
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 
 [vars]
 SATELLITE_ORIGIN = "https://weather-ljh.pages.dev"

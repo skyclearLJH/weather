@@ -447,7 +447,7 @@ const processFrame = (context, date) => {
 
 // 최신 관측 시각 조회: S3 목록(수 KB)만 읽으므로 프레임 탐색(35MB 다운로드
 // 반복)과 달리 수백 ms면 끝난다. 현재 시간대에 파일이 없으면 이전 시간대 확인.
-const handleLatestRequest = async () => {
+const findLatestTimestamp = async () => {
   const pad = (v) => String(v).padStart(2, '0');
   let latest = null;
   for (const offsetHours of [0, 1, 2]) {
@@ -468,7 +468,21 @@ const handleLatestRequest = async () => {
     }
     if (latest) break;
   }
-  return new Response(JSON.stringify({ latest }), {
+  return latest;
+};
+
+const handleLatestRequest = async (context) => {
+  const latest = await findLatestTimestamp();
+  let cachedLatest = null;
+  if (latest && getSatelliteStore(context.env)) {
+    try {
+      const dates = await listStoredSatelliteDates(context.env);
+      cachedLatest = dates.filter((date) => date <= latest).at(-1) ?? null;
+    } catch {
+      // KV 목록 조회가 실패하면 NOAA 최신 시각을 그대로 사용한다.
+    }
+  }
+  return new Response(JSON.stringify({ latest, cachedLatest }), {
     status: latest ? 200 : 404,
     headers: {
       ...corsHeaders,
@@ -786,7 +800,7 @@ export async function onRequestGet(context) {
   if (url.searchParams.has('latest')) {
     // KV가 없는 로컬/복구 모드에서만 기존 엣지 프리워밍을 유지한다.
     if (!getSatelliteStore(context.env)) maybeWarmRecentFrames(context);
-    return handleLatestRequest();
+    return handleLatestRequest(context);
   }
   const edgeCache = globalThis.caches?.default;
   const bundleStart = url.searchParams.get('bundle');

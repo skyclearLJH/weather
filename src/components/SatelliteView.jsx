@@ -21,7 +21,7 @@ import './SatelliteView.css';
 
 const TIMELINE_HOURS = 12;
 const STEP_MINUTES = 10;
-const AUTO_REFRESH_MS = 5 * 60 * 1000;
+const AUTO_REFRESH_MS = 60 * 1000;
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
 const DOKDO_GEOJSON = {
   type: 'FeatureCollection',

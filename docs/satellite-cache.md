@@ -5,7 +5,7 @@ KV. The NOAA NetCDF source is downloaded and converted only once per timestamp.
 
 ## Data flow
 
-1. `weathernow-satellite-precompute` runs every five minutes.
+1. `weathernow-satellite-precompute` checks for a new source frame every minute.
 2. It checks the latest NOAA GK2A timestamp and the previous 12-hour timeline.
 3. Up to two missing timestamps are requested from the Pages Function.
 4. The Pages Function creates both the detailed `ko` and background `fd`

@@ -412,9 +412,10 @@ export const probeLatestSatDate = async () => {
       signal: AbortSignal.timeout(10000),
     });
     if (response.ok) {
-      const { latest } = await response.json();
-      if (/^\d{12}$/.test(latest ?? '')) {
-        return parseSatDateUtc(latest);
+      const { latest, cachedLatest } = await response.json();
+      const readyLatest = /^\d{12}$/.test(cachedLatest ?? '') ? cachedLatest : latest;
+      if (/^\d{12}$/.test(readyLatest ?? '')) {
+        return parseSatDateUtc(readyLatest);
       }
     }
   } catch {
