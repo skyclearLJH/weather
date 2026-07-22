@@ -65,11 +65,20 @@ const writeStoredPair = async (env, date, compressedBytes, rawBytes) => {
       storedAt: new Date().toISOString(),
     },
   });
+  await addStoredSatelliteDate(env, date);
 };
 
-export const listStoredSatelliteDates = async (env) => {
-  const store = getSatelliteStore(env);
-  if (!store) return [];
+// --- 저장 목록 색인 ---
+// KV의 list 연산은 무료 플랜에서 하루 1,000회로 제한된다. 저장된 시각을 알아내려고
+// 매 요청마다 list를 돌리면(워커 크론 1분 + 클라이언트 조회) 하루 수천 회가 되어
+// 한도를 초과한다("Daily Workers KV list limit exceeded"). 그래서 목록을 키 하나에
+// 색인으로 유지하고 읽기는 get 1회로 끝낸다. read 한도는 100,000회/일이라 여유롭다.
+// 색인이 어긋나도 최대 손해는 이미 캐시된 프레임을 한 번 더 받는 정도이며,
+// 한 시간에 한 번 실제 list로 재구성해 자가 복구한다.
+const SATELLITE_INDEX_KEY = `satellite/gk2a-ir/${SATELLITE_CACHE_VERSION}/index.json`;
+const SATELLITE_INDEX_REBUILD_MS = 60 * 60 * 1000;
+
+const listStoredDatesFromKv = async (store) => {
   const dates = [];
   let cursor;
   do {
@@ -81,6 +90,53 @@ export const listStoredSatelliteDates = async (env) => {
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
   return dates.sort();
+};
+
+const writeStoredDateIndex = async (store, dates) => {
+  await store.put(
+    SATELLITE_INDEX_KEY,
+    JSON.stringify({ dates, rebuiltAt: new Date().toISOString() }),
+  );
+};
+
+export const listStoredSatelliteDates = async (env) => {
+  const store = getSatelliteStore(env);
+  if (!store) return [];
+  try {
+    const index = await store.get(SATELLITE_INDEX_KEY, 'json');
+    const rebuiltAt = Date.parse(index?.rebuiltAt ?? '');
+    const isFresh =
+      Array.isArray(index?.dates) &&
+      Number.isFinite(rebuiltAt) &&
+      Date.now() - rebuiltAt < SATELLITE_INDEX_REBUILD_MS;
+    if (isFresh) {
+      return [...index.dates].sort();
+    }
+    // 색인이 없거나 오래됐으면 이때만 실제 list로 재구성한다(시간당 1회).
+    const dates = await listStoredDatesFromKv(store);
+    await writeStoredDateIndex(store, dates);
+    return dates;
+  } catch {
+    return [];
+  }
+};
+
+const addStoredSatelliteDate = async (env, date) => {
+  const store = getSatelliteStore(env);
+  if (!store) return;
+  try {
+    const index = await store.get(SATELLITE_INDEX_KEY, 'json');
+    const dates = Array.isArray(index?.dates) ? index.dates : [];
+    if (dates.includes(date)) return;
+    dates.push(date);
+    dates.sort();
+    await store.put(
+      SATELLITE_INDEX_KEY,
+      JSON.stringify({ dates, rebuiltAt: index?.rebuiltAt ?? new Date().toISOString() }),
+    );
+  } catch {
+    // 색인 갱신 실패는 치명적이지 않다 — 다음 재구성 때 바로잡힌다.
+  }
 };
 
 const readAuthKey = (env) =>

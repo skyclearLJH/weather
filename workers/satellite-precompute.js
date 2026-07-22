@@ -41,7 +41,13 @@ const buildTimeline = (latest) => {
   return dates;
 };
 
-const listStoredDates = async (store) => {
+// KV list는 무료 플랜 하루 1,000회 제한이라, 1분 크론에서 매번 돌리면 한도를 넘긴다.
+// 저장 목록은 Pages 함수가 유지하는 색인 키 하나만 읽고, 색인이 없거나 오래됐을 때만
+// 실제 list로 재구성한다(시간당 1회). 두 곳이 같은 키·같은 규칙을 쓴다.
+const INDEX_KEY = 'satellite/gk2a-ir/v1/index.json';
+const INDEX_REBUILD_MS = 60 * 60 * 1000;
+
+const listStoredDatesFromKv = async (store) => {
   const dates = new Set();
   let cursor;
   do {
@@ -53,6 +59,28 @@ const listStoredDates = async (store) => {
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
   return dates;
+};
+
+const listStoredDates = async (store) => {
+  try {
+    const index = await store.get(INDEX_KEY, 'json');
+    const rebuiltAt = Date.parse(index?.rebuiltAt ?? '');
+    if (
+      Array.isArray(index?.dates) &&
+      Number.isFinite(rebuiltAt) &&
+      Date.now() - rebuiltAt < INDEX_REBUILD_MS
+    ) {
+      return new Set(index.dates);
+    }
+    const dates = await listStoredDatesFromKv(store);
+    await store.put(
+      INDEX_KEY,
+      JSON.stringify({ dates: [...dates].sort(), rebuiltAt: new Date().toISOString() }),
+    );
+    return dates;
+  } catch {
+    return new Set();
+  }
 };
 
 const getLatest = async (origin) => {
