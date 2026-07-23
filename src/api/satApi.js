@@ -331,29 +331,53 @@ const fetchSatBundle = (bundleStart) => {
   return rememberPromise(BUNDLE_CACHE, bundleStart, promise, BUNDLE_CACHE_LIMIT);
 };
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 미캐시 프레임은 서버 실시간 변환 경로를 타는데, 아이솔레이트가 직렬 처리라
+// 워커 프리컴퓨트·다른 사용자와 겹치면 큐 대기로 간헐적 503/타임아웃이 난다.
+// 한 번 실패했다고 프레임을 포기하면 화면에서 "안 읽어옴"으로 보이므로,
+// 일시적 실패(5xx·타임아웃·네트워크)는 짧은 백오프로 최대 3회 재시도한다.
+// 404(아직 없는 시각)는 재시도 의미가 없어 즉시 던진다.
 const fetchDirectPair = async (dateUtc) => {
   const date = formatSatDateUtc(dateUtc);
-  const response = await fetch(`/api/gk2a-ir?date=${date}&area=pair`, {
-    signal: AbortSignal.timeout(90000),
-  });
-  if (!response.ok) {
+  const url = `/api/gk2a-ir?date=${date}&area=pair`;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await delay(500 * attempt);
+    let response;
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(55000) });
+    } catch (error) {
+      lastError =
+        error.name === 'TimeoutError' || error.name === 'AbortError'
+          ? new Error('위성 자료 요청 시간이 초과되었습니다.')
+          : error;
+      continue; // 타임아웃·네트워크 오류 → 재시도
+    }
+    if (response.ok) {
+      let bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+        bytes = await gunzipFrame(bytes);
+      }
+      return parsePairFrame(bytes, dateUtc);
+    }
+    if (response.status === 404) {
+      const error = new Error('아직 준비되지 않은 시각입니다.');
+      error.status = 404;
+      throw error;
+    }
+    // 502/503/504 등 서버 일시 오류 → 재시도
     let message = `위성 자료 요청 실패 (${response.status})`;
     try {
       const detail = await response.json();
-      if (response.status === 404) message = '아직 준비되지 않은 시각입니다.';
-      else if (detail?.error) message = detail.error;
+      if (detail?.error) message = detail.error;
     } catch {
       // 본문이 JSON이 아니면 기본 메시지 유지
     }
-    const error = new Error(message);
-    error.status = response.status;
-    throw error;
+    lastError = new Error(message);
+    lastError.status = response.status;
   }
-  let bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    bytes = await gunzipFrame(bytes);
-  }
-  return parsePairFrame(bytes, dateUtc);
+  throw lastError ?? new Error('위성 자료 요청 실패');
 };
 
 export const fetchSatFramePair = (dateUtc, preferSingle = false) => {
