@@ -386,9 +386,18 @@ const buildFrameOutputs = async (context, date) => {
 
   let originResponse;
   try {
-    originResponse = await fetch(upstream, { cf: { cacheEverything: true, cacheTtl: 600 } });
+    // 타임아웃 필수: 없으면 멈춘 다운로드가 전역 processChain을 영구 점유해
+    // 뒤따르는 모든 미캐시 프레임 요청이 통째로 타임아웃된다.
+    originResponse = await fetch(upstream, {
+      cf: { cacheEverything: true, cacheTtl: 600 },
+      signal: AbortSignal.timeout(45000),
+    });
   } catch (error) {
-    throw frameError(`FD upstream fetch failed: ${error.message}`, 502);
+    const timedOut = error.name === 'TimeoutError' || error.name === 'AbortError';
+    throw frameError(
+      `FD upstream fetch ${timedOut ? 'timed out' : 'failed'}: ${error.message}`,
+      timedOut ? 504 : 502,
+    );
   }
   if (!originResponse.ok) {
     throw frameError(
