@@ -692,10 +692,10 @@ function SatelliteView({ menuSlot = null }) {
         pair = await fetchSatFramePair(currentDate, true);
       } catch (error) {
         if (!active) return;
-        pendingFramesRef.current.ko = null;
-        pendingFramesRef.current.fd = null;
-        cloudLayerRef.current?.setFrame('ko', null);
-        cloudLayerRef.current?.setFrame('fd', null);
+        // 프레임 하나가 실패했다고 화면을 지우지 않는다. 예전에는 여기서 ko·fd를 모두
+        // null로 만들어, 일시적인 실패 한 번에 이미 그려져 있던 위성 영상이 통째로
+        // 사라졌다(특히 배경을 담당하는 FD가 빠지면 EA 크롭 바깥, 즉 북쪽 상단이
+        // 비어 보인다). 직전 프레임을 그대로 두고 안내만 띄운다.
         setStatus(error.message);
         return;
       }
