@@ -204,6 +204,14 @@ export const formatStationLabel = (station) => {
       .replace(/\*/g, '')
       .replace(/(특별자치시|특별시|광역시|시|군|구)$/, '')
       .replace(/\s+/g, '');
+  // 지점명 앞에 이미 표기되는 시·군·시도 이름이 붙어 있으면 뗀다.
+  // 철원(철원장흥) → 철원(장흥), 대구(대구북구) → 대구(북구). 남는 글자가 있을 때만.
+  const stripCityPrefix = (name, prefix) => {
+    const text = String(name ?? '');
+    return prefix && text.length > prefix.length && text.startsWith(prefix)
+      ? text.slice(prefix.length)
+      : text;
+  };
   if (!sido) {
     return station.name;
   }
@@ -211,12 +219,12 @@ export const formatStationLabel = (station) => {
     if (normalizePlaceName(station.name) === normalizePlaceName(sido)) {
       return sido;
     }
-    return `${sido}(${station.name})`;
+    return `${sido}(${stripCityPrefix(station.name, sido)})`;
   }
   if (normalizePlaceName(station.name) === normalizePlaceName(sigun)) {
     return `${sido} ${sigun}`;
   }
-  return `${sido} ${sigun}(${station.name})`;
+  return `${sido} ${sigun}(${stripCityPrefix(station.name, sigun)})`;
 };
 
 // 특정 정시의 AWS 시간통계 RN_DAY (그날 0시~해당 시각 누적, mm). -99 등 결측은 제외.
