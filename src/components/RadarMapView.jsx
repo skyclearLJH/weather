@@ -2556,41 +2556,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         cancelAnimationFrame(transitionAnimationRef.current);
         transitionAnimationRef.current = null;
       }
-      if (!isPlayingRef.current || !hasRenderedFrameRef.current) {
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(toCanvas, 0, 0);
-        hasRenderedFrameRef.current = true;
-        refreshOverlaySource();
-        return;
-      }
-
-      const fromContext = fromCanvas.getContext('2d');
-      fromContext.clearRect(0, 0, fromCanvas.width, fromCanvas.height);
-      fromContext.drawImage(canvas, 0, 0);
-      const durationMs = Math.min(140, Math.max(45, playIntervalRef.current * 0.82));
-      const source = mapRef.current?.getSource('radar-overlay');
-      source?.play();
-      const startedAt = performance.now();
-      const dissolve = (timestamp) => {
-        const progress = Math.min(1, (timestamp - startedAt) / durationMs);
-        const eased = progress * progress * (3 - 2 * progress);
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.globalAlpha = 1 - eased;
-        context.drawImage(fromCanvas, 0, 0);
-        context.globalAlpha = eased;
-        context.drawImage(toCanvas, 0, 0);
-        context.globalAlpha = 1;
-        mapRef.current?.triggerRepaint();
-
-        if (progress < 1) {
-          transitionAnimationRef.current = requestAnimationFrame(dissolve);
-          return;
-        }
-        transitionAnimationRef.current = null;
-        source?.pause();
-        mapRef.current?.triggerRepaint();
-      };
-      transitionAnimationRef.current = requestAnimationFrame(dissolve);
+      // 디졸브 없이 바로 그린다. 누적 재생은 경과 시간에 맞춰 60ms마다(때로는 여러 칸씩)
+      // 넘어가는데, 디졸브는 45~140ms라 매번 완료 전에 취소돼 두 장이 반투명하게 겹친
+      // 중간 상태로 남았다. 그 상태는 알파가 원본보다 낮아 화면이 깜빡이는 것처럼 보였다.
+      // 누적장은 프레임 간 변화가 완만해 바로 교체해도 충분히 부드럽다.
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(toCanvas, 0, 0);
+      hasRenderedFrameRef.current = true;
+      refreshOverlaySource();
     },
     [accum3dStyle, accumDisplayMode, accumHours, refreshOverlaySource],
   );
