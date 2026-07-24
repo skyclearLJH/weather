@@ -1636,20 +1636,32 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   }, [frames, frameIndex, status, renderFrame, loadFrameData, isAccumView, isKimView]);
 
   useEffect(() => {
-    if (!isKimView || kimStatus !== 'ready') return;
+    if (!isKimView || kimStatus !== 'ready') return undefined;
     const frameDef = kimFrames[kimIndex];
-    if (!frameDef) return;
+    if (!frameDef) return undefined;
     const token = ++renderTokenRef.current;
-    loadKimFrameData(frameDef)
-      .then((values) => {
-        if (renderTokenRef.current === token) {
-          renderFrame({ ...frameDef, values });
-        }
-      })
-      .catch((error) => {
-        setKimStatus('error');
-        setKimError(error.message);
-      });
+    let retryTimer = null;
+    const attempt = () => {
+      loadKimFrameData(frameDef)
+        .then((values) => {
+          if (renderTokenRef.current === token) {
+            renderFrame({ ...frameDef, values });
+          }
+        })
+        .catch(() => {
+          // 모델 갱신 시점엔 특정 예측 프레임(예: +44시간)이 잠깐 503이 될 수 있다.
+          // 방송 중 화면을 어둡게 덮거나 오류 문구를 띄우면 안 되므로, 전체 상태를
+          // error로 바꾸지 않고 직전 프레임을 그대로 둔 채 조용히 재시도한다.
+          // 갱신이 끝나면 자연히 표출되고, 실패 응답은 캐시되지 않아 재요청된다.
+          if (renderTokenRef.current === token) {
+            retryTimer = window.setTimeout(attempt, 4000);
+          }
+        });
+    };
+    attempt();
+    return () => {
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
   }, [isKimView, kimFrames, kimIndex, kimStatus, loadKimFrameData, renderFrame]);
 
   // 현재 이후 예측을 먼저 받고, 과거가 된 모델 초반 프레임은 마지막에 채운다.
