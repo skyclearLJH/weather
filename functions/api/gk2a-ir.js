@@ -65,7 +65,11 @@ const writeStoredPair = async (env, date, compressedBytes, rawBytes) => {
       storedAt: new Date().toISOString(),
     },
   });
-  await addStoredSatelliteDate(env, date);
+  // 색인은 여기서 건드리지 않는다. 프레임마다 색인을 읽고-고쳐-쓰면, 동시에 저장되는
+  // 프레임끼리 서로의 갱신을 덮어써(race) 일부가 색인에서 사라진다. 그러면 워커가
+  // 그 프레임을 "없다"고 보고 다시 저장 → 또 사라짐이 반복되며 KV 쓰기가 증폭돼
+  // 하루 쓰기 한도를 태우고, 그 뒤로는 어떤 프레임도 저장되지 않는다.
+  // 색인은 아래 listStoredSatelliteDates가 주기적으로 실제 목록에서 재구성한다.
 };
 
 // --- 저장 목록 색인 ---
@@ -76,7 +80,9 @@ const writeStoredPair = async (env, date, compressedBytes, rawBytes) => {
 // 색인이 어긋나도 최대 손해는 이미 캐시된 프레임을 한 번 더 받는 정도이며,
 // 한 시간에 한 번 실제 list로 재구성해 자가 복구한다.
 const SATELLITE_INDEX_KEY = `satellite/gk2a-ir/${SATELLITE_CACHE_VERSION}/index.json`;
-const SATELLITE_INDEX_REBUILD_MS = 60 * 60 * 1000;
+// 10분마다 재구성 — 새 관측이 10분 간격이라 이 주기면 방금 저장한 프레임도 곧 반영된다.
+// list는 하루 약 144회로 무료 한도(1,000회) 안이고, 프레임마다 색인을 쓰지 않아도 된다.
+const SATELLITE_INDEX_REBUILD_MS = 10 * 60 * 1000;
 
 const listStoredDatesFromKv = async (store) => {
   const dates = [];
@@ -118,24 +124,6 @@ export const listStoredSatelliteDates = async (env) => {
     return dates;
   } catch {
     return [];
-  }
-};
-
-const addStoredSatelliteDate = async (env, date) => {
-  const store = getSatelliteStore(env);
-  if (!store) return;
-  try {
-    const index = await store.get(SATELLITE_INDEX_KEY, 'json');
-    const dates = Array.isArray(index?.dates) ? index.dates : [];
-    if (dates.includes(date)) return;
-    dates.push(date);
-    dates.sort();
-    await store.put(
-      SATELLITE_INDEX_KEY,
-      JSON.stringify({ dates, rebuiltAt: index?.rebuiltAt ?? new Date().toISOString() }),
-    );
-  } catch {
-    // 색인 갱신 실패는 치명적이지 않다 — 다음 재구성 때 바로잡힌다.
   }
 };
 

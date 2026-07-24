@@ -45,7 +45,9 @@ const buildTimeline = (latest) => {
 // 저장 목록은 Pages 함수가 유지하는 색인 키 하나만 읽고, 색인이 없거나 오래됐을 때만
 // 실제 list로 재구성한다(시간당 1회). 두 곳이 같은 키·같은 규칙을 쓴다.
 const INDEX_KEY = 'satellite/gk2a-ir/v1/index.json';
-const INDEX_REBUILD_MS = 60 * 60 * 1000;
+// Pages 함수와 같은 주기(10분). 프레임 저장 때 색인을 고쳐 쓰지 않으므로,
+// 방금 저장한 프레임은 다음 재구성에서 반영된다.
+const INDEX_REBUILD_MS = 10 * 60 * 1000;
 
 const listStoredDatesFromKv = async (store) => {
   const dates = new Set();

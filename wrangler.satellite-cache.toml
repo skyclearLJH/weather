@@ -3,7 +3,9 @@ main = "workers/satellite-precompute.js"
 compatibility_date = "2026-07-22"
 
 [triggers]
-crons = ["* * * * *"]
+# 3분 주기 — 새 관측이 10분 간격이라 1분마다 돌 필요가 없고,
+# KV 쓰기·요청 부담을 낮춰 하루 한도 안에서 안정적으로 캐시를 유지한다.
+crons = ["*/3 * * * *"]
 
 [vars]
 SATELLITE_ORIGIN = "https://weather-ljh.pages.dev"
