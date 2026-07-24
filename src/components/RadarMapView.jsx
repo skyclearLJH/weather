@@ -56,6 +56,12 @@ const ACCUM_3D_DEFAULT_PITCH = 55;
 const ISLAND_PILLAR_HEIGHT_SCALE = 0.55;
 const ISLAND_PILLAR_WIDTH_SCALE = 0.7;
 const MAX_ACCUM_API_FRAMES = 31;
+// 임의 기간 상한. 재생 프레임은 MAX_ACCUM_API_FRAMES로 이미 묶여 있어 기간이 늘어도
+// 시간통계 호출은 늘지 않지만, 일자료는 하루당 1회씩 필요하다(과거분은 엣지 7일 캐시).
+// 31일이면 일자료 최대 30회로 KMA 호출한도에 여유가 있고, 프레임 간격도 하루 이내다.
+const MAX_ACCUM_RANGE_DAYS = 31;
+// 일자료를 순차로 받으면 31일에 4초 넘게 걸려 동시에 여러 건씩 받는다.
+const ACCUM_DAILY_FETCH_CONCURRENCY = 6;
 const SINGLE_PILLAR_ISLAND_STATION_IDS = new Set([
   '229', // 북격렬비도
   '269', // 안마도
@@ -917,6 +923,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [accumTop5, setAccumTop5] = useState([]);
   const [accumDisplayMode, setAccumDisplayMode] = useState('flat'); // 'flat' | '3d'
   const [accum3dStyle, setAccum3dStyle] = useState('columns'); // 'columns' | 'surface'
+  // 임의 기간: 입력값은 타이핑마다 재조회하지 않도록 '적용'을 눌러야 range에 반영된다.
+  const [accumRangeMode, setAccumRangeMode] = useState('preset'); // 'preset' | 'custom'
+  const [accumCustomStartInput, setAccumCustomStartInput] = useState('');
+  const [accumCustomEndInput, setAccumCustomEndInput] = useState('');
+  const [accumCustomRange, setAccumCustomRange] = useState(null); // { startMs, endMs }
+  // 시작 시각이 자정이 아니면 그 시점까지의 당일 누적을 빼야 하므로 기준값을 들고 있는다.
+  const accumStartBaselineRef = useRef(null);
   const accumHourlyCacheRef = useRef(new Map()); // 정시 tm → Map<지점, RN_DAY>
   const accumHourlyPendingRef = useRef(new Map());
   const accumAnchorHoursRef = useRef([]); // API-backed frames; displayed hours are interpolated.
@@ -1901,6 +1914,33 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     setManualRefreshTick((tick) => tick + 1);
   }, []);
 
+  // 임의 기간으로 전환할 때 현재 프리셋 구간을 입력창 초기값으로 채워 준다.
+  const prepareAccumCustomInputs = useCallback(() => {
+    const toLocalInput = (date) => {
+      const pad = (value) => String(value).padStart(2, '0');
+      return (
+        `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+        `T${pad(date.getHours())}:00`
+      );
+    };
+    const end = accumHours.at(-1) ?? new Date();
+    const startSeed = accumHours[0] ?? new Date(end.getTime() - 86400000);
+    setAccumCustomStartInput((previous) => previous || toLocalInput(startSeed));
+    setAccumCustomEndInput((previous) => previous || toLocalInput(end));
+    setAccumRangeMode('custom');
+  }, [accumHours]);
+
+  const handleApplyAccumCustomRange = useCallback(() => {
+    const startMs = new Date(accumCustomStartInput).getTime();
+    const endMs = new Date(accumCustomEndInput).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      return;
+    }
+    setIsPlaying(false);
+    setAccumRangeMode('custom');
+    setAccumCustomRange({ startMs, endMs });
+  }, [accumCustomStartInput, accumCustomEndInput]);
+
   const handleKimRefresh = useCallback(() => {
     setKimRefreshTick((tick) => tick + 1);
   }, []);
@@ -2217,14 +2257,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             86400000,
         );
         const base = accumBasesRef.current[dayIndex] ?? null;
+        // 시작 시각이 자정이 아닌 임의 기간이면, 시작 시점까지의 당일 누적을 빼야
+        // '기간 내에 내린 양'이 된다. 프리셋(자정 시작)은 기준값이 없어 0이다.
+        const offset = accumStartBaselineRef.current?.get(stationId) ?? 0;
         if (anchor.getHours() === 0) {
-          return base ? (base.get(stationId) ?? 0) : 0;
+          return Math.max(0, (base ? (base.get(stationId) ?? 0) : 0) - offset);
         }
         const hourly = accumHourlyCacheRef.current.get(formatAccumHourTm(anchor));
         const hourlyValue = hourly?.get(stationId);
         return hourlyValue === undefined
           ? undefined
-          : hourlyValue + (base ? (base.get(stationId) ?? 0) : 0);
+          : Math.max(0, hourlyValue + (base ? (base.get(stationId) ?? 0) : 0) - offset);
       };
 
       const previousMs = previousAnchor.getTime();
@@ -2573,64 +2616,121 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         }
         accumHourlyCacheRef.current.set(formatAccumHourTm(latest.date), latest.data);
 
-        const start = new Date(latest.date);
-        start.setHours(0, 0, 0, 0);
-        start.setDate(start.getDate() - (accumDays - 1));
+        // 기간 결정: 프리셋은 '최신 시각에서 N일', 임의는 사용자가 고른 구간.
+        // 임의 구간의 끝은 관측이 있는 최신 정시를 넘지 못한다.
+        let start;
+        let rangeEnd;
+        if (accumRangeMode === 'custom' && accumCustomRange) {
+          start = new Date(accumCustomRange.startMs);
+          start.setMinutes(0, 0, 0);
+          rangeEnd = new Date(Math.min(accumCustomRange.endMs, latest.date.getTime()));
+          rangeEnd.setMinutes(0, 0, 0);
+          if (start.getTime() >= rangeEnd.getTime()) {
+            throw new Error('종료 시각은 시작 시각보다 뒤여야 합니다.');
+          }
+          if (rangeEnd.getTime() - start.getTime() > MAX_ACCUM_RANGE_DAYS * 86400000) {
+            throw new Error(`기간은 최대 ${MAX_ACCUM_RANGE_DAYS}일까지 설정할 수 있습니다.`);
+          }
+        } else {
+          rangeEnd = latest.date;
+          start = new Date(latest.date);
+          start.setHours(0, 0, 0, 0);
+          start.setDate(start.getDate() - (accumDays - 1));
+        }
 
-        // 완결된 과거 일들의 일합계 → 일 인덱스별 누적 베이스
-        const bases = [new Map()];
-        for (let dayOffset = 0; dayOffset < accumDays - 1; dayOffset++) {
-          const day = new Date(start.getTime() + dayOffset * 86400000);
-          const daily = await fetchDailyRnTotal(day);
+        // 기간 끝 시각의 시간통계 (프리셋이면 이미 받아 둔 최신 자료)
+        let endData = latest.data;
+        if (rangeEnd.getTime() !== latest.date.getTime()) {
+          const endTm = formatAccumHourTm(rangeEnd);
+          endData =
+            accumHourlyCacheRef.current.get(endTm) ??
+            (rangeEnd.getHours() === 0 ? new Map() : await fetchHourlyRnDay(rangeEnd));
           if (!isActive) {
             return;
           }
+          accumHourlyCacheRef.current.set(endTm, endData);
+        }
+
+        // 시작 시각이 자정이 아니면 그 시점까지의 당일 누적을 빼야 기간 합계가 맞는다.
+        const startBaseline =
+          start.getHours() === 0 ? null : await fetchHourlyRnDay(start).catch(() => null);
+        if (!isActive) {
+          return;
+        }
+        accumStartBaselineRef.current = startBaseline;
+
+        // 완결된 과거 일들의 일합계 → 일 인덱스별 누적 베이스.
+        // 하루씩 순차로 받으면 긴 기간에서 느려서 몇 건씩 동시에 받는다.
+        const startMidnight = new Date(start).setHours(0, 0, 0, 0);
+        const endMidnight = new Date(rangeEnd).setHours(0, 0, 0, 0);
+        const dayCount = Math.round((endMidnight - startMidnight) / 86400000) + 1;
+        const dailyTotals = [];
+        for (let index = 0; index < dayCount - 1; index += ACCUM_DAILY_FETCH_CONCURRENCY) {
+          const batch = [];
+          for (
+            let offset = index;
+            offset < Math.min(index + ACCUM_DAILY_FETCH_CONCURRENCY, dayCount - 1);
+            offset++
+          ) {
+            batch.push(fetchDailyRnTotal(new Date(startMidnight + offset * 86400000)));
+          }
+          const settled = await Promise.all(batch);
+          if (!isActive) {
+            return;
+          }
+          dailyTotals.push(...settled);
+        }
+        const bases = [new Map()];
+        dailyTotals.forEach((daily, dayOffset) => {
           const previous = bases[dayOffset];
           const next = new Map(previous);
           daily.forEach((value, stationId) => {
             next.set(stationId, (previous.get(stationId) ?? 0) + value);
           });
           bases.push(next);
-        }
+        });
         accumBasesRef.current = bases;
 
         const hours = [];
-        for (let t = start.getTime(); t <= latest.date.getTime(); t += 3600000) {
+        for (let t = start.getTime(); t <= rangeEnd.getTime(); t += 3600000) {
           hours.push(new Date(t));
         }
-        if (hours.at(-1)?.getTime() !== latest.date.getTime()) {
-          hours.push(new Date(latest.date));
+        if (hours.at(-1)?.getTime() !== rangeEnd.getTime()) {
+          hours.push(new Date(rangeEnd));
         }
 
-        const spanHours = Math.max(0, (latest.date.getTime() - start.getTime()) / 3600000);
+        const spanHours = Math.max(0, (rangeEnd.getTime() - start.getTime()) / 3600000);
         const frameStepHours = Math.max(
           1,
           Math.ceil(spanHours / (MAX_ACCUM_API_FRAMES - 1)),
         );
         const frameStepMs = frameStepHours * 3600000;
         const anchorHours = [];
-        for (let t = start.getTime(); t <= latest.date.getTime(); t += frameStepMs) {
+        for (let t = start.getTime(); t <= rangeEnd.getTime(); t += frameStepMs) {
           anchorHours.push(new Date(t));
         }
-        if (anchorHours.at(-1)?.getTime() !== latest.date.getTime()) {
-          anchorHours.push(new Date(latest.date));
+        if (anchorHours.at(-1)?.getTime() !== rangeEnd.getTime()) {
+          anchorHours.push(new Date(rangeEnd));
         }
         accumAnchorHoursRef.current = anchorHours;
         setAccumHours(hours);
         setAccumIndex(hours.length - 1);
         setAccumStatus('ready');
 
-        // 기간 전체(최신 시각 기준) 최다 강수 5개 지점.
-        // 최신 시각이 자정이면 RN_DAY가 전날 누적이므로 일합계 베이스만 쓴다.
-        const latestBase = bases[accumDays - 1] ?? new Map();
-        const latestIsMidnight = latest.date.getHours() === 0;
+        // 기간 전체(끝 시각 기준) 최다 강수 5개 지점.
+        // 끝 시각이 자정이면 RN_DAY가 전날 누적이므로 일합계 베이스만 쓴다.
+        const latestBase = bases[dayCount - 1] ?? new Map();
+        const latestIsMidnight = rangeEnd.getHours() === 0;
         const ranked = [];
         accumStationsRef.current.forEach((station) => {
-          const hourValue = latest.data.get(station.id);
+          const hourValue = endData.get(station.id);
           if (!latestIsMidnight && hourValue === undefined) {
             return;
           }
-          const total = (latestIsMidnight ? 0 : hourValue) + (latestBase.get(station.id) ?? 0);
+          const total =
+            (latestIsMidnight ? 0 : hourValue) +
+            (latestBase.get(station.id) ?? 0) -
+            (startBaseline?.get(station.id) ?? 0);
           if (total >= 0.1) {
             ranked.push({ station, total });
           }
@@ -2679,7 +2779,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return () => {
       isActive = false;
     };
-  }, [isAccumView, accumDays, buildAccumIdw, loadAccumAnchor]);
+  }, [
+    isAccumView,
+    accumDays,
+    accumRangeMode,
+    accumCustomRange,
+    buildAccumIdw,
+    loadAccumAnchor,
+  ]);
 
   // 누적 뷰 현재 프레임 렌더링 (자료 미도착 시 도착 후 렌더)
   useEffect(() => {
@@ -3674,17 +3781,56 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               <div className="flex items-center gap-2">
                 {isAccumView ? (
                   <>
+                    {accumRangeMode === 'custom' ? (
+                      <div className="flex h-10 items-center gap-1.5 rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white backdrop-blur-sm">
+                        <input
+                          type="datetime-local"
+                          value={accumCustomStartInput}
+                          max={accumCustomEndInput || undefined}
+                          onChange={(event) => setAccumCustomStartInput(event.target.value)}
+                          className="h-7 rounded bg-slate-800/80 px-1.5 text-xs text-white outline-none [color-scheme:dark]"
+                          aria-label="누적 시작 시각"
+                        />
+                        <span className="text-white/60">~</span>
+                        <input
+                          type="datetime-local"
+                          value={accumCustomEndInput}
+                          min={accumCustomStartInput || undefined}
+                          onChange={(event) => setAccumCustomEndInput(event.target.value)}
+                          className="h-7 rounded bg-slate-800/80 px-1.5 text-xs text-white outline-none [color-scheme:dark]"
+                          aria-label="누적 종료 시각"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleApplyAccumCustomRange}
+                          disabled={!accumCustomStartInput || !accumCustomEndInput}
+                          className="h-7 rounded-full bg-white px-2.5 text-xs font-black text-slate-900 transition hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          적용
+                        </button>
+                      </div>
+                    ) : null}
                     <select
-                      value={accumDays}
+                      value={accumRangeMode === 'custom' ? 'custom' : String(accumDays)}
                       onChange={(event) => {
                         setIsPlaying(false);
-                        setAccumDays(Number(event.target.value));
+                        const { value } = event.target;
+                        if (value === 'custom') {
+                          prepareAccumCustomInputs();
+                          return;
+                        }
+                        setAccumRangeMode('preset');
+                        setAccumCustomRange(null);
+                        setAccumDays(Number(value));
                       }}
                       className="h-10 cursor-pointer rounded-full border border-white/25 bg-slate-900/55 px-3 text-sm font-semibold text-white outline-none backdrop-blur-sm"
-                      aria-label="누적 일수"
+                      aria-label="누적 기간"
                     >
+                      <option value="custom" className="text-slate-900">
+                        임의
+                      </option>
                       {[1, 2, 3, 4, 5].map((days) => (
-                        <option key={days} value={days} className="text-slate-900">
+                        <option key={days} value={String(days)} className="text-slate-900">
                           {days}일
                         </option>
                       ))}
