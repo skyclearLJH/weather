@@ -1293,7 +1293,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         transitionAnimationRef.current = null;
       }
 
-      if (!isPlayingRef.current || !hasRenderedFrameRef.current) {
+      // 강수 예상도는 전환 없이 바로 교체한다. 두 장을 알파로 겹치는 크로스디졸브는
+      // 넓은 색면에서 합성 알파가 원본보다 낮아져(0.5 지점에서 약 25%) 매 프레임
+      // 오버레이가 옅어졌다 돌아오는 깜빡임이 생긴다. 이전 장을 불투명하게 깔면
+      // 알파는 유지되지만 새 장의 빈 곳으로 옛 장이 비쳐 잔상이 쌓인다.
+      // 레이더는 성긴 에코라 기존 전환을 그대로 둔다.
+      if (!isPlayingRef.current || !hasRenderedFrameRef.current || frame.kind === 'kim') {
         context.clearRect(0, 0, canvas.width, canvas.height);
         context.drawImage(toCanvas, 0, 0);
         hasRenderedFrameRef.current = true;
@@ -1305,12 +1310,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       fromContext.clearRect(0, 0, fromCanvas.width, fromCanvas.height);
       fromContext.drawImage(canvas, 0, 0);
 
-      const isKimFrame = frame.kind === 'kim';
-      // KIM은 1시간 간격이라 프레임 간 변화가 커서, 전환이 짧으면 툭툭 끊겨 보인다.
-      // 재생 간격의 대부분을 전환에 써서 이어지듯 넘어가게 한다.
-      const durationMs = isKimFrame
-        ? Math.min(900, Math.max(180, playIntervalRef.current * 0.92))
-        : Math.min(220, Math.max(55, playIntervalRef.current * 0.72));
+      const durationMs = Math.min(220, Math.max(55, playIntervalRef.current * 0.72));
       const source = mapRef.current?.getSource('radar-overlay');
       source?.play();
       const startedAt = performance.now();
@@ -1320,24 +1320,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         const easedProgress = progress * progress * (3 - 2 * progress);
         context.clearRect(0, 0, canvas.width, canvas.height);
         context.globalCompositeOperation = 'source-over';
-        if (isKimFrame) {
-          // 강수 예상도는 넓은 면이라 가산('lighter') 합성을 쓰면 겹치는 순간 밝기가
-          // 치솟아 번쩍인다. 그렇다고 이전 장을 불투명하게 깔면, 새 장에서 비가 없는
-          // (투명한) 부분으로 옛 장이 그대로 비쳐 잔상이 프레임마다 쌓인다.
-          // 두 장 모두 source-over로 반대 방향 페이드를 주는 정석 크로스디졸브를 쓴다.
-          // 전환이 끝나면 이전 장의 알파가 0이 되어 잔상이 남지 않는다.
-          context.globalAlpha = 1 - easedProgress;
-          context.drawImage(fromCanvas, 0, 0);
-          context.globalAlpha = easedProgress;
-          context.drawImage(toCanvas, 0, 0);
-        } else {
-          context.globalAlpha = 1 - easedProgress;
-          context.drawImage(fromCanvas, 0, 0);
-          // 가중 합성으로 반투명 에코의 중간 밝기가 꺼지는 플래시를 방지한다.
-          context.globalCompositeOperation = 'lighter';
-          context.globalAlpha = easedProgress;
-          context.drawImage(toCanvas, 0, 0);
-        }
+        context.globalAlpha = 1 - easedProgress;
+        context.drawImage(fromCanvas, 0, 0);
+        // 가중 합성으로 반투명 에코의 중간 밝기가 꺼지는 플래시를 방지한다.
+        context.globalCompositeOperation = 'lighter';
+        context.globalAlpha = easedProgress;
+        context.drawImage(toCanvas, 0, 0);
         context.globalAlpha = 1;
         context.globalCompositeOperation = 'source-over';
         mapRef.current?.triggerRepaint();
