@@ -62,6 +62,18 @@ const MAX_ACCUM_API_FRAMES = 31;
 const MAX_ACCUM_RANGE_DAYS = 31;
 // 일자료를 순차로 받으면 31일에 4초 넘게 걸려 동시에 여러 건씩 받는다.
 const ACCUM_DAILY_FETCH_CONCURRENCY = 6;
+// 표시 프레임 간격: 기간이 길수록 성기게 잡는다. 실제 API 자료는 어차피
+// MAX_ACCUM_API_FRAMES개뿐이라 그보다 촘촘한 프레임은 전부 보간값이고,
+// 30일을 1시간 단위로 두면 721프레임이 되어 렌더만 무거워진다.
+const ACCUM_DISPLAY_STEP_LADDER_HOURS = [1, 2, 3, 6, 12, 24];
+const MAX_ACCUM_DISPLAY_FRAMES = 121;
+// 브라우저가 실제로 그릴 수 있는 최소 간격. 이보다 짧아지면 프레임을 건너뛴다.
+const ACCUM_MIN_FRAME_INTERVAL_MS = 60;
+
+const pickAccumDisplayStepHours = (spanHours) =>
+  ACCUM_DISPLAY_STEP_LADDER_HOURS.find(
+    (step) => spanHours / step + 1 <= MAX_ACCUM_DISPLAY_FRAMES,
+  ) ?? ACCUM_DISPLAY_STEP_LADDER_HOURS.at(-1);
 const SINGLE_PILLAR_ISLAND_STATION_IDS = new Set([
   '229', // 북격렬비도
   '269', // 안마도
@@ -1782,11 +1794,25 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     if (!isAccumView || !isPlaying || accumHours.length < 2) {
       return undefined;
     }
-    const intervalMs = Math.max(60, Math.round((playDurationSec * 1000) / accumHours.length));
-    const timer = window.setInterval(() => {
-      setAccumIndex((previous) => Math.min(previous + 1, accumHours.length - 1));
-    }, intervalMs);
-    return () => window.clearInterval(timer);
+    // 프레임 수가 아니라 '경과 시간'으로 위치를 정한다. 한 칸씩 세는 방식은 프레임이
+    // 많을 때 최소 간격에 걸리거나(30일이면 5초 설정에도 43초) 렌더가 타이머보다 느려
+    // 계속 밀렸다. 경과 비율로 인덱스를 잡으면 렌더가 느린 기기에서도 몇 칸씩 건너뛰며
+    // 설정한 재생 길이를 그대로 지킨다.
+    const transitions = accumHours.length - 1;
+    const durationMs = Math.max(1, playDurationSec * 1000);
+    const startedAt = performance.now();
+    let timer = null;
+    const tick = () => {
+      const progress = Math.min(1, (performance.now() - startedAt) / durationMs);
+      setAccumIndex(Math.min(transitions, Math.round(progress * transitions)));
+      if (progress < 1) {
+        timer = window.setTimeout(tick, ACCUM_MIN_FRAME_INTERVAL_MS);
+      }
+    };
+    timer = window.setTimeout(tick, ACCUM_MIN_FRAME_INTERVAL_MS);
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [isAccumView, isPlaying, accumHours.length, playDurationSec]);
 
   useEffect(() => {
@@ -2691,15 +2717,18 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         });
         accumBasesRef.current = bases;
 
+        const spanHours = Math.max(0, (rangeEnd.getTime() - start.getTime()) / 3600000);
+
+        // 표시 간격은 기간에 맞춰 넓힌다(1일 → 1시간, 30일 → 6시간).
+        const displayStepMs = pickAccumDisplayStepHours(spanHours) * 3600000;
         const hours = [];
-        for (let t = start.getTime(); t <= rangeEnd.getTime(); t += 3600000) {
+        for (let t = start.getTime(); t <= rangeEnd.getTime(); t += displayStepMs) {
           hours.push(new Date(t));
         }
         if (hours.at(-1)?.getTime() !== rangeEnd.getTime()) {
           hours.push(new Date(rangeEnd));
         }
 
-        const spanHours = Math.max(0, (rangeEnd.getTime() - start.getTime()) / 3600000);
         const frameStepHours = Math.max(
           1,
           Math.ceil(spanHours / (MAX_ACCUM_API_FRAMES - 1)),
