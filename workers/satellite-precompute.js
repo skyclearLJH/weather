@@ -1,6 +1,8 @@
 const CACHE_PREFIX = 'satellite/gk2a-ir/v1/pairs/';
 const TEN_MINUTES_MS = 10 * 60 * 1000;
-const TIMELINE_HOURS = 12;
+// src/components/SatelliteView.jsx의 TIMELINE_HOURS와 반드시 같아야 한다.
+// 워커가 더 넓은 구간을 채우면 화면에 안 쓰이는 프레임까지 저장해 KV를 낭비한다.
+const TIMELINE_HOURS = 6;
 
 const jsonResponse = (payload, status = 200) =>
   new Response(JSON.stringify(payload), {

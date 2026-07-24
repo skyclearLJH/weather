@@ -19,7 +19,11 @@ import {
 } from '../api/satApi';
 import './SatelliteView.css';
 
-const TIMELINE_HOURS = 12;
+// 6시간(36프레임). 12시간(72프레임)은 프레임당 약 4.3MB라 브라우저가 ~314MB를 들고
+// 있어야 해서, 메모리 압박으로 캐시가 밀려나며 스크럽 시 빈 화면이 보였다.
+// 6시간이면 ~160MB로 절반이고, 채워야 할 프레임도 절반이라 로딩이 안정적이다.
+// 워커(satellite-precompute.js)의 TIMELINE_HOURS와 반드시 같게 유지할 것.
+const TIMELINE_HOURS = 6;
 const STEP_MINUTES = 10;
 const AUTO_REFRESH_MS = 60 * 1000;
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
