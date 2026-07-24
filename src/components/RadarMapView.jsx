@@ -1296,10 +1296,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         context.clearRect(0, 0, canvas.width, canvas.height);
         context.globalCompositeOperation = 'source-over';
         if (isKimFrame) {
-          // 강수 예상도는 넓은 면이라 가산 합성을 쓰면 두 프레임이 겹치는 순간
-          // 밝기가 치솟아 매 프레임 번쩍인다. 이전 장을 불투명하게 깔고 다음 장을
-          // 알파로 덮는 정석 디졸브를 써서 밝기 변화 없이 넘어가게 한다.
-          context.globalAlpha = 1;
+          // 강수 예상도는 넓은 면이라 가산('lighter') 합성을 쓰면 겹치는 순간 밝기가
+          // 치솟아 번쩍인다. 그렇다고 이전 장을 불투명하게 깔면, 새 장에서 비가 없는
+          // (투명한) 부분으로 옛 장이 그대로 비쳐 잔상이 프레임마다 쌓인다.
+          // 두 장 모두 source-over로 반대 방향 페이드를 주는 정석 크로스디졸브를 쓴다.
+          // 전환이 끝나면 이전 장의 알파가 0이 되어 잔상이 남지 않는다.
+          context.globalAlpha = 1 - easedProgress;
           context.drawImage(fromCanvas, 0, 0);
           context.globalAlpha = easedProgress;
           context.drawImage(toCanvas, 0, 0);
