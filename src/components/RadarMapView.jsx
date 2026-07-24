@@ -1280,7 +1280,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       fromContext.clearRect(0, 0, fromCanvas.width, fromCanvas.height);
       fromContext.drawImage(canvas, 0, 0);
 
-      const durationMs = Math.min(220, Math.max(55, playIntervalRef.current * 0.72));
+      const isKimFrame = frame.kind === 'kim';
+      // KIM은 1시간 간격이라 프레임 간 변화가 커서, 전환이 짧으면 툭툭 끊겨 보인다.
+      // 재생 간격의 대부분을 전환에 써서 이어지듯 넘어가게 한다.
+      const durationMs = isKimFrame
+        ? Math.min(900, Math.max(180, playIntervalRef.current * 0.92))
+        : Math.min(220, Math.max(55, playIntervalRef.current * 0.72));
       const source = mapRef.current?.getSource('radar-overlay');
       source?.play();
       const startedAt = performance.now();
@@ -1290,12 +1295,22 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         const easedProgress = progress * progress * (3 - 2 * progress);
         context.clearRect(0, 0, canvas.width, canvas.height);
         context.globalCompositeOperation = 'source-over';
-        context.globalAlpha = 1 - easedProgress;
-        context.drawImage(fromCanvas, 0, 0);
-        // 가중 합성으로 반투명 에코의 중간 밝기가 꺼지는 플래시를 방지한다.
-        context.globalCompositeOperation = 'lighter';
-        context.globalAlpha = easedProgress;
-        context.drawImage(toCanvas, 0, 0);
+        if (isKimFrame) {
+          // 강수 예상도는 넓은 면이라 가산 합성을 쓰면 두 프레임이 겹치는 순간
+          // 밝기가 치솟아 매 프레임 번쩍인다. 이전 장을 불투명하게 깔고 다음 장을
+          // 알파로 덮는 정석 디졸브를 써서 밝기 변화 없이 넘어가게 한다.
+          context.globalAlpha = 1;
+          context.drawImage(fromCanvas, 0, 0);
+          context.globalAlpha = easedProgress;
+          context.drawImage(toCanvas, 0, 0);
+        } else {
+          context.globalAlpha = 1 - easedProgress;
+          context.drawImage(fromCanvas, 0, 0);
+          // 가중 합성으로 반투명 에코의 중간 밝기가 꺼지는 플래시를 방지한다.
+          context.globalCompositeOperation = 'lighter';
+          context.globalAlpha = easedProgress;
+          context.drawImage(toCanvas, 0, 0);
+        }
         context.globalAlpha = 1;
         context.globalCompositeOperation = 'source-over';
         mapRef.current?.triggerRepaint();

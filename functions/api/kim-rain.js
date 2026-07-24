@@ -25,7 +25,9 @@ const MAX_LEAD_HOUR = 48;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const COMPLETE_CYCLE_CACHE_SECONDS = 5 * 60;
 const FRAME_CACHE_SECONDS = 7 * 24 * 60 * 60;
-const KIM_R2_VERSION = 'v1';
+// v2: 가우시안 스무딩 제거(SMOOTHING_PASSES 1 → 0). 이미 저장된 v1 프레임은
+// 스무딩된 값이라 그대로 쓰면 변경이 반영되지 않으므로 버전을 올려 새로 만든다.
+const KIM_R2_VERSION = 'v2';
 const DEFAULT_PRECOMPUTE_BATCH_SIZE = 6;
 const DEFAULT_RETAINED_CYCLES = 3;
 const STORED_META_FRESH_SECONDS = 30 * 60;
@@ -38,7 +40,10 @@ const SOURCE_GRID = {
   originY: 767.6189673632407,
 };
 const DOWNSAMPLE = 2;
-const SMOOTHING_PASSES = 1;
+// 0 = 스무딩 없음(사용자 요청). 가우시안(5탭 [1,4,6,4,1])을 걸면 모델이 낸 강수 경계가
+// 뭉개져 실제보다 넓고 약하게 보인다. 표출은 화면 확대 시 적용되는 bicubic 보간만으로
+// 충분히 매끄럽다. 값을 바꾸면 아래 KIM_R2_VERSION도 함께 올려 캐시를 무효화할 것.
+const SMOOTHING_PASSES = 0;
 const LOCAL_KOREA_BOUNDS = {
   lonMin: 118.2,
   lonMax: 133.8,
@@ -811,7 +816,7 @@ export const onRequestGet = async (context) => {
       if (storedFrame) return storedFrame;
     }
     const edgeCache = getEdgeCache();
-    const key = cacheKey(context.request.url, `hourly-local-full-smooth/${baseTime}/${leadHour}`);
+    const key = cacheKey(context.request.url, `hourly-local-full-raw/${baseTime}/${leadHour}`);
     if (!refresh && edgeCache) {
       const cached = await edgeCache.match(key);
       if (cached) return cached;
