@@ -103,38 +103,51 @@ const precompute = async (env) => {
   const store = env.SATELLITE_CACHE || env.KIM_RAIN_CACHE;
   if (!store) throw new Error('SATELLITE_CACHE binding is missing');
   const origin = String(env.SATELLITE_ORIGIN || 'https://weather-ljh.pages.dev').replace(/\/$/, '');
-  const batchSize = Math.max(1, Math.min(3, Number(env.SATELLITE_BATCH_SIZE) || 2));
+  const batchSize = Math.max(1, Math.min(6, Number(env.SATELLITE_BATCH_SIZE) || 4));
   const latest = await getLatest(origin);
   const timeline = buildTimeline(latest);
   const stored = await listStoredDates(store);
   const missing = timeline.filter((date) => !stored.has(date));
+  // 채우기 순서:
+  //  1) 가장 최신 결측(사용자가 방금 보는 끝단)을 먼저,
+  //  2) 그 뒤엔 가장 오래된 결측부터 최신 쪽으로 '연속으로' 메운다.
+  // 예전처럼 두 끝(최신·최고령)만 번갈아 잡으면 가운데 구간이 계속 굶어
+  // 09~12시대처럼 중간에 구멍이 남는다. 오래된 쪽부터 빈틈없이 밀어 올린다.
   const targets = [];
   if (missing.length > 0) {
     targets.push(missing[0]);
-    for (let index = missing.length - 1; index > 0 && targets.length < batchSize; index--) {
-      targets.push(missing[index]);
+    for (let index = missing.length - 1; index >= 0 && targets.length < batchSize; index--) {
+      if (missing[index] !== targets[0]) targets.push(missing[index]);
     }
   }
 
-  const results = await Promise.all(targets.map(async (date) => {
+  // Pages 함수는 한 아이솔레이트에서 프레임을 직렬 변환한다(processChain). 그래서
+  // 워커가 여러 요청을 '동시에' 던지면 Pages 큐 뒤쪽 프레임은 앞 프레임이 끝나길
+  // 기다리다 공유 제한시간을 넘겨 매번 한두 개만 저장되고 나머지는 버려졌다
+  // (batch 2를 동시에 보내도 실효 저장은 사실상 1개/크론). 하나씩 순차로 보내면
+  //  - 각 빌드가 큐 대기 없이 제 속도로(수십 초) 끝나 실효 처리량이 오히려 오르고,
+  //  - 느리거나 실패한 프레임이 있어도 각자 넉넉한 제한시간 안에서 끝나 나머지를
+  //    막지 않는다.
+  // 이미 저장된 시각은 precompute=1이 즉시 204(kv)로 응답하므로 크론이 겹쳐도
+  // 재변환 없이 값싸게 지나간다.
+  const results = [];
+  for (const date of targets) {
     try {
       const response = await fetch(
         `${origin}/api/gk2a-ir?date=${date}&area=pair&precompute=1`,
-        {
-        signal: AbortSignal.timeout(120000),
-        },
+        { signal: AbortSignal.timeout(75000) },
       );
       await response.arrayBuffer();
-      return {
+      results.push({
         date,
         ok: response.ok,
         status: response.status,
         source: response.headers.get('X-Satellite-Data-Source'),
-      };
+      });
     } catch (error) {
-      return { date, ok: false, error: error.message };
+      results.push({ date, ok: false, error: error.message });
     }
-  }));
+  }
 
   return {
     checkedAt: new Date().toISOString(),

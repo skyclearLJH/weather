@@ -9,7 +9,7 @@ crons = ["*/3 * * * *"]
 
 [vars]
 SATELLITE_ORIGIN = "https://weather-ljh.pages.dev"
-SATELLITE_BATCH_SIZE = "2"
+SATELLITE_BATCH_SIZE = "4"
 
 [[kv_namespaces]]
 binding = "SATELLITE_CACHE"
