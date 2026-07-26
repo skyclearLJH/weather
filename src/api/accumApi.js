@@ -196,8 +196,14 @@ export const formatStationLabel = (station) => {
   const sido = SIDO_SHORT_LABELS[sidoRaw] ?? sidoRaw.slice(0, 2);
   const isMetro = /(특별시|광역시|특별자치시)$/.test(sidoRaw);
   const sigunToken = tokens[1] ?? '';
-  const sigun = /(시|군)$/.test(sigunToken) ? sigunToken.replace(/(시|군)$/, '') : '';
-  const isMetroCounty = isMetro && /군$/.test(sigunToken);
+  // 법정동 주소는 일반구를 가진 시(市)를 '포항시북구', '성남시분당구'처럼 시+구를
+  // 공백 없이 붙여 쓴다. 이 경우 토큰이 '구'로 끝나 /(시|군)$/에 걸리지 않아 시·군명이
+  // 통째로 빠졌다(예: '경북 포항(기계)'에서 포항 누락 — 포항·성남·수원·안산·청주·천안·
+  // 전주·창원 등 일반구를 둔 모든 시가 대상). 앞쪽 첫 '시/군'까지를 시·군으로 잡는다:
+  // '포항시북구' → '포항시', '밀양시' → '밀양시', '울릉군' → '울릉군'.
+  const sigunFull = sigunToken.match(/^(.+?[시군])(?:[가-힣]*구)?$/)?.[1] ?? '';
+  const sigun = sigunFull ? sigunFull.replace(/(시|군)$/, '') : '';
+  const isMetroCounty = isMetro && /군$/.test(sigunFull);
   const normalizePlaceName = (value) =>
     String(value ?? '')
       .replace(/\([^)]*\)/g, '')
