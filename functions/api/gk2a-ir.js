@@ -744,6 +744,11 @@ const handleLatestRequest = async (context, beforeValue = '') => {
       // KV 목록 조회가 실패하면 NOAA 최신 시각을 그대로 사용한다.
     }
   }
+  // 라이브(현재) 조회일 때만, cron이 걸러 최신이 R2에 없으면 배경으로 채운다.
+  // 과거 조회(historical)는 그때그때 클라이언트 요청으로 채워지므로 건드리지 않는다.
+  if (!hasHistoricalTarget) {
+    maybeFillRecentFrames(context, latest, cachedLatest);
+  }
   return new Response(JSON.stringify({ latest, cachedLatest }), {
     status: latest ? 200 : 404,
     headers: {
@@ -942,6 +947,51 @@ const formatUtcTimestamp = (timestamp) => {
 };
 
 const isDailyGapDate = (date) => date.slice(8, 12) === '1520';
+
+// --- 최신 프레임 능동 채우기 (크론 백업) ---
+// R2 채우기를 무료 플랜 cron에만 맡기면 cron이 걸러질 때(best-effort라 부하 시 발화를
+// 건너뜀) 최신 끝단이 비어 방송 중 '그 시각 이후 로딩 안 됨'이 된다. 클라이언트가 60초
+// 마다 부르는 ?latest=1 요청에서, 최신인데 아직 R2에 없는 프레임 몇 장을 배경으로
+// precompute해 채운다. cron과 무관하게 페이지가 열려 있으면 최신이 유지된다.
+// 이미 저장된 프레임은 즉시 통과(204 r2)라 부하·쓰기가 적고, 최신까지 차 있으면
+// 아예 건너뛴다. 아이솔레이트별 최소 간격으로 과요청을 막는다.
+const RECENT_FILL_THROTTLE_MS = 90 * 1000;
+const RECENT_FILL_MAX_FRAMES = 3;
+let lastRecentFillAt = 0;
+
+const fillRecentFrames = async (origin, latest, cachedLatest) => {
+  const latestMs = parseUtcDate(latest);
+  if (latestMs === null) return;
+  const cachedMs = cachedLatest ? parseUtcDate(cachedLatest) : null;
+  const targets = [];
+  for (let i = 0; i < 12 && targets.length < RECENT_FILL_MAX_FRAMES; i++) {
+    const ms = latestMs - i * 10 * 60 * 1000;
+    if (cachedMs !== null && ms <= cachedMs) break; // 이미 저장된 구간에 도달
+    const date = formatUtcTimestamp(ms);
+    if (!isDailyGapDate(date)) targets.push(date);
+  }
+  for (const date of targets) {
+    try {
+      const response = await fetch(`${origin}/api/gk2a-ir?date=${date}&area=pair&precompute=1`, {
+        signal: AbortSignal.timeout(60000),
+      });
+      await response.arrayBuffer();
+    } catch {
+      // 개별 실패는 무시 — 다음 폴링에서 다시 시도된다
+    }
+  }
+};
+
+const maybeFillRecentFrames = (context, latest, cachedLatest) => {
+  if (!getSatelliteStore(context.env) || !latest) return;
+  if (typeof context.waitUntil !== 'function') return;
+  if (cachedLatest && cachedLatest >= latest) return; // 이미 최신까지 저장됨
+  const now = Date.now();
+  if (now - lastRecentFillAt < RECENT_FILL_THROTTLE_MS) return;
+  lastRecentFillAt = now;
+  const origin = new URL(context.request.url).origin;
+  context.waitUntil(fillRecentFrames(origin, latest, cachedLatest).catch(() => {}));
+};
 
 const handleBundleRequest = async (context, bundleStart, edgeCache) => {
   const timestamp = parseUtcDate(bundleStart);
