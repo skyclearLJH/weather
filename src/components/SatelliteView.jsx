@@ -6,6 +6,7 @@
 // 주변 6km(KO) 정밀. 과거 12시간을 10분 간격으로 조회할 수 있다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarClock } from 'lucide-react';
+import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
@@ -1068,22 +1069,13 @@ function SatelliteView({ menuSlot = null }) {
           {isHistoryPickerOpen ? (
             <div className="flex h-10 items-center gap-1.5 rounded-full border border-white/25 bg-slate-900/65 px-2 text-white shadow-lg backdrop-blur-sm">
               <CalendarClock size={16} className="shrink-0" />
-              <input
-                type="datetime-local"
+              <HistoricalDateTimeInput
                 value={historyInput}
                 min={SATELLITE_ARCHIVE_MIN_INPUT}
                 max={formatLocalDateTimeInput(floorToTenMinutesLocal(new Date()))}
-                step={600}
-                onChange={(event) => {
-                  const selected = new Date(event.target.value);
-                  setHistoryInput(
-                    Number.isNaN(selected.getTime())
-                      ? event.target.value
-                      : formatLocalDateTimeInput(floorToTenMinutesLocal(selected)),
-                  );
-                }}
-                className="h-7 w-[11.6rem] rounded bg-slate-800/90 px-1.5 text-xs text-white outline-none [color-scheme:dark]"
-                aria-label="위성 과거 조회 시각"
+                onChange={setHistoryInput}
+                dark
+                ariaLabel="위성 과거 조회 시각"
               />
               <button
                 type="button"

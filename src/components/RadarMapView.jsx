@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarClock, Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
+import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import { createAccumSurfaceLayer } from './AccumSurfaceLayer.js';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -3426,26 +3427,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         {isRadarHistoryPickerOpen ? (
           <div className={`flex h-10 items-center gap-1.5 rounded-full border px-2 shadow-lg ${shellClass}`}>
             <CalendarClock size={16} className="shrink-0" />
-            <input
-              type="datetime-local"
+            <HistoricalDateTimeInput
               value={radarHistoryInput}
               min={RADAR_ARCHIVE_MIN_INPUT}
               max={formatLocalDateTimeInput(floorToTenMinutes(new Date()))}
-              step={600}
-              onChange={(event) => {
-                const selected = new Date(event.target.value);
-                setRadarHistoryInput(
-                  Number.isNaN(selected.getTime())
-                    ? event.target.value
-                    : formatLocalDateTimeInput(floorToTenMinutes(selected)),
-                );
-              }}
-              className={`h-7 w-[11.6rem] rounded px-1.5 text-xs outline-none ${
-                broadcast
-                  ? 'bg-slate-800/90 text-white [color-scheme:dark]'
-                  : 'bg-slate-50 text-slate-700'
-              }`}
-              aria-label="레이더 과거 조회 시각"
+              onChange={setRadarHistoryInput}
+              dark={broadcast}
+              ariaLabel="레이더 과거 조회 시각"
             />
             <button
               type="button"
