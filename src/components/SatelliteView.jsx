@@ -1074,7 +1074,14 @@ function SatelliteView({ menuSlot = null }) {
                 min={SATELLITE_ARCHIVE_MIN_INPUT}
                 max={formatLocalDateTimeInput(floorToTenMinutesLocal(new Date()))}
                 step={600}
-                onChange={(event) => setHistoryInput(event.target.value)}
+                onChange={(event) => {
+                  const selected = new Date(event.target.value);
+                  setHistoryInput(
+                    Number.isNaN(selected.getTime())
+                      ? event.target.value
+                      : formatLocalDateTimeInput(floorToTenMinutesLocal(selected)),
+                  );
+                }}
                 className="h-7 w-[11.6rem] rounded bg-slate-800/90 px-1.5 text-xs text-white outline-none [color-scheme:dark]"
                 aria-label="위성 과거 조회 시각"
               />

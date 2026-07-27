@@ -20,7 +20,7 @@ import {
   probeLatestRadarTm,
   probeLatestQpfTm,
   parseRadarTm,
-  floorToFiveMinutes,
+  floorToTenMinutes,
 } from '../api/radarApi';
 import {
   ACCUM_PALETTE,
@@ -1956,7 +1956,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const prepareRadarHistoryInput = useCallback(() => {
     const latestObservation = frames.filter((frame) => frame.kind === 'obs').at(-1)?.validTime;
     const seed = radarHistoryEnd ?? latestObservation ?? new Date();
-    setRadarHistoryInput(formatLocalDateTimeInput(floorToFiveMinutes(seed)));
+    setRadarHistoryInput(formatLocalDateTimeInput(floorToTenMinutes(seed)));
     setIsRadarHistoryPickerOpen(true);
   }, [frames, radarHistoryEnd]);
 
@@ -1965,13 +1965,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     if (Number.isNaN(parsed.getTime())) return;
 
     const earliest = new Date(RADAR_ARCHIVE_MIN_INPUT);
-    const latest = floorToFiveMinutes(new Date());
+    const latest = floorToTenMinutes(new Date());
     const clamped = new Date(
       Math.min(latest.getTime(), Math.max(earliest.getTime(), parsed.getTime())),
     );
     setIsPlaying(false);
     setPlayTarget(null);
-    setRadarHistoryEnd(floorToFiveMinutes(clamped));
+    setRadarHistoryEnd(floorToTenMinutes(clamped));
     setIsRadarHistoryPickerOpen(false);
     setManualRefreshTick((tick) => tick + 1);
   }, [radarHistoryInput]);
@@ -3430,9 +3430,16 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               type="datetime-local"
               value={radarHistoryInput}
               min={RADAR_ARCHIVE_MIN_INPUT}
-              max={formatLocalDateTimeInput(floorToFiveMinutes(new Date()))}
-              step={300}
-              onChange={(event) => setRadarHistoryInput(event.target.value)}
+              max={formatLocalDateTimeInput(floorToTenMinutes(new Date()))}
+              step={600}
+              onChange={(event) => {
+                const selected = new Date(event.target.value);
+                setRadarHistoryInput(
+                  Number.isNaN(selected.getTime())
+                    ? event.target.value
+                    : formatLocalDateTimeInput(floorToTenMinutes(selected)),
+                );
+              }}
               className={`h-7 w-[11.6rem] rounded px-1.5 text-xs outline-none ${
                 broadcast
                   ? 'bg-slate-800/90 text-white [color-scheme:dark]'
