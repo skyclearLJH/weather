@@ -4,6 +4,17 @@ const TEN_MINUTES_MS = 10 * 60 * 1000;
 // 워커가 더 넓은 구간을 채우면 화면에 안 쓰이는 프레임까지 저장해 KV를 낭비한다.
 const TIMELINE_HOURS = 6;
 
+// --- 안전장치: 하루 R2 쓰기 상한 ---
+// R2 무료 Class A(쓰기·목록)는 월 100만 회 = 하루 약 33,000회. 이 워커의 정상
+// 사용량은 하루 약 300회(10분당 신규 1장 + 목록/색인)로 무료 범위의 1% 안팎이다.
+// 만에 하나 버그·폭주로 쓰기가 치솟아도 과금으로 이어지지 않도록, UTC 하루 단위로
+// 실제 저장된 프레임 수를 세어 이 상한을 넘으면 그날은 더 이상 새 프레임을 저장하지
+// 않는다(다음 UTC 자정에 리셋). 상한(2,000)은 정상 사용량의 6배 이상이자 무료 하루
+// 한도의 6% 수준이라, 정상 운영에선 절대 닿지 않고 폭주 때만 제동을 건다.
+// env.MAX_SATELLITE_WRITES_PER_DAY로 덮어쓸 수 있다.
+const DEFAULT_MAX_WRITES_PER_DAY = 2000;
+const WRITE_BUDGET_PREFIX = 'satellite/gk2a-ir/v1/write-budget/';
+
 const jsonResponse = (payload, status = 200) =>
   new Response(JSON.stringify(payload), {
     status,
@@ -75,6 +86,30 @@ const pruneStoredDates = async (store, retainedHours = 20) => {
   return expired.length;
 };
 
+// 오늘(UTC) 쓰기 예산 키 — 하루 한 개의 작은 카운터 오브젝트.
+const writeBudgetKey = (date = new Date()) =>
+  `${WRITE_BUDGET_PREFIX}${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}.json`;
+
+const readWritesToday = async (store) => {
+  try {
+    const object = await store.get(writeBudgetKey());
+    if (!object) return 0;
+    const data = await object.json();
+    return Number(data?.count) || 0;
+  } catch {
+    return 0;
+  }
+};
+
+// 실제로 저장된(=Pages가 'live'로 응답한) 프레임 수만 오늘 카운터에 더한다.
+// 겹치는 크론끼리의 경합으로 약간 적게 셀 수 있으나, 상한에 6배 여유가 있어 무방하다.
+const addWritesToday = async (store, delta) => {
+  if (delta <= 0) return;
+  const key = writeBudgetKey();
+  const used = await readWritesToday(store);
+  await store.put(key, JSON.stringify({ count: used + delta, updatedAt: new Date().toISOString() }));
+};
+
 const getLatest = async (origin) => {
   const response = await fetch(`${origin}/api/gk2a-ir?latest=1`, {
     signal: AbortSignal.timeout(15000),
@@ -92,6 +127,25 @@ const precompute = async (env) => {
   if (!store) throw new Error('SATELLITE_R2 binding is missing');
   const origin = String(env.SATELLITE_ORIGIN || 'https://weather-ljh.pages.dev').replace(/\/$/, '');
   const batchSize = Math.max(1, Math.min(6, Number(env.SATELLITE_BATCH_SIZE) || 4));
+  const maxWritesPerDay = Math.max(
+    0,
+    Number(env.MAX_SATELLITE_WRITES_PER_DAY) || DEFAULT_MAX_WRITES_PER_DAY,
+  );
+
+  // 하루 쓰기 상한: 오늘 이미 상한만큼 저장했으면 이번 주기는 저장 없이 건너뛴다.
+  const writesToday = await readWritesToday(store);
+  if (writesToday >= maxWritesPerDay) {
+    return {
+      checkedAt: new Date().toISOString(),
+      skipped: 'daily write cap reached',
+      writesToday,
+      maxWritesPerDay,
+    };
+  }
+  // 이번 주기에 저장할 수 있는 최대 장수 = 남은 예산과 배치 크기 중 작은 값.
+  const remainingBudget = maxWritesPerDay - writesToday;
+  const effectiveBatch = Math.min(batchSize, remainingBudget);
+
   const latest = await getLatest(origin);
   const timeline = buildTimeline(latest);
   const stored = await listStoredDates(store);
@@ -102,9 +156,9 @@ const precompute = async (env) => {
   // 예전처럼 두 끝(최신·최고령)만 번갈아 잡으면 가운데 구간이 계속 굶어
   // 09~12시대처럼 중간에 구멍이 남는다. 오래된 쪽부터 빈틈없이 밀어 올린다.
   const targets = [];
-  if (missing.length > 0) {
+  if (missing.length > 0 && effectiveBatch > 0) {
     targets.push(missing[0]);
-    for (let index = missing.length - 1; index >= 0 && targets.length < batchSize; index--) {
+    for (let index = missing.length - 1; index >= 0 && targets.length < effectiveBatch; index--) {
       if (missing[index] !== targets[0]) targets.push(missing[index]);
     }
   }
@@ -136,6 +190,11 @@ const precompute = async (env) => {
       results.push({ date, ok: false, error: error.message });
     }
   }
+  // 실제 저장된('live') 프레임만 오늘 쓰기 예산에 반영한다. 이미 있던 프레임('r2'/'kv')은
+  // 쓰기가 아니므로 세지 않는다.
+  const newWrites = results.filter((result) => result.ok && result.source === 'live').length;
+  await addWritesToday(store, newWrites);
+
   const prunedFrameCount = await pruneStoredDates(store);
 
   return {
@@ -143,6 +202,9 @@ const precompute = async (env) => {
     latest,
     storedFrameCount: stored.size,
     requestedFrameCount: targets.length,
+    newWrites,
+    writesToday: writesToday + newWrites,
+    maxWritesPerDay,
     prunedFrameCount,
     results,
   };
@@ -156,6 +218,11 @@ const status = async (env) => {
   const timeline = buildTimeline(latest);
   const stored = await listStoredDates(store);
   const available = timeline.filter((date) => stored.has(date));
+  const writesToday = await readWritesToday(store);
+  const maxWritesPerDay = Math.max(
+    0,
+    Number(env.MAX_SATELLITE_WRITES_PER_DAY) || DEFAULT_MAX_WRITES_PER_DAY,
+  );
   return {
     checkedAt: new Date().toISOString(),
     ready: available.length > 0,
@@ -164,6 +231,8 @@ const status = async (env) => {
     precomputedFrameCount: available.length,
     newestPrecomputed: available[0] ?? null,
     oldestPrecomputed: available.at(-1) ?? null,
+    writesToday,
+    maxWritesPerDay,
   };
 };
 
