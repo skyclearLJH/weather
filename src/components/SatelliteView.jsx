@@ -936,24 +936,14 @@ function SatelliteView({ menuSlot = null }) {
     };
   }, [markFullFrameReady, timeline]);
 
-  const readyFrameCount = useMemo(
-    () =>
-      timeline.reduce(
-        (count, date) => count + (readyFrameTimes.has(date.getTime()) ? 1 : 0),
-        0,
-      ),
-    [readyFrameTimes, timeline],
-  );
-  const isPlaybackReady = timeline.length > 0 && readyFrameCount === timeline.length;
-  const displayStatus =
-    status ??
-    (!isPlaybackReady && timeline.length > 0
-      ? `위성 재생 준비 중 ${readyFrameCount}/${timeline.length}`
-      : null);
+  // 재생은 '전 구간 로딩 완료'를 기다리지 않는다. 방송 중 한 프레임(예: 원본이 빠진
+  // 시각)이 안 채워졌다고 재생 버튼이 죽거나 '위성 재생 준비 중 N/M'이 뜨면 안 되기
+  // 때문이다. 아직 안 온 프레임은 직전 프레임을 유지하고, 재생하며 그 자리에서 채워진다.
+  const displayStatus = status ?? null;
 
   // 준비된 전 구간만 선택한 재생 길이에 맞춰 진행하고 마지막에서 멈춘다.
   useEffect(() => {
-    if (!isPlaying || !isPlaybackReady || timeline.length === 0) return undefined;
+    if (!isPlaying || timeline.length === 0) return undefined;
     const last = timeline.length - 1;
     const intervalMs = Math.max(45, Math.round((playDurationSec * 1000) / timeline.length));
     playTimerRef.current = setInterval(() => {
@@ -964,7 +954,7 @@ function SatelliteView({ menuSlot = null }) {
       }
     }, intervalMs);
     return () => clearInterval(playTimerRef.current);
-  }, [isPlaybackReady, isPlaying, timeline.length, playDurationSec]);
+  }, [isPlaying, timeline.length, playDurationSec]);
 
   // 끝에서 다시 재생을 누르면 처음부터
   const handlePlayToggle = useCallback(() => {
@@ -972,12 +962,12 @@ function SatelliteView({ menuSlot = null }) {
       setIsPlaying(false);
       return;
     }
-    if (!isPlaybackReady) return;
-    if (timeline.length > 0 && frameIndex >= timeline.length - 1) {
+    if (timeline.length === 0) return;
+    if (frameIndex >= timeline.length - 1) {
       setFrameIndex(0);
     }
     setIsPlaying(true);
-  }, [frameIndex, isPlaybackReady, isPlaying, timeline.length]);
+  }, [frameIndex, isPlaying, timeline.length]);
 
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
@@ -1117,12 +1107,10 @@ function SatelliteView({ menuSlot = null }) {
           <button
             type="button"
             onClick={handlePlayToggle}
-            disabled={!isPlaybackReady}
+            disabled={timeline.length === 0}
             className="flex h-12 w-12 shrink-0 -translate-x-1/2 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-wait disabled:opacity-55"
-            aria-label={
-              isPlaying ? '일시정지' : isPlaybackReady ? '재생' : '위성 재생 준비 중'
-            }
-            title={isPlaybackReady ? '재생' : `위성 재생 준비 중 ${readyFrameCount}/${timeline.length}`}
+            aria-label={isPlaying ? '일시정지' : '재생'}
+            title="재생"
           >
             {isPlaying ? (
               <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
