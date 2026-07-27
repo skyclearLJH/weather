@@ -25,7 +25,18 @@ const SATELLITE_CACHE_VERSION = 'v1';
 const SATELLITE_CACHE_PREFIX = `satellite/gk2a-ir/${SATELLITE_CACHE_VERSION}/pairs/`;
 const SATELLITE_RETENTION_SECONDS = 20 * 60 * 60;
 
+// 위성 프레임을 KV로 프리컴퓨트/캐시할지 여부.
+//  - false(현재): 워커·KV를 거치지 않고 요청 때마다 NOAA 원본에서 바로 변환해 응답한다.
+//    Cloudflare 엣지 캐시(buildFrameResponse/buildPairResponse의 Cache-Control)가 가속하고,
+//    KV에 쓰지 않으므로 하루 쓰기 한도 소진으로 저장이 얼어붙는 문제가 아예 없다.
+//  - true: 기존 프리컴퓨트 방식(워커가 KV를 미리 채우고, 함수는 KV를 먼저 읽음).
+// 되돌리는 법: 이 값을 true로 바꿔 커밋(Pages 자동 배포)하고, 워커를
+//   `npx wrangler deploy --config wrangler.satellite-cache.toml`로 다시 배포하면 끝.
+// 워커(satellite-precompute.js)와 KV 바인딩 코드는 지우지 않고 그대로 둔다.
+const USE_PRECOMPUTED_SATELLITE = false;
+
 const getSatelliteStore = (env) => {
+  if (!USE_PRECOMPUTED_SATELLITE) return null;
   if (env?.DISABLE_PRECOMPUTED_SATELLITE === '1') return null;
   return env?.SATELLITE_CACHE || env?.KIM_RAIN_CACHE || null;
 };
