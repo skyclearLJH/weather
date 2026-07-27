@@ -218,7 +218,10 @@ const createCloudLayer = () => {
             // 풀해상도 DN을 4탭 이중선형으로 → LUT 강도. 텍셀보다 촘촘히 확대돼도 부드럽다.
             vec2 ts = vec2(textureSize(uEaTex, 0));
             vec2 p = vTexCoord * ts - 0.5;
-            vec2 f = fract(p);
+            // 이중선형 전이 폭을 좁혀(샤프닝) 4km 격자에 밀착 → 경계 번짐↓, 해안선과 덜 어긋남.
+            // 1.0=기본 이중선형, 클수록 선명(→최근접). 원해상도 4km 한계상 완전 일치는 불가.
+            const float SHARPEN = 2.6;
+            vec2 f = clamp((fract(p) - 0.5) * SHARPEN + 0.5, 0.0, 1.0);
             ivec2 b = ivec2(floor(p));
             ivec2 mx = ivec2(ts) - 1;
             int d00 = int(texelFetch(uEaTex, clamp(b, ivec2(0), mx), 0).r);
