@@ -227,10 +227,13 @@ export const formatStationLabel = (station) => {
     }
     return `${sido}(${stripCityPrefix(station.name, sido)})`;
   }
-  if (normalizePlaceName(station.name) === normalizePlaceName(sigun)) {
+  const detail = stripCityPrefix(station.name, sigun);
+  // 지점명이 '시·군명 + 도(섬)'뿐이면(울릉→울릉도) 괄호가 군더더기라 붙이지 않는다.
+  // 독도처럼 다른 이름은 detail이 '도'가 아니므로 '경북 울릉(독도)'로 그대로 남는다.
+  if (normalizePlaceName(station.name) === normalizePlaceName(sigun) || detail === '도') {
     return `${sido} ${sigun}`;
   }
-  return `${sido} ${sigun}(${stripCityPrefix(station.name, sigun)})`;
+  return `${sido} ${sigun}(${detail})`;
 };
 
 // 특정 정시의 AWS 시간통계 RN_DAY (그날 0시~해당 시각 누적, mm). -99 등 결측은 제외.
