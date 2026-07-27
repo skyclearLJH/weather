@@ -918,6 +918,14 @@ export async function onRequestGet(context) {
   const cacheKey = makeAreaCacheKey(date, area);
   const precomputeOnly = area === 'pair' && url.searchParams.get('precompute') === '1';
 
+  // 프리컴퓨트가 꺼져 있으면(USE_PRECOMPUTED_SATELLITE=false) 저장할 KV가 없다.
+  // 아직 배포돼 있는 워커가 크론으로 이 엔드포인트를 계속 때리더라도, 변환을 돌리지
+  // 않고 즉시 204로 응답해 실사용 요청과 아이솔레이트(직렬 processChain)를 두고
+  // 경쟁하지 않게 한다 — 워커를 지우지 않고도 무해하게 만든다.
+  if (precomputeOnly && !getSatelliteStore(context.env)) {
+    return buildPrecomputeResponse('disabled');
+  }
+
   if (edgeCache && !precomputeOnly) {
     const hit = await edgeCache.match(cacheKey);
     if (hit) {
