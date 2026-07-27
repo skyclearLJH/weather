@@ -33,7 +33,13 @@ const STEP_MINUTES = 10;
 const AUTO_REFRESH_MS = 60 * 1000;
 const SATELLITE_ARCHIVE_MIN_INPUT = '2023-02-16T15:00';
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
-const BACKGROUND_PREFETCH_LIMIT = 12;
+const LA_PREFETCH_WORKERS = 2;
+const PREFETCH_RETRY_BASE_MS = 2500;
+const PREFETCH_RETRY_MAX_MS = 30000;
+
+const prefetchRetryDelay = (attempt) =>
+  Math.min(PREFETCH_RETRY_MAX_MS, PREFETCH_RETRY_BASE_MS * 2 ** Math.min(attempt, 4));
+const waitFor = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const floorToTenMinutesLocal = (date) => {
   const floored = new Date(date);
@@ -603,8 +609,10 @@ function SatelliteView({ menuSlot = null }) {
   const [historyEnd, setHistoryEnd] = useState(null);
   const [historyInput, setHistoryInput] = useState('');
   const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState(false);
+  const [readyFrameTimes, setReadyFrameTimes] = useState(() => new Set());
   const pendingFramesRef = useRef({ ko: null, fd: null, la: null });
-  const hasFullFrameRef = useRef(false);
+  const readyFrameTimesRef = useRef(new Set());
+  const fullReadyFrameTimesRef = useRef(new Set());
   const pendingConvRangeRef = useRef(SEASON_CONV_KM.summer);
   const exaggerationRef = useRef(6);
   const convHighlightRef = useRef(true);
@@ -617,6 +625,21 @@ function SatelliteView({ menuSlot = null }) {
   const bandTime = useMemo(
     () => (currentDate ? formatKstLabel(currentDate) : null),
     [currentDate],
+  );
+
+  const markFrameReady = useCallback((date) => {
+    const frameTime = date.getTime();
+    if (readyFrameTimesRef.current.has(frameTime)) return;
+    readyFrameTimesRef.current.add(frameTime);
+    setReadyFrameTimes(new Set(readyFrameTimesRef.current));
+  }, []);
+
+  const markFullFrameReady = useCallback(
+    (date) => {
+      fullReadyFrameTimesRef.current.add(date.getTime());
+      markFrameReady(date);
+    },
+    [markFrameReady],
   );
 
   // 지도 초기화
@@ -712,6 +735,10 @@ function SatelliteView({ menuSlot = null }) {
         if (!active) return;
         const previous = timelineRef.current;
         const next = buildSatTimeline(latest, TIMELINE_HOURS, STEP_MINUTES);
+        const timelineUnchanged =
+          previous.length === next.length &&
+          previous.every((date, index) => date.getTime() === next[index]?.getTime());
+        if (!initial && timelineUnchanged) return;
         const wasAtEnd =
           initial || previous.length === 0 || frameIndexRef.current >= previous.length - 1;
         let nextIndex = next.length - 1;
@@ -721,6 +748,14 @@ function SatelliteView({ menuSlot = null }) {
           const heldIndex = next.findIndex((d) => d.getTime() === held);
           if (heldIndex >= 0) nextIndex = heldIndex;
         }
+        const nextFrameTimes = new Set(next.map((date) => date.getTime()));
+        readyFrameTimesRef.current = new Set(
+          [...readyFrameTimesRef.current].filter((time) => nextFrameTimes.has(time)),
+        );
+        fullReadyFrameTimesRef.current = new Set(
+          [...fullReadyFrameTimesRef.current].filter((time) => nextFrameTimes.has(time)),
+        );
+        setReadyFrameTimes(new Set(readyFrameTimesRef.current));
         setTimeline(next);
         setFrameIndex(nextIndex);
       } catch (error) {
@@ -741,14 +776,16 @@ function SatelliteView({ menuSlot = null }) {
     if (!currentDate) return;
     let active = true;
     let fastFrameDisplayed = false;
+    const frameTime = currentDate.getTime();
 
-    if (!hasFullFrameRef.current) {
+    if (!fullReadyFrameTimesRef.current.has(frameTime)) {
       fetchSatFrame(currentDate, 'la')
         .then((frame) => {
-          if (!active || hasFullFrameRef.current) return;
+          if (!active || fullReadyFrameTimesRef.current.has(frameTime)) return;
           fastFrameDisplayed = true;
           pendingFramesRef.current.la = frame.data;
           cloudLayerRef.current?.setFrame('la', frame.data);
+          markFrameReady(currentDate);
           setStatus(null);
         })
         .catch(() => {
@@ -771,7 +808,7 @@ function SatelliteView({ menuSlot = null }) {
         return;
       }
       if (!active) return;
-      hasFullFrameRef.current = true;
+      markFullFrameReady(currentDate);
       const range = seasonalConvRange(currentDate);
       pendingConvRangeRef.current = range;
       cloudLayerRef.current?.setConvRange(...range);
@@ -788,34 +825,36 @@ function SatelliteView({ menuSlot = null }) {
     // 인접 프레임 프리페치 (재생·스크럽 반응성)
     const nextDate = timeline[frameIndex + 1];
     if (nextDate) {
-      fetchSatFramePair(nextDate).catch(() => {});
+      fetchSatFramePair(nextDate, true).catch(() => {});
     }
 
     return () => {
       active = false;
     };
-  }, [currentDate, frameIndex, timeline]);
+  }, [currentDate, frameIndex, markFrameReady, markFullFrameReady, timeline]);
 
-  // 최근 인접 구간만 백그라운드에서 순차 프리페치한다. 전 구간 37장을 즉시
-  // 요청하면 사용자가 선택한 프레임이 변환 대기열 뒤로 밀리므로 제한한다.
-  //
-  // 순서는 '현재 보고 있는 프레임에서 가까운 것부터'다. 서버는 미캐시 프레임을
-  // 한 아이솔레이트에서 직렬 처리(processChain)하므로, 항상 최신→과거 고정
-  // 순서로 프리페치하면 사용자가 과거 구간(예: 10~12시)으로 이동해도 그 프레임이
-  // 프리페치 대기열 맨 뒤에 걸려 수십 초씩 지연·타임아웃된다. 매 반복마다
-  // 현재 인덱스에 가장 가까운 미요청 프레임을 골라 요청하면, 사용자가 어디로
-  // 스크럽하든 그 주변부터 데워져 체감 지연이 사라진다.
+  // 가벼운 LA 프레임은 전 구간을 먼저 채운다. 실패 시 다른 시각을 계속 받은 뒤
+  // 지수 백오프로 재시도해 일시 오류 하나가 전체 준비를 막지 않게 한다.
   useEffect(() => {
     if (timeline.length === 0) return undefined;
     let active = true;
-    const requested = new Set();
+    const inFlight = new Set();
+    const attempts = new Map();
+    const retryAt = new Map();
 
-    const nearestUnfetchedIndex = () => {
+    const nearestPendingIndex = () => {
       const center = Math.min(Math.max(frameIndexRef.current, 0), timeline.length - 1);
       let best = -1;
       let bestDist = Infinity;
       for (let i = 0; i < timeline.length; i++) {
-        if (requested.has(i)) continue;
+        const frameTime = timeline[i].getTime();
+        if (
+          readyFrameTimesRef.current.has(frameTime) ||
+          inFlight.has(i) ||
+          (retryAt.get(i) ?? 0) > Date.now()
+        ) {
+          continue;
+        }
         const dist = Math.abs(i - center);
         if (dist < bestDist) {
           bestDist = dist;
@@ -825,23 +864,111 @@ function SatelliteView({ menuSlot = null }) {
       return best;
     };
 
-    (async () => {
-      while (active && requested.size < BACKGROUND_PREFETCH_LIMIT) {
-        const index = nearestUnfetchedIndex();
-        if (index < 0) return;
-        requested.add(index);
-        await fetchSatFramePair(timeline[index]).catch(() => {});
+    const worker = async () => {
+      while (active) {
+        const index = nearestPendingIndex();
+        if (index < 0) {
+          if (timeline.every((date) => readyFrameTimesRef.current.has(date.getTime()))) return;
+          await waitFor(500);
+          continue;
+        }
+        inFlight.add(index);
+        try {
+          await fetchSatFrame(timeline[index], 'la');
+          if (active) markFrameReady(timeline[index]);
+          attempts.delete(index);
+          retryAt.delete(index);
+        } catch {
+          const attempt = (attempts.get(index) ?? 0) + 1;
+          attempts.set(index, attempt);
+          retryAt.set(index, Date.now() + prefetchRetryDelay(attempt));
+        } finally {
+          inFlight.delete(index);
+        }
       }
-    })();
+    };
+
+    Array.from({ length: LA_PREFETCH_WORKERS }, () => worker());
 
     return () => {
       active = false;
     };
-  }, [timeline]);
+  }, [markFrameReady, timeline]);
 
-  // 재생: 전 구간(12시간)을 선택한 재생 길이에 맞춰 진행하고 마지막에서 멈춘다
+  // FD/KO 고해상도 쌍도 가까운 시각부터 전 구간을 한 장씩 보강한다. 직렬 요청으로
+  // 서버 메모리 부담을 제한하고, 실패 프레임은 뒤로 돌려 계속 재시도한다.
   useEffect(() => {
-    if (!isPlaying || timeline.length === 0) return undefined;
+    if (timeline.length === 0) return undefined;
+    let active = true;
+    const attempts = new Map();
+    const retryAt = new Map();
+
+    const nearestPendingIndex = () => {
+      const center = Math.min(Math.max(frameIndexRef.current, 0), timeline.length - 1);
+      let best = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < timeline.length; i++) {
+        if (
+          fullReadyFrameTimesRef.current.has(timeline[i].getTime()) ||
+          (retryAt.get(i) ?? 0) > Date.now()
+        ) {
+          continue;
+        }
+        const dist = Math.abs(i - center);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = i;
+        }
+      }
+      return best;
+    };
+
+    const run = async () => {
+      while (active) {
+        const index = nearestPendingIndex();
+        if (index < 0) {
+          if (timeline.every((date) => fullReadyFrameTimesRef.current.has(date.getTime()))) return;
+          await waitFor(750);
+          continue;
+        }
+        try {
+          await fetchSatFramePair(timeline[index], true, 'background');
+          if (active) markFullFrameReady(timeline[index]);
+          attempts.delete(index);
+          retryAt.delete(index);
+          await waitFor(180);
+        } catch {
+          const attempt = (attempts.get(index) ?? 0) + 1;
+          attempts.set(index, attempt);
+          retryAt.set(index, Date.now() + prefetchRetryDelay(attempt));
+        }
+      }
+    };
+
+    run();
+    return () => {
+      active = false;
+    };
+  }, [markFullFrameReady, timeline]);
+
+  const readyFrameCount = useMemo(
+    () =>
+      timeline.reduce(
+        (count, date) => count + (readyFrameTimes.has(date.getTime()) ? 1 : 0),
+        0,
+      ),
+    [readyFrameTimes, timeline],
+  );
+  const isPlaybackReady = timeline.length > 0 && readyFrameCount === timeline.length;
+  const displayStatus =
+    status ??
+    (!isPlaybackReady && timeline.length > 0
+      ? `위성 재생 준비 중 ${readyFrameCount}/${timeline.length}`
+      : null);
+
+  // 준비된 전 구간만 선택한 재생 길이에 맞춰 진행하고 마지막에서 멈춘다.
+  useEffect(() => {
+    if (!isPlaying || !isPlaybackReady || timeline.length === 0) return undefined;
     const last = timeline.length - 1;
     const intervalMs = Math.max(45, Math.round((playDurationSec * 1000) / timeline.length));
     playTimerRef.current = setInterval(() => {
@@ -852,7 +979,7 @@ function SatelliteView({ menuSlot = null }) {
       }
     }, intervalMs);
     return () => clearInterval(playTimerRef.current);
-  }, [isPlaying, timeline.length, playDurationSec]);
+  }, [isPlaybackReady, isPlaying, timeline.length, playDurationSec]);
 
   // 끝에서 다시 재생을 누르면 처음부터
   const handlePlayToggle = useCallback(() => {
@@ -860,11 +987,12 @@ function SatelliteView({ menuSlot = null }) {
       setIsPlaying(false);
       return;
     }
+    if (!isPlaybackReady) return;
     if (timeline.length > 0 && frameIndex >= timeline.length - 1) {
       setFrameIndex(0);
     }
     setIsPlaying(true);
-  }, [frameIndex, isPlaying, timeline.length]);
+  }, [frameIndex, isPlaybackReady, isPlaying, timeline.length]);
 
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
@@ -887,7 +1015,6 @@ function SatelliteView({ menuSlot = null }) {
       Math.min(latest.getTime(), Math.max(earliest.getTime(), parsed.getTime())),
     );
     setIsPlaying(false);
-    hasFullFrameRef.current = false;
     setStatus('선택한 과거 위성 자료를 찾는 중입니다.');
     setHistoryEnd(floorToTenMinutesLocal(clamped));
     setIsHistoryPickerOpen(false);
@@ -895,7 +1022,6 @@ function SatelliteView({ menuSlot = null }) {
 
   const handleReturnToLatest = useCallback(() => {
     setIsPlaying(false);
-    hasFullFrameRef.current = false;
     setStatus('최신 위성 자료를 찾는 중입니다.');
     setHistoryEnd(null);
     setIsHistoryPickerOpen(false);
@@ -998,7 +1124,7 @@ function SatelliteView({ menuSlot = null }) {
         </div>
       </div>
 
-      {status ? <div className="sat-status">{status}</div> : null}
+      {displayStatus ? <div className="sat-status">{displayStatus}</div> : null}
 
       {/* 하단 반투명 컨트롤바 — 레이더 방송모드와 동일 형태·위치 */}
       <div className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
@@ -1006,8 +1132,12 @@ function SatelliteView({ menuSlot = null }) {
           <button
             type="button"
             onClick={handlePlayToggle}
-            className="flex h-12 w-12 shrink-0 -translate-x-1/2 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800"
-            aria-label={isPlaying ? '일시정지' : '재생'}
+            disabled={!isPlaybackReady}
+            className="flex h-12 w-12 shrink-0 -translate-x-1/2 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-wait disabled:opacity-55"
+            aria-label={
+              isPlaying ? '일시정지' : isPlaybackReady ? '재생' : '위성 재생 준비 중'
+            }
+            title={isPlaybackReady ? '재생' : `위성 재생 준비 중 ${readyFrameCount}/${timeline.length}`}
           >
             {isPlaying ? (
               <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
