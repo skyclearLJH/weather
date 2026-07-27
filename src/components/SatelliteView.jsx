@@ -686,7 +686,7 @@ function SatelliteView({ menuSlot = null }) {
       });
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
       layer.setConvRange(...pendingConvRangeRef.current);
-      for (const area of ['ko', 'fd', 'la']) {
+      for (const area of ['ko', 'fd']) {
         if (pendingFramesRef.current[area]) {
           layer.setFrame(area, pendingFramesRef.current[area]);
         }
@@ -775,23 +775,9 @@ function SatelliteView({ menuSlot = null }) {
   useEffect(() => {
     if (!currentDate) return;
     let active = true;
-    let fastFrameDisplayed = false;
-    const frameTime = currentDate.getTime();
-
-    if (!fullReadyFrameTimesRef.current.has(frameTime)) {
-      fetchSatFrame(currentDate, 'la')
-        .then((frame) => {
-          if (!active || fullReadyFrameTimesRef.current.has(frameTime)) return;
-          fastFrameDisplayed = true;
-          pendingFramesRef.current.la = frame.data;
-          cloudLayerRef.current?.setFrame('la', frame.data);
-          markFrameReady(currentDate);
-          setStatus(null);
-        })
-        .catch(() => {
-          // LA는 빠른 첫 화면용 보조 경로다. 실패해도 정규 FD/KO 요청을 계속한다.
-        });
-    }
+    // 실패 시 오류 표시 여부 판단용: 이미 전체 프레임이 하나라도 그려진 적 있으면
+    // 실패해도 조용히 직전 프레임을 유지한다(방송 중 오류 오버레이 방지).
+    const hadFrameBefore = fullReadyFrameTimesRef.current.size > 0;
 
     (async () => {
       let pair;
@@ -800,11 +786,12 @@ function SatelliteView({ menuSlot = null }) {
         pair = await fetchSatFramePair(currentDate, true, 'interactive');
       } catch (error) {
         if (!active) return;
-        // 프레임 하나가 실패했다고 화면을 지우지 않는다. 예전에는 여기서 ko·fd를 모두
-        // null로 만들어, 일시적인 실패 한 번에 이미 그려져 있던 위성 영상이 통째로
-        // 사라졌다(특히 배경을 담당하는 FD가 빠지면 EA 크롭 바깥, 즉 북쪽 상단이
-        // 비어 보인다). 직전 프레임을 그대로 두고 안내만 띄운다.
-        if (!fastFrameDisplayed) setStatus(error.message);
+        // 전체 프레임(FD/KO)이 실패해도 화면을 지우거나 오류를 띄우지 않고 직전 전체
+        // 프레임을 그대로 둔다. 이미 뭔가 그려져 있으면 조용히 유지한다. (예전엔 빠른
+        // 첫화면용 LA 보조 레이어를 따로 얹었는데, FD/KO가 실패한 시각엔 그 영역만
+        // 새 자료로 남아 이전 프레임 위에서 그 부분만 튀어 보였다 — 방송용으로
+        // 부적합해 LA 표시를 제거했다.)
+        if (!hadFrameBefore) setStatus(error.message);
         return;
       }
       if (!active) return;
@@ -817,8 +804,6 @@ function SatelliteView({ menuSlot = null }) {
         pendingFramesRef.current[area] = data;
         cloudLayerRef.current?.setFrame(area, data);
       }
-      pendingFramesRef.current.la = null;
-      cloudLayerRef.current?.setFrame('la', null);
       setStatus(null);
     })();
 
