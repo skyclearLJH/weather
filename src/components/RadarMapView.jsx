@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
+import { CalendarClock, Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
 import { createAccumSurfaceLayer } from './AccumSurfaceLayer.js';
 import maplibregl from 'maplibre-gl';
@@ -20,6 +20,7 @@ import {
   probeLatestRadarTm,
   probeLatestQpfTm,
   parseRadarTm,
+  floorToFiveMinutes,
 } from '../api/radarApi';
 import {
   ACCUM_PALETTE,
@@ -294,11 +295,20 @@ const smoothMaskedAccumGrid = (source, width, height, passes) => {
 const OBS_HISTORY_HOURS = 6;
 const OBS_FRAME_INTERVAL_MINUTES = 5;
 const OBS_FRAME_COUNT = (OBS_HISTORY_HOURS * 60) / OBS_FRAME_INTERVAL_MINUTES + 1; // 최신 포함 과거 6시간
+const RADAR_ARCHIVE_MIN_INPUT = '2016-01-01T06:00';
 const FRAME_CACHE_LIMIT = 48;
 const INITIAL_OBS_PREFETCH_COUNT = 18;
 const INITIAL_QPF_PREFETCH_COUNT = 18;
 const NEARBY_PREFETCH_RADIUS = 3;
 const PLAY_INTERVAL_MS = 450;
+
+const formatLocalDateTimeInput = (date) => {
+  const pad = (value) => String(value).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+};
 
 const BROADCAST_ADMIN_SOURCES = {
   'broadcast-sido': '/data/map/kr-sido-20260701.geojson',
@@ -1023,6 +1033,9 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   // 주기적 자동 갱신(눈금·'현재'가 실제 시간을 따라가도록)
   const [autoRefreshTick, setAutoRefreshTick] = useState(0);
   const [manualRefreshTick, setManualRefreshTick] = useState(0);
+  const [radarHistoryEnd, setRadarHistoryEnd] = useState(null);
+  const [radarHistoryInput, setRadarHistoryInput] = useState('');
+  const [isRadarHistoryPickerOpen, setIsRadarHistoryPickerOpen] = useState(false);
   const lastRefreshTokenRef = useRef(refreshToken);
   const lastManualRefreshTickRef = useRef(0);
   const lastKimRefreshTickRef = useRef(0);
@@ -1482,6 +1495,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       lastRefreshTokenRef.current = refreshToken;
       lastManualRefreshTickRef.current = manualRefreshTick;
 
+      if (
+        radarHistoryEnd &&
+        !isManualRefresh &&
+        lastBuildSignatureRef.current.startsWith('history|')
+      ) {
+        return;
+      }
+
       if (isManualRefresh) {
         frameCacheRef.current.clear();
         pendingRef.current.clear();
@@ -1493,21 +1514,24 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       }
 
       try {
+        const radarAnchor = radarHistoryEnd ?? new Date();
         const [radarLatest, qpfLatest] = await Promise.all([
           probeLatestRadarTm(
-            new Date(),
-            OBS_HISTORY_HOURS * 60,
+            radarAnchor,
+            radarHistoryEnd ? 60 : OBS_HISTORY_HOURS * 60,
             ({ tm, frame }) => rememberFrameBuckets(`obs-${tm}`, frame.buckets),
             { broadcast: isBroadcast },
           ),
-          probeLatestQpfTm().catch(() => null),
+          radarHistoryEnd ? Promise.resolve(null) : probeLatestQpfTm().catch(() => null),
         ]);
         if (!isActive) {
           return;
         }
 
         // 자동 갱신인데 최신 발표가 그대로면 타임라인을 건드리지 않는다.
-        const buildSignature = `${radarLatest.tm}|${qpfLatest?.tm ?? ''}`;
+        const buildSignature =
+          `${radarHistoryEnd ? 'history' : 'latest'}|` +
+          `${radarLatest.tm}|${qpfLatest?.tm ?? ''}`;
         if (!isManualRefresh && buildSignature === lastBuildSignatureRef.current) {
           return;
         }
@@ -1607,6 +1631,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     autoRefreshTick,
     manualRefreshTick,
     isBroadcast,
+    radarHistoryEnd,
   ]);
 
   // 시간이 흐르면 '현재'와 눈금도 따라가야 하므로 주기적으로 최신 발표를 확인한다.
@@ -1925,6 +1950,37 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   };
 
   const handleRadarRefresh = useCallback(() => {
+    setManualRefreshTick((tick) => tick + 1);
+  }, []);
+
+  const prepareRadarHistoryInput = useCallback(() => {
+    const latestObservation = frames.filter((frame) => frame.kind === 'obs').at(-1)?.validTime;
+    const seed = radarHistoryEnd ?? latestObservation ?? new Date();
+    setRadarHistoryInput(formatLocalDateTimeInput(floorToFiveMinutes(seed)));
+    setIsRadarHistoryPickerOpen(true);
+  }, [frames, radarHistoryEnd]);
+
+  const handleApplyRadarHistory = useCallback(() => {
+    const parsed = new Date(radarHistoryInput);
+    if (Number.isNaN(parsed.getTime())) return;
+
+    const earliest = new Date(RADAR_ARCHIVE_MIN_INPUT);
+    const latest = floorToFiveMinutes(new Date());
+    const clamped = new Date(
+      Math.min(latest.getTime(), Math.max(earliest.getTime(), parsed.getTime())),
+    );
+    setIsPlaying(false);
+    setPlayTarget(null);
+    setRadarHistoryEnd(floorToFiveMinutes(clamped));
+    setIsRadarHistoryPickerOpen(false);
+    setManualRefreshTick((tick) => tick + 1);
+  }, [radarHistoryInput]);
+
+  const handleReturnToLatestRadar = useCallback(() => {
+    setIsPlaying(false);
+    setPlayTarget(null);
+    setRadarHistoryEnd(null);
+    setIsRadarHistoryPickerOpen(false);
     setManualRefreshTick((tick) => tick + 1);
   }, []);
 
@@ -3357,6 +3413,69 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     </div>
   );
 
+  const renderRadarHistoryControls = (broadcast = false) => {
+    const shellClass = broadcast
+      ? 'border-white/25 bg-slate-900/65 text-white backdrop-blur-sm'
+      : 'border-slate-200 bg-white text-slate-700';
+    const buttonClass = broadcast
+      ? 'hover:bg-white/10'
+      : 'hover:bg-slate-100';
+
+    return (
+      <div className="flex items-center gap-2">
+        {isRadarHistoryPickerOpen ? (
+          <div className={`flex h-10 items-center gap-1.5 rounded-full border px-2 shadow-lg ${shellClass}`}>
+            <CalendarClock size={16} className="shrink-0" />
+            <input
+              type="datetime-local"
+              value={radarHistoryInput}
+              min={RADAR_ARCHIVE_MIN_INPUT}
+              max={formatLocalDateTimeInput(floorToFiveMinutes(new Date()))}
+              step={300}
+              onChange={(event) => setRadarHistoryInput(event.target.value)}
+              className={`h-7 w-[11.6rem] rounded px-1.5 text-xs outline-none ${
+                broadcast
+                  ? 'bg-slate-800/90 text-white [color-scheme:dark]'
+                  : 'bg-slate-50 text-slate-700'
+              }`}
+              aria-label="레이더 과거 조회 시각"
+            />
+            <button
+              type="button"
+              onClick={handleApplyRadarHistory}
+              disabled={!radarHistoryInput}
+              className={`h-7 rounded-full px-2.5 text-xs font-black transition disabled:opacity-50 ${
+                broadcast
+                  ? 'bg-cyan-400 text-slate-950 hover:bg-cyan-300'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+            >
+              이동
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={prepareRadarHistoryInput}
+            className={`flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-semibold shadow-lg transition ${shellClass} ${buttonClass}`}
+          >
+            <CalendarClock size={16} />
+            과거 조회
+          </button>
+        )}
+        {radarHistoryEnd ? (
+          <button
+            type="button"
+            onClick={handleReturnToLatestRadar}
+            className={`h-10 rounded-full border px-3 text-sm font-black shadow-lg transition ${shellClass} ${buttonClass}`}
+          >
+            최신
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+
   // 방송모드 뷰 전환 — 지도 화면과 위성 화면 양쪽에서 쓴다.
   const broadcastViewPills = (
     <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
@@ -3436,6 +3555,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
           <div className={`mt-1 text-sm text-slate-500 ${isFullscreen ? 'hidden sm:block' : ''}`}>
             기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
           </div>
+          <div className="mt-3">{renderRadarHistoryControls(false)}</div>
         </div>
       ) : null}
 
@@ -3768,6 +3888,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
             <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
               {broadcastViewPills}
+              {isRadarView ? renderRadarHistoryControls(true) : null}
               <div className="flex items-center gap-2">
                 {isAccumView ? (
                   <>

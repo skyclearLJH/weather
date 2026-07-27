@@ -105,9 +105,9 @@ const SCALE_16 = 65536;
 
 // GEOS 역투영: FD 원본 픽셀 좌표 → [lon, lat] 또는 null(디스크 밖)
 // 스캔각: line 0 = 북쪽(lfac 음수), col 0 = 서쪽
-export const geosPixelToLonLat = (srcCol, srcRow) => {
-  const x = ((srcCol - FD_COFF) * SCALE_16) / FD_CFAC * DEG;
-  const y = ((srcRow - FD_LOFF) * SCALE_16) / FD_LFAC * DEG;
+const geosPixelToLonLatWithOffsets = (srcCol, srcRow, coff, loff) => {
+  const x = ((srcCol - coff) * SCALE_16) / FD_CFAC * DEG;
+  const y = ((srcRow - loff) * SCALE_16) / FD_LFAC * DEG;
   const cosx = Math.cos(x);
   const cosy = Math.cos(y);
   const sinx = Math.sin(x);
@@ -124,6 +124,9 @@ export const geosPixelToLonLat = (srcCol, srcRow) => {
   const lat = Math.atan((FD_RAT * s3) / sxy) / DEG;
   return [lon, lat];
 };
+
+export const geosPixelToLonLat = (srcCol, srcRow) =>
+  geosPixelToLonLatWithOffsets(srcCol, srcRow, FD_COFF, FD_LOFF);
 
 export const fdCellToLonLat = (col, row) =>
   geosPixelToLonLat(
@@ -143,6 +146,14 @@ export const koCellToLonLat = (col, row) =>
     KO_GRID.col0 + col * KO_GRID.factor + (KO_GRID.factor - 1) / 2,
     KO_GRID.row0 + row * KO_GRID.factor + (KO_GRID.factor - 1) / 2,
   );
+
+// NOAA Local Area: 500x500, 약 2km. FD보다 약 60배 작은 원본이라 첫 화면에 사용한다.
+export const LA_GRID = { width: 500, height: 500 };
+const LA_COFF = 314.30357081;
+const LA_LOFF = 2089.57137918;
+
+export const laCellToLonLat = (col, row) =>
+  geosPixelToLonLatWithOffsets(col, row, LA_COFF, LA_LOFF);
 
 // --- 시각 유틸 (관측 시각은 UTC 10분 단위) ---
 const pad2 = (v) => String(v).padStart(2, '0');
@@ -204,6 +215,7 @@ const FRAME_MAGIC = {
   ea: [0x47, 0x4b, 0x49, 0x52],
   fd: [0x47, 0x4b, 0x46, 0x44],
   ko: [0x47, 0x4b, 0x4b, 0x4f],
+  la: [0x47, 0x4b, 0x4c, 0x41],
 };
 
 const rememberPromise = (cache, key, promise, limit) => {
@@ -338,9 +350,10 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // 한 번 실패했다고 프레임을 포기하면 화면에서 "안 읽어옴"으로 보이므로,
 // 일시적 실패(5xx·타임아웃·네트워크)는 짧은 백오프로 최대 3회 재시도한다.
 // 404(아직 없는 시각)는 재시도 의미가 없어 즉시 던진다.
-const fetchDirectPair = async (dateUtc) => {
+const fetchDirectPair = async (dateUtc, priority = 'background') => {
   const date = formatSatDateUtc(dateUtc);
-  const url = `/api/gk2a-ir?date=${date}&area=pair`;
+  const priorityQuery = priority === 'interactive' ? '&priority=interactive' : '';
+  const url = `/api/gk2a-ir?date=${date}&area=pair${priorityQuery}`;
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (attempt > 0) await delay(500 * attempt);
@@ -380,11 +393,11 @@ const fetchDirectPair = async (dateUtc) => {
   throw lastError ?? new Error('위성 자료 요청 실패');
 };
 
-export const fetchSatFramePair = (dateUtc, preferSingle = false) => {
+export const fetchSatFramePair = (dateUtc, preferSingle = false, priority = 'background') => {
   const key = formatSatDateUtc(dateUtc);
   if (PAIR_CACHE.has(key)) return PAIR_CACHE.get(key);
   const promise = (async () => {
-    if (preferSingle) return fetchDirectPair(dateUtc);
+    if (preferSingle) return fetchDirectPair(dateUtc, priority);
     try {
       const bundle = await fetchSatBundle(bundleStartFor(dateUtc));
       const bundled = bundle.get(key);
@@ -392,7 +405,7 @@ export const fetchSatFramePair = (dateUtc, preferSingle = false) => {
     } catch {
       // 묶음 캐시가 없거나 손상됐으면 기존 단일 시각 경로로 즉시 대체한다.
     }
-    return fetchDirectPair(dateUtc);
+    return fetchDirectPair(dateUtc, priority);
   })();
   return rememberPromise(PAIR_CACHE, key, promise, PAIR_CACHE_LIMIT);
 };
@@ -435,9 +448,10 @@ export const fetchSatFrame = async (dateUtc, area = 'ea') => {
 
 // 최신 발표 시각 조회: 서버가 NOAA 목록만 읽어 즉시(수백 ms) 응답한다.
 // 실패하면 예전 방식(프레임을 하나씩 받아보는 순차 탐색)으로 폴백.
-export const probeLatestSatDate = async () => {
+export const probeLatestSatDate = async (beforeDate = null) => {
   try {
-    const response = await fetch('/api/gk2a-ir?latest=1', {
+    const beforeQuery = beforeDate ? `&before=${formatSatDateUtc(beforeDate)}` : '';
+    const response = await fetch(`/api/gk2a-ir?latest=1${beforeQuery}`, {
       signal: AbortSignal.timeout(10000),
     });
     if (response.ok) {
@@ -457,8 +471,11 @@ export const probeLatestSatDate = async () => {
   }
 
   // 폴백: 원본 생성 지연(~12분)을 고려해 15분 전부터 거꾸로 최대 12슬롯 시도
-  let candidate = floorToTenMinutesUtc(new Date(Date.now() - 15 * 60 * 1000));
-  for (let i = 0; i < 12; i++) {
+  let candidate = floorToTenMinutesUtc(
+    beforeDate ? new Date(beforeDate) : new Date(Date.now() - 15 * 60 * 1000),
+  );
+  const attempts = beforeDate ? 24 : 12;
+  for (let i = 0; i < attempts; i++) {
     if (isSatGapSlot(candidate)) {
       // 매일 비는 슬롯은 시도하지 않고 건너뛴다
       candidate = new Date(candidate.getTime() - 10 * 60 * 1000);

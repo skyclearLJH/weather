@@ -33,12 +33,20 @@ const SATELLITE_RETENTION_SECONDS = 20 * 60 * 60;
 // 되돌리는 법: 이 값을 true로 바꿔 커밋(Pages 자동 배포)하고, 워커를
 //   `npx wrangler deploy --config wrangler.satellite-cache.toml`로 다시 배포하면 끝.
 // 워커(satellite-precompute.js)와 KV 바인딩 코드는 지우지 않고 그대로 둔다.
-const USE_PRECOMPUTED_SATELLITE = false;
-
 const getSatelliteStore = (env) => {
-  if (!USE_PRECOMPUTED_SATELLITE) return null;
   if (env?.DISABLE_PRECOMPUTED_SATELLITE === '1') return null;
-  return env?.SATELLITE_CACHE || env?.KIM_RAIN_CACHE || null;
+  if (env?.SATELLITE_R2) return env.SATELLITE_R2;
+  if (env?.ENABLE_LEGACY_SATELLITE_KV === '1') {
+    return env?.SATELLITE_CACHE || env?.KIM_RAIN_CACHE || null;
+  }
+  return null;
+};
+
+const isKvStorage = (storage) => typeof storage?.getWithMetadata === 'function';
+const getSatelliteStorageKind = (env) => {
+  const store = getSatelliteStore(env);
+  if (!store) return '';
+  return isKvStorage(store) ? 'kv' : 'r2';
 };
 
 export const satellitePairKey = (date) => `${SATELLITE_CACHE_PREFIX}${date}.bin.gz`;
@@ -57,8 +65,12 @@ const readStoredPair = async (env, date) => {
   const store = getSatelliteStore(env);
   if (!store) return null;
   try {
-    const value = await store.get(satellitePairKey(date), 'arrayBuffer');
-    return value ? new Uint8Array(value) : null;
+    if (isKvStorage(store)) {
+      const value = await store.get(satellitePairKey(date), 'arrayBuffer');
+      return value ? new Uint8Array(value) : null;
+    }
+    const object = await store.get(satellitePairKey(date));
+    return object ? new Uint8Array(await object.arrayBuffer()) : null;
   } catch {
     return null;
   }
@@ -67,12 +79,28 @@ const readStoredPair = async (env, date) => {
 const writeStoredPair = async (env, date, compressedBytes, rawBytes) => {
   const store = getSatelliteStore(env);
   if (!store) return;
+  if (isKvStorage(store)) {
+    await store.put(satellitePairKey(date), compressedBytes, {
+      expirationTtl: SATELLITE_RETENTION_SECONDS,
+      metadata: {
+        date,
+        encoding: 'gzip',
+        rawBytes,
+        storedAt: new Date().toISOString(),
+      },
+    });
+    return;
+  }
   await store.put(satellitePairKey(date), compressedBytes, {
-    expirationTtl: SATELLITE_RETENTION_SECONDS,
-    metadata: {
+    httpMetadata: {
+      contentType: 'application/octet-stream',
+      cacheControl: `public, max-age=${HISTORICAL_CACHE_TTL_SECONDS}`,
+      contentEncoding: 'gzip',
+    },
+    customMetadata: {
       date,
       encoding: 'gzip',
-      rawBytes,
+      rawBytes: String(rawBytes),
       storedAt: new Date().toISOString(),
     },
   });
@@ -95,16 +123,19 @@ const SATELLITE_INDEX_KEY = `satellite/gk2a-ir/${SATELLITE_CACHE_VERSION}/index.
 // list는 하루 약 144회로 무료 한도(1,000회) 안이고, 프레임마다 색인을 쓰지 않아도 된다.
 const SATELLITE_INDEX_REBUILD_MS = 10 * 60 * 1000;
 
-const listStoredDatesFromKv = async (store) => {
+const listStoredDates = async (store) => {
   const dates = [];
   let cursor;
   do {
     const page = await store.list({ prefix: SATELLITE_CACHE_PREFIX, cursor });
-    for (const key of page.keys ?? []) {
-      const match = key.name.match(/(\d{12})\.bin\.gz$/);
+    const objects = isKvStorage(store) ? page.keys ?? [] : page.objects ?? [];
+    for (const object of objects) {
+      const key = isKvStorage(store) ? object.name : object.key;
+      const match = key.match(/(\d{12})\.bin\.gz$/);
       if (match) dates.push(match[1]);
     }
-    cursor = page.list_complete ? undefined : page.cursor;
+    const complete = isKvStorage(store) ? page.list_complete : !page.truncated;
+    cursor = complete ? undefined : page.cursor;
   } while (cursor);
   return dates.sort();
 };
@@ -120,6 +151,9 @@ export const listStoredSatelliteDates = async (env) => {
   const store = getSatelliteStore(env);
   if (!store) return [];
   try {
+    if (!isKvStorage(store)) {
+      return await listStoredDates(store);
+    }
     const index = await store.get(SATELLITE_INDEX_KEY, 'json');
     const rebuiltAt = Date.parse(index?.rebuiltAt ?? '');
     const isFresh =
@@ -130,7 +164,7 @@ export const listStoredSatelliteDates = async (env) => {
       return [...index.dates].sort();
     }
     // 색인이 없거나 오래됐으면 이때만 실제 list로 재구성한다(시간당 1회).
-    const dates = await listStoredDatesFromKv(store);
+    const dates = await listStoredDates(store);
     await writeStoredDateIndex(store, dates);
     return dates;
   } catch {
@@ -169,6 +203,9 @@ const FD_CHUNK = 1375;
 const FD_FACTOR = 11; // 1375의 약수 → 청크 단위 처리 가능, 출력 500x500
 const FD_OUT = FD_SRC / FD_FACTOR;
 const FD_DATASET_HEADER_HINT = 6524;
+const LA_SRC = 500;
+const LA_CHUNK = 500;
+const LA_DATASET_HEADER_HINT = 6527;
 
 // 동아시아 정밀 크롭(area=ko): FD 원본 2km에서 대략 lon 95~168E / lat 5~55N
 // (기상청 EA 섹터 상당)을 덮는 GEOS 픽셀 사각형을 2x2 블록최대(4km)로 잘라낸다.
@@ -269,6 +306,61 @@ const findFdDataset = (buf, dv) => {
   return null;
 };
 
+const findLaDataset = (buf, dv) => {
+  const inspect = (addr) => {
+    const messages = parseObjectHeaderV2(buf, dv, addr);
+    if (!messages) return null;
+    let dimsOk = false;
+    let layout = null;
+    let deflateOnly = null;
+    for (const m of messages) {
+      if (m.type === 0x01) {
+        const ver = dv.getUint8(m.body);
+        const rank = dv.getUint8(m.body + 1);
+        const off = ver === 1 ? m.body + 8 : m.body + 4;
+        dimsOk =
+          rank === 2 &&
+          Number(dv.getBigUint64(off, true)) === LA_SRC &&
+          Number(dv.getBigUint64(off + 8, true)) === LA_SRC;
+      }
+      if (m.type === 0x08 && dv.getUint8(m.body) === 3 && dv.getUint8(m.body + 1) === 2) {
+        const ndim = dv.getUint8(m.body + 2);
+        layout = {
+          btree: Number(dv.getBigUint64(m.body + 3, true)),
+          chunkDims: [dv.getUint32(m.body + 11, true), dv.getUint32(m.body + 15, true)],
+          elemSize: dv.getUint32(m.body + 11 + (ndim - 1) * 4, true),
+        };
+      }
+      if (m.type === 0x0b) {
+        const ver = dv.getUint8(m.body);
+        const n = dv.getUint8(m.body + 1);
+        const filterOffset = ver === 1 ? m.body + 8 : m.body + 2;
+        deflateOnly = n === 1 && dv.getUint16(filterOffset, true) === 1;
+      }
+    }
+    if (
+      dimsOk &&
+      layout &&
+      deflateOnly &&
+      layout.chunkDims[0] === LA_CHUNK &&
+      layout.chunkDims[1] === LA_CHUNK
+    ) {
+      return layout;
+    }
+    return null;
+  };
+
+  const fast = inspect(LA_DATASET_HEADER_HINT);
+  if (fast) return fast;
+  for (let i = 0; i < buf.length - 4; i++) {
+    if (buf[i] === 0x4f && buf[i + 1] === 0x48 && buf[i + 2] === 0x44 && buf[i + 3] === 0x52) {
+      const hit = inspect(i);
+      if (hit) return hit;
+    }
+  }
+  return null;
+};
+
 const walkFdChunkBtree = (buf, dv, addr, out) => {
   if (String.fromCharCode(buf[addr], buf[addr + 1], buf[addr + 2], buf[addr + 3]) !== 'TREE') {
     throw new Error('chunk btree not found');
@@ -292,6 +384,7 @@ const walkFdChunkBtree = (buf, dv, addr, out) => {
 // 워커 웜 아이솔레이트에서 재계산을 막는다.
 const FD_OUTPUT_CACHE = new Map(); // `${date}:${area}` → Uint8Array
 const FD_OUTPUT_CACHE_LIMIT = 40;
+const LA_PROCESS_IN_FLIGHT = new Map();
 const FD_PROCESS_IN_FLIGHT = new Map(); // date → Promise<{ko, fd}>
 const SAT_PAIR_WRITE_IN_FLIGHT = new Map(); // date → Promise<{raw, compressed}>
 
@@ -490,32 +583,129 @@ const buildFrameOutputs = async (context, date) => {
   };
 };
 
+const buildLaOutput = async (context, date) => {
+  const base =
+    context.env?.GK2A_LA_UPSTREAM_BASE || 'https://noaa-gk2a-pds.s3.amazonaws.com/AMI/L1B/LA/';
+  const upstream = `${base}${date.slice(0, 6)}/${date.slice(6, 8)}/${date.slice(8, 10)}/gk2a_ami_le1b_ir105_la020ge_${date}.nc`;
+
+  let originResponse;
+  try {
+    originResponse = await fetch(upstream, {
+      cf: { cacheEverything: true, cacheTtl: 600 },
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (error) {
+    const timedOut = error.name === 'TimeoutError' || error.name === 'AbortError';
+    throw frameError(
+      `LA upstream fetch ${timedOut ? 'timed out' : 'failed'}: ${error.message}`,
+      timedOut ? 504 : 502,
+    );
+  }
+  if (!originResponse.ok) {
+    throw frameError(
+      'LA frame not available',
+      originResponse.status === 403 || originResponse.status === 404 ? 404 : 502,
+    );
+  }
+
+  const body = await originResponse.arrayBuffer();
+  const buf = new Uint8Array(body);
+  const dv = new DataView(body);
+  if (buf.length < 8 || buf[0] !== 0x89 || buf[1] !== 0x48 || buf[2] !== 0x44 || buf[3] !== 0x46) {
+    throw frameError('LA file is not HDF5', 502);
+  }
+  const layout = findLaDataset(buf, dv);
+  if (!layout) {
+    throw frameError('LA dataset layout not found', 502);
+  }
+  const chunks = [];
+  walkFdChunkBtree(buf, dv, layout.btree, chunks);
+  const chunk = chunks.find((entry) => entry.row === 0 && entry.col === 0);
+  if (!chunk) {
+    throw frameError('LA image chunk not found', 502);
+  }
+  const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
+  if (raw.length !== LA_SRC * LA_SRC * 2) {
+    throw frameError(`LA chunk size mismatch: ${raw.length}`, 502);
+  }
+  const data = new Uint16Array(LA_SRC * LA_SRC);
+  const rawView = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  for (let index = 0; index < data.length; index++) {
+    data[index] = rawView.getUint16(index * 2, true);
+  }
+  return packOutput('GKLA', LA_SRC, LA_SRC, data);
+};
+
+const processLaFrame = (context, date) => {
+  if (LA_PROCESS_IN_FLIGHT.has(date)) {
+    return LA_PROCESS_IN_FLIGHT.get(date);
+  }
+  const promise = buildLaOutput(context, date).finally(() => {
+    LA_PROCESS_IN_FLIGHT.delete(date);
+  });
+  LA_PROCESS_IN_FLIGHT.set(date, promise);
+  return promise;
+};
+
 // 같은 아이솔레이트 안에서는 프레임 처리를 직렬화한다 — 35MB 원본을 동시에
 // 여러 개 들고 있으면 워커 메모리 한도(128MB)를 넘겨 요청이 통째로 죽는다.
-let processChain = Promise.resolve();
+const frameQueue = [];
+const queuedFrames = new Map();
+let frameQueueActive = false;
+let frameQueueSequence = 0;
 
-const processFrame = (context, date) => {
+const drainFrameQueue = async () => {
+  if (frameQueueActive) return;
+  frameQueueActive = true;
+  while (frameQueue.length > 0) {
+    frameQueue.sort((left, right) => right.priority - left.priority || left.sequence - right.sequence);
+    const task = frameQueue.shift();
+    queuedFrames.delete(task.date);
+    try {
+      task.resolve(await buildFrameOutputs(task.context, task.date));
+    } catch (error) {
+      task.reject(error);
+    }
+  }
+  frameQueueActive = false;
+};
+
+const processFrame = (context, date, priority = 0) => {
   if (FD_PROCESS_IN_FLIGHT.has(date)) {
+    const queued = queuedFrames.get(date);
+    if (queued && priority > queued.priority) queued.priority = priority;
     return FD_PROCESS_IN_FLIGHT.get(date);
   }
-  const promise = processChain
-    .catch(() => {})
-    .then(() => buildFrameOutputs(context, date))
-    .finally(() => {
-      FD_PROCESS_IN_FLIGHT.delete(date);
-    });
+  let resolveTask;
+  let rejectTask;
+  const promise = new Promise((resolve, reject) => {
+    resolveTask = resolve;
+    rejectTask = reject;
+  }).finally(() => {
+    FD_PROCESS_IN_FLIGHT.delete(date);
+  });
+  const task = {
+    context,
+    date,
+    priority,
+    sequence: frameQueueSequence++,
+    resolve: resolveTask,
+    reject: rejectTask,
+  };
   FD_PROCESS_IN_FLIGHT.set(date, promise);
-  processChain = promise.catch(() => {});
+  queuedFrames.set(date, task);
+  frameQueue.push(task);
+  queueMicrotask(drainFrameQueue);
   return promise;
 };
 
 // 최신 관측 시각 조회: S3 목록(수 KB)만 읽으므로 프레임 탐색(35MB 다운로드
 // 반복)과 달리 수백 ms면 끝난다. 현재 시간대에 파일이 없으면 이전 시간대 확인.
-const findLatestTimestamp = async () => {
+const findLatestTimestamp = async (beforeMs = Date.now(), lookbackHours = 2) => {
   const pad = (v) => String(v).padStart(2, '0');
   let latest = null;
-  for (const offsetHours of [0, 1, 2]) {
-    const t = new Date(Date.now() - offsetHours * 60 * 60 * 1000);
+  for (let offsetHours = 0; offsetHours <= lookbackHours; offsetHours++) {
+    const t = new Date(beforeMs - offsetHours * 60 * 60 * 1000);
     const prefix = `AMI/L1B/FD/${t.getUTCFullYear()}${pad(t.getUTCMonth() + 1)}/${pad(t.getUTCDate())}/${pad(t.getUTCHours())}/gk2a_ami_le1b_ir105_fd020ge_`;
     let xml;
     try {
@@ -528,15 +718,23 @@ const findLatestTimestamp = async () => {
       continue;
     }
     for (const match of xml.matchAll(/fd020ge_(\d{12})\.nc/g)) {
-      if (!latest || match[1] > latest) latest = match[1];
+      const timestamp = parseUtcDate(match[1]);
+      if (timestamp !== null && timestamp <= beforeMs && (!latest || match[1] > latest)) {
+        latest = match[1];
+      }
     }
     if (latest) break;
   }
   return latest;
 };
 
-const handleLatestRequest = async (context) => {
-  const latest = await findLatestTimestamp();
+const handleLatestRequest = async (context, beforeValue = '') => {
+  const requestedBefore = parseUtcDate(beforeValue);
+  const hasHistoricalTarget = requestedBefore !== null;
+  const latest = await findLatestTimestamp(
+    hasHistoricalTarget ? requestedBefore : Date.now(),
+    hasHistoricalTarget ? 24 : 2,
+  );
   let cachedLatest = null;
   if (latest && getSatelliteStore(context.env)) {
     try {
@@ -554,50 +752,6 @@ const handleLatestRequest = async (context) => {
       'Cache-Control': 'public, max-age=30, s-maxage=30',
     },
   });
-};
-
-// --- 접속 시 최근 프레임 엣지 캐시 프리워밍 ---
-// 위성 뷰를 열면 클라이언트가 먼저 `?latest=1`을 한 번 호출한다. 그 응답을 돌려준
-// 뒤(waitUntil, 백그라운드)에 '관측 30분을 갓 넘긴' 프레임들을 이 함수 자신에게
-// self-fetch로 요청해 엣지 캐시에 채워 둔다. 30분이 지난 프레임은 7일 엣지 캐시를
-// 받으므로 한 번 데우면 그 프레임의 12시간 수명 내내 유지된다. 이미 데워진 프레임은
-// 값싼 엣지 HIT라 재계산이 없다. 별도 크론/워커 없이 Pages 자동 배포로 반영된다.
-// 매 요청마다 돌지 않도록 아이솔레이트별로 최소 간격(WARM_THROTTLE_MS)을 둔다.
-const WARM_AGES_MINUTES = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130];
-const WARM_THROTTLE_MS = 4 * 60 * 1000;
-let lastWarmAt = 0;
-
-const warmRecentFrames = async (origin) => {
-  const floored = Math.floor(Date.now() / (10 * 60 * 1000)) * (10 * 60 * 1000);
-  const pad = (v) => String(v).padStart(2, '0');
-  for (const ageMin of WARM_AGES_MINUTES) {
-    const d = new Date(floored - ageMin * 60 * 1000);
-    const date =
-      `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}` +
-      `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`;
-    // ko 미스면 처리하면서 fd 엣지 캐시도 함께 채워지지만(handleFdRequest), 확실히
-    // 하도록 두 영역 모두 요청한다. 한 프레임씩 순차로 — 서버 처리를 몰아치지 않게.
-    for (const area of ['ko', 'fd']) {
-      try {
-        const response = await fetch(`${origin}/api/gk2a-ir?date=${date}&area=${area}`);
-        await response.arrayBuffer();
-      } catch {
-        // 개별 프레임 실패는 무시 — 다음 접속/다음 프레임에서 다시 시도된다
-      }
-    }
-  }
-};
-
-const maybeWarmRecentFrames = (context) => {
-  const now = Date.now();
-  if (now - lastWarmAt < WARM_THROTTLE_MS) {
-    return;
-  }
-  lastWarmAt = now;
-  const origin = new URL(context.request.url).origin;
-  if (context.waitUntil) {
-    context.waitUntil(warmRecentFrames(origin));
-  }
 };
 
 const buildFrameResponse = (outBytes, isHistorical, dataSource = 'live') => {
@@ -707,11 +861,13 @@ const handlePairRequest = async (
   edgeCache,
   cacheKey,
   precomputeOnly = false,
+  priority = 0,
 ) => {
   const stored = await readStoredPair(context.env, date);
   if (stored) {
-    if (precomputeOnly) return buildPrecomputeResponse('kv');
-    const response = buildPairResponse(stored, isHistorical, 'kv');
+    const storageKind = getSatelliteStorageKind(context.env);
+    if (precomputeOnly) return buildPrecomputeResponse(storageKind);
+    const response = buildPairResponse(stored, isHistorical, storageKind);
     if (edgeCache && typeof context.waitUntil === 'function') {
       context.waitUntil(edgeCache.put(cacheKey, response.clone()).catch(() => {}));
     }
@@ -734,7 +890,7 @@ const handlePairRequest = async (
 
   if (!outputs) {
     try {
-      outputs = await processFrame(context, date);
+      outputs = await processFrame(context, date, priority);
     } catch (error) {
       return new Response(JSON.stringify({ error: error.message }), {
         status: error.httpStatus ?? 502,
@@ -821,7 +977,7 @@ const handleBundleRequest = async (context, bundleStart, edgeCache) => {
   const headers = new Headers(corsHeaders);
   headers.set('Content-Type', 'application/octet-stream');
   headers.set('X-Gk2a-Frame-Format', 'GKSB');
-  headers.set('X-Satellite-Data-Source', 'kv');
+  headers.set('X-Satellite-Data-Source', getSatelliteStorageKind(context.env));
   headers.set('X-Satellite-Bundle-Complete', complete ? '1' : '0');
   headers.set(
     'Cache-Control',
@@ -836,7 +992,15 @@ const handleBundleRequest = async (context, bundleStart, edgeCache) => {
   return response;
 };
 
-const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cacheKey) => {
+const handleFdRequest = async (
+  context,
+  date,
+  area,
+  isHistorical,
+  edgeCache,
+  cacheKey,
+  priority = 0,
+) => {
   let outBytes = FD_OUTPUT_CACHE.get(`${date}:${area}`);
   let dataSource = 'memory';
 
@@ -845,10 +1009,10 @@ const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cac
     const stored = await readStoredOutputs(context.env, date);
     if (stored) {
       outputs = stored.outputs;
-      dataSource = 'kv';
+      dataSource = getSatelliteStorageKind(context.env);
     } else {
       try {
-        outputs = await processFrame(context, date);
+        outputs = await processFrame(context, date, priority);
       } catch (error) {
         return new Response(JSON.stringify({ error: error.message }), {
           status: error.httpStatus ?? 502,
@@ -886,6 +1050,28 @@ const handleFdRequest = async (context, date, area, isHistorical, edgeCache, cac
   return response;
 };
 
+const handleLaRequest = async (context, date, isHistorical, edgeCache, cacheKey) => {
+  let outBytes = FD_OUTPUT_CACHE.get(`${date}:la`);
+  let dataSource = 'memory';
+  if (!outBytes) {
+    try {
+      outBytes = await processLaFrame(context, date);
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: error.httpStatus ?? 502,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    }
+    dataSource = 'live-la';
+    rememberOutput(`${date}:la`, outBytes);
+  }
+  const response = buildFrameResponse(outBytes, isHistorical, dataSource);
+  if (edgeCache && typeof context.waitUntil === 'function') {
+    context.waitUntil(edgeCache.put(cacheKey, response.clone()).catch(() => {}));
+  }
+  return response;
+};
+
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
@@ -893,9 +1079,7 @@ export async function onRequestOptions() {
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   if (url.searchParams.has('latest')) {
-    // KV가 없는 로컬/복구 모드에서만 기존 엣지 프리워밍을 유지한다.
-    if (!getSatelliteStore(context.env)) maybeWarmRecentFrames(context);
-    return handleLatestRequest(context);
+    return handleLatestRequest(context, url.searchParams.get('before') ?? '');
   }
   const edgeCache = globalThis.caches?.default;
   const bundleStart = url.searchParams.get('bundle');
@@ -904,7 +1088,7 @@ export async function onRequestGet(context) {
   }
   const date = url.searchParams.get('date') ?? '';
   const areaParam = url.searchParams.get('area');
-  const area = ['fd', 'ko', 'pair'].includes(areaParam) ? areaParam : 'ea';
+  const area = ['fd', 'ko', 'la', 'pair'].includes(areaParam) ? areaParam : 'ea';
   const timestamp = parseUtcDate(date);
 
   if (timestamp === null || timestamp % (10 * 60 * 1000) !== 0) {
@@ -917,11 +1101,10 @@ export async function onRequestGet(context) {
   const isHistorical = Date.now() - timestamp >= RECENT_AGE_MS;
   const cacheKey = makeAreaCacheKey(date, area);
   const precomputeOnly = area === 'pair' && url.searchParams.get('precompute') === '1';
+  const priority =
+    url.searchParams.get('priority') === 'interactive' ? 10 : precomputeOnly ? 5 : 0;
 
-  // 프리컴퓨트가 꺼져 있으면(USE_PRECOMPUTED_SATELLITE=false) 저장할 KV가 없다.
-  // 아직 배포돼 있는 워커가 크론으로 이 엔드포인트를 계속 때리더라도, 변환을 돌리지
-  // 않고 즉시 204로 응답해 실사용 요청과 아이솔레이트(직렬 processChain)를 두고
-  // 경쟁하지 않게 한다 — 워커를 지우지 않고도 무해하게 만든다.
+  // R2 바인딩이 없는 환경에서는 프리컴퓨트만 건너뛰고 일반 NOAA 요청은 유지한다.
   if (precomputeOnly && !getSatelliteStore(context.env)) {
     return buildPrecomputeResponse('disabled');
   }
@@ -941,11 +1124,16 @@ export async function onRequestGet(context) {
       edgeCache,
       cacheKey,
       precomputeOnly,
+      priority,
     );
   }
 
+  if (area === 'la') {
+    return handleLaRequest(context, date, isHistorical, edgeCache, cacheKey);
+  }
+
   if (area === 'fd' || area === 'ko') {
-    return handleFdRequest(context, date, area, isHistorical, edgeCache, cacheKey);
+    return handleFdRequest(context, date, area, isHistorical, edgeCache, cacheKey, priority);
   }
 
   const authKey = readAuthKey(context.env);

@@ -5,16 +5,20 @@
 // 버킷의 FD 원본 하나에서 두 해상도로 뽑는다: 전구 22km(FD) 배경 + 한반도
 // 주변 6km(KO) 정밀. 과거 12시간을 10분 간격으로 조회할 수 있다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarClock } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DN_TO_BT_KELVIN,
   FD_GRID,
   KO_GRID,
+  LA_GRID,
   buildSatTimeline,
   fdCellToLonLat,
+  fetchSatFrame,
   fetchSatFramePair,
   koCellToLonLat,
+  laCellToLonLat,
   probeLatestSatDate,
 } from '../api/satApi';
 import './SatelliteView.css';
@@ -26,7 +30,23 @@ import './SatelliteView.css';
 const TIMELINE_HOURS = 6;
 const STEP_MINUTES = 10;
 const AUTO_REFRESH_MS = 60 * 1000;
+const SATELLITE_ARCHIVE_MIN_INPUT = '2023-02-16T15:00';
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
+const BACKGROUND_PREFETCH_LIMIT = 12;
+
+const floorToTenMinutesLocal = (date) => {
+  const floored = new Date(date);
+  floored.setMinutes(Math.floor(floored.getMinutes() / 10) * 10, 0, 0);
+  return floored;
+};
+
+const formatLocalDateTimeInput = (date) => {
+  const pad = (value) => String(value).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+};
 const DOKDO_GEOJSON = {
   type: 'FeatureCollection',
   features: [
@@ -123,6 +143,7 @@ const MAP_STYLE = {
 // STEP=4 → 453x267 정점(약 12만). 구름 '이미지'는 풀해상도 DN 텍스처를 프래그먼트
 // 셰이더에서 샘플해 선명하게 그리고, 3D 돌출(높이)만 이 성긴 메쉬가 담당한다.
 const KO_MESH_STEP = 4;
+const LA_MESH_STEP = 2;
 
 // --- 커스텀 3D 구름 레이어 ---
 const createCloudLayer = () => {
@@ -365,6 +386,32 @@ const createCloudLayer = () => {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+      // LA: NOAA 한반도 국지 관측. 작은 원본으로 첫 화면을 먼저 채우고 FD/KO가
+      // 준비되면 제거한다. 격자 수를 줄여 초기 WebGL 메쉬 생성 부담도 낮춘다.
+      const LW = LA_GRID.width;
+      const LH = LA_GRID.height;
+      const laMeshW = Math.floor((LW - 1) / LA_MESH_STEP) + 1;
+      const laMeshH = Math.floor((LH - 1) / LA_MESH_STEP) + 1;
+      const laDataCol = (mi) => Math.min(mi * LA_MESH_STEP, LW - 1);
+      const laDataRow = (mj) => Math.min(mj * LA_MESH_STEP, LH - 1);
+      const laMesh = buildMesh(
+        laMeshW,
+        laMeshH,
+        (mi, mj) => laCellToLonLat(laDataCol(mi), laDataRow(mj)),
+        null,
+        (frameData, mi, mj) => frameData[laDataRow(mj) * LW + laDataCol(mi)],
+        (mi, mj) => [(laDataCol(mi) + 0.5) / LW, (laDataRow(mj) + 0.5) / LH],
+      );
+      laMesh.textured = true;
+      laMesh.dataW = LW;
+      laMesh.dataH = LH;
+      laMesh.dataTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, laMesh.dataTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
       // FD: 디스크 밖 정점 무효화 + KO 크롭 안쪽은 KO 메쉬에 맡긴다.
       // 둘 다 FD 픽셀 좌표계라 사각형 비교면 충분 (여유 22px ≈ 44km 겹침).
       const koColMin = KO_GRID.col0 + 22;
@@ -392,16 +439,16 @@ const createCloudLayer = () => {
       fdMesh.indexBufferFull = fdMesh.makeBuffer(gl.ELEMENT_ARRAY_BUFFER, fdFullIndices, gl.STATIC_DRAW);
       fdMesh.indexCountFull = fdFullIndices.length;
 
-      // 그리기 순서: FD(배경) → KO(정밀)
-      this.meshes = [fdMesh, koMesh];
-      this.meshByArea = { ko: koMesh, fd: fdMesh };
+      // 그리기 순서: FD(배경) → KO(정밀) → LA(빠른 첫 화면)
+      this.meshes = [fdMesh, koMesh, laMesh];
+      this.meshByArea = { ko: koMesh, fd: fdMesh, la: laMesh };
     },
 
     setFrame(area, data) {
       const mesh = this.meshByArea?.[area];
       if (!mesh) return;
       mesh.frameData = data;
-      mesh.dirty = true;
+      mesh.dirty = Boolean(data);
       this.map?.triggerRepaint();
     },
 
@@ -495,13 +542,10 @@ const createCloudLayer = () => {
       gl.uniform1f(shader.uExag, this.exaggeration);
       gl.uniform1f(shader.uConvOn, this.convHighlight ? 1 : 0);
 
-      // LUT는 유닛1, KO 풀해상도 DN 텍스처는 유닛0에 고정 바인딩.
+      // LUT는 유닛1, KO/LA 풀해상도 DN 텍스처는 유닛0에 바인딩.
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
       gl.uniform1i(shader.uLut, 1);
-      const koTex = this.meshByArea.ko.dataTex;
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, koTex ?? this.lutTex);
       gl.uniform1i(shader.uEaTex, 0);
 
       gl.enable(gl.BLEND);
@@ -510,6 +554,10 @@ const createCloudLayer = () => {
       const koHasData = !!this.meshByArea.ko.frameData;
       for (const mesh of this.meshes) {
         if (!mesh.frameData) continue;
+        if (mesh.textured) {
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, mesh.dataTex);
+        }
         gl.uniform1f(shader.uUseTexture, mesh.textured ? 1 : 0);
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuffer);
         gl.enableVertexAttribArray(shader.aPos);
@@ -551,7 +599,11 @@ function SatelliteView({ menuSlot = null }) {
   const [exaggeration, setExaggeration] = useState(6);
   const [convHighlight, setConvHighlight] = useState(true);
   const [playDurationSec, setPlayDurationSec] = useState(10);
-  const pendingFramesRef = useRef({ ko: null, fd: null });
+  const [historyEnd, setHistoryEnd] = useState(null);
+  const [historyInput, setHistoryInput] = useState('');
+  const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState(false);
+  const pendingFramesRef = useRef({ ko: null, fd: null, la: null });
+  const hasFullFrameRef = useRef(false);
   const pendingConvRangeRef = useRef(SEASON_CONV_KM.summer);
   const exaggerationRef = useRef(6);
   const convHighlightRef = useRef(true);
@@ -610,7 +662,7 @@ function SatelliteView({ menuSlot = null }) {
       });
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
       layer.setConvRange(...pendingConvRangeRef.current);
-      for (const area of ['ko', 'fd']) {
+      for (const area of ['ko', 'fd', 'la']) {
         if (pendingFramesRef.current[area]) {
           layer.setFrame(area, pendingFramesRef.current[area]);
         }
@@ -655,7 +707,7 @@ function SatelliteView({ menuSlot = null }) {
 
     const refresh = async (initial = false) => {
       try {
-        const latest = await probeLatestSatDate();
+        const latest = await probeLatestSatDate(historyEnd);
         if (!active) return;
         const previous = timelineRef.current;
         const next = buildSatTimeline(latest, TIMELINE_HOURS, STEP_MINUTES);
@@ -670,40 +722,55 @@ function SatelliteView({ menuSlot = null }) {
         }
         setTimeline(next);
         setFrameIndex(nextIndex);
-        if (initial) setStatus(null);
       } catch (error) {
         if (active && initial) setStatus(error.message);
       }
     };
 
     refresh(true);
-    const timer = setInterval(refresh, AUTO_REFRESH_MS);
+    const timer = historyEnd ? null : setInterval(refresh, AUTO_REFRESH_MS);
     return () => {
       active = false;
-      clearInterval(timer);
+      if (timer !== null) clearInterval(timer);
     };
-  }, []);
+  }, [historyEnd]);
 
   // 현재 프레임 로드 → 3D 레이어 반영
   useEffect(() => {
     if (!currentDate) return;
     let active = true;
+    let fastFrameDisplayed = false;
+
+    if (!hasFullFrameRef.current) {
+      fetchSatFrame(currentDate, 'la')
+        .then((frame) => {
+          if (!active || hasFullFrameRef.current) return;
+          fastFrameDisplayed = true;
+          pendingFramesRef.current.la = frame.data;
+          cloudLayerRef.current?.setFrame('la', frame.data);
+          setStatus(null);
+        })
+        .catch(() => {
+          // LA는 빠른 첫 화면용 보조 경로다. 실패해도 정규 FD/KO 요청을 계속한다.
+        });
+    }
 
     (async () => {
       let pair;
       try {
         // 선택한 한 장은 30분 묶음 전체를 기다리지 않고 먼저 표시한다.
-        pair = await fetchSatFramePair(currentDate, true);
+        pair = await fetchSatFramePair(currentDate, true, 'interactive');
       } catch (error) {
         if (!active) return;
         // 프레임 하나가 실패했다고 화면을 지우지 않는다. 예전에는 여기서 ko·fd를 모두
         // null로 만들어, 일시적인 실패 한 번에 이미 그려져 있던 위성 영상이 통째로
         // 사라졌다(특히 배경을 담당하는 FD가 빠지면 EA 크롭 바깥, 즉 북쪽 상단이
         // 비어 보인다). 직전 프레임을 그대로 두고 안내만 띄운다.
-        setStatus(error.message);
+        if (!fastFrameDisplayed) setStatus(error.message);
         return;
       }
       if (!active) return;
+      hasFullFrameRef.current = true;
       const range = seasonalConvRange(currentDate);
       pendingConvRangeRef.current = range;
       cloudLayerRef.current?.setConvRange(...range);
@@ -712,6 +779,8 @@ function SatelliteView({ menuSlot = null }) {
         pendingFramesRef.current[area] = data;
         cloudLayerRef.current?.setFrame(area, data);
       }
+      pendingFramesRef.current.la = null;
+      cloudLayerRef.current?.setFrame('la', null);
       setStatus(null);
     })();
 
@@ -726,9 +795,8 @@ function SatelliteView({ menuSlot = null }) {
     };
   }, [currentDate, frameIndex, timeline]);
 
-  // 타임라인 전 구간을 백그라운드에서 순차 프리페치 — 첫 재생부터 빈 프레임이
-  // 없도록 한다. 클라이언트 캐시는 같은 30분 구간의 세 시각을 한 요청으로 받고,
-  // 서버는 각 시각의 ko+fd를 한 쌍으로 제공해 요청 수와 중복 변환을 줄인다.
+  // 최근 인접 구간만 백그라운드에서 순차 프리페치한다. 전 구간 37장을 즉시
+  // 요청하면 사용자가 선택한 프레임이 변환 대기열 뒤로 밀리므로 제한한다.
   //
   // 순서는 '현재 보고 있는 프레임에서 가까운 것부터'다. 서버는 미캐시 프레임을
   // 한 아이솔레이트에서 직렬 처리(processChain)하므로, 항상 최신→과거 고정
@@ -757,9 +825,9 @@ function SatelliteView({ menuSlot = null }) {
     };
 
     (async () => {
-      while (active) {
+      while (active && requested.size < BACKGROUND_PREFETCH_LIMIT) {
         const index = nearestUnfetchedIndex();
-        if (index < 0) return; // 전 구간 프리페치 완료
+        if (index < 0) return;
         requested.add(index);
         await fetchSatFramePair(timeline[index]).catch(() => {});
       }
@@ -800,6 +868,36 @@ function SatelliteView({ menuSlot = null }) {
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
     setFrameIndex(Number(event.target.value));
+  }, []);
+
+  const prepareHistoryInput = useCallback(() => {
+    const seed = historyEnd ?? currentDate ?? new Date();
+    setHistoryInput(formatLocalDateTimeInput(floorToTenMinutesLocal(seed)));
+    setIsHistoryPickerOpen(true);
+  }, [currentDate, historyEnd]);
+
+  const handleApplyHistory = useCallback(() => {
+    const parsed = new Date(historyInput);
+    if (Number.isNaN(parsed.getTime())) return;
+
+    const earliest = new Date(SATELLITE_ARCHIVE_MIN_INPUT);
+    const latest = floorToTenMinutesLocal(new Date());
+    const clamped = new Date(
+      Math.min(latest.getTime(), Math.max(earliest.getTime(), parsed.getTime())),
+    );
+    setIsPlaying(false);
+    hasFullFrameRef.current = false;
+    setStatus('선택한 과거 위성 자료를 찾는 중입니다.');
+    setHistoryEnd(floorToTenMinutesLocal(clamped));
+    setIsHistoryPickerOpen(false);
+  }, [historyInput]);
+
+  const handleReturnToLatest = useCallback(() => {
+    setIsPlaying(false);
+    hasFullFrameRef.current = false;
+    setStatus('최신 위성 자료를 찾는 중입니다.');
+    setHistoryEnd(null);
+    setIsHistoryPickerOpen(false);
   }, []);
 
   // 눈금: 매시 정각 위치 + 2시간마다 라벨
@@ -966,6 +1064,49 @@ function SatelliteView({ menuSlot = null }) {
       {/* 우하단: (방송모드) 뷰 전환 + 표시 옵션 + 재생 길이 — 레이더와 동일 위치 */}
       <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
         {menuSlot}
+        <div className="flex items-center gap-2">
+          {isHistoryPickerOpen ? (
+            <div className="flex h-10 items-center gap-1.5 rounded-full border border-white/25 bg-slate-900/65 px-2 text-white shadow-lg backdrop-blur-sm">
+              <CalendarClock size={16} className="shrink-0" />
+              <input
+                type="datetime-local"
+                value={historyInput}
+                min={SATELLITE_ARCHIVE_MIN_INPUT}
+                max={formatLocalDateTimeInput(floorToTenMinutesLocal(new Date()))}
+                step={600}
+                onChange={(event) => setHistoryInput(event.target.value)}
+                className="h-7 w-[11.6rem] rounded bg-slate-800/90 px-1.5 text-xs text-white outline-none [color-scheme:dark]"
+                aria-label="위성 과거 조회 시각"
+              />
+              <button
+                type="button"
+                onClick={handleApplyHistory}
+                disabled={!historyInput}
+                className="h-7 rounded-full bg-cyan-400 px-2.5 text-xs font-black text-slate-950 transition hover:bg-cyan-300 disabled:opacity-50"
+              >
+                이동
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={prepareHistoryInput}
+              className="flex h-10 items-center gap-2 rounded-full border border-white/25 bg-slate-900/65 px-3 text-sm font-semibold text-white shadow-lg backdrop-blur-sm transition hover:bg-white/10"
+            >
+              <CalendarClock size={16} />
+              과거 조회
+            </button>
+          )}
+          {historyEnd ? (
+            <button
+              type="button"
+              onClick={handleReturnToLatest}
+              className="h-10 rounded-full border border-white/25 bg-slate-900/65 px-3 text-sm font-black text-white shadow-lg backdrop-blur-sm transition hover:bg-white/10"
+            >
+              최신
+            </button>
+          ) : null}
+        </div>
         <div className="flex items-center gap-2">
           <label className="flex h-10 items-center gap-2 rounded-full border border-white/25 bg-slate-900/55 px-3.5 text-sm font-semibold text-white backdrop-blur-sm">
             입체 효과

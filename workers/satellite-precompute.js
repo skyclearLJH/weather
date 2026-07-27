@@ -43,48 +43,36 @@ const buildTimeline = (latest) => {
   return dates;
 };
 
-// KV list는 무료 플랜 하루 1,000회 제한이라, 1분 크론에서 매번 돌리면 한도를 넘긴다.
-// 저장 목록은 Pages 함수가 유지하는 색인 키 하나만 읽고, 색인이 없거나 오래됐을 때만
-// 실제 list로 재구성한다(시간당 1회). 두 곳이 같은 키·같은 규칙을 쓴다.
-const INDEX_KEY = 'satellite/gk2a-ir/v1/index.json';
-// Pages 함수와 같은 주기(10분). 프레임 저장 때 색인을 고쳐 쓰지 않으므로,
-// 방금 저장한 프레임은 다음 재구성에서 반영된다.
-const INDEX_REBUILD_MS = 10 * 60 * 1000;
-
-const listStoredDatesFromKv = async (store) => {
+const listStoredDates = async (store) => {
   const dates = new Set();
   let cursor;
   do {
     const page = await store.list({ prefix: CACHE_PREFIX, cursor });
-    for (const key of page.keys ?? []) {
-      const match = key.name.match(/(\d{12})\.bin\.gz$/);
+    for (const object of page.objects ?? []) {
+      const match = object.key.match(/(\d{12})\.bin\.gz$/);
       if (match) dates.add(match[1]);
     }
-    cursor = page.list_complete ? undefined : page.cursor;
+    cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
   return dates;
 };
 
-const listStoredDates = async (store) => {
-  try {
-    const index = await store.get(INDEX_KEY, 'json');
-    const rebuiltAt = Date.parse(index?.rebuiltAt ?? '');
-    if (
-      Array.isArray(index?.dates) &&
-      Number.isFinite(rebuiltAt) &&
-      Date.now() - rebuiltAt < INDEX_REBUILD_MS
-    ) {
-      return new Set(index.dates);
+const pruneStoredDates = async (store, retainedHours = 20) => {
+  const cutoff = Date.now() - retainedHours * 60 * 60 * 1000;
+  const expired = [];
+  let cursor;
+  do {
+    const page = await store.list({ prefix: CACHE_PREFIX, cursor });
+    for (const object of page.objects ?? []) {
+      const match = object.key.match(/(\d{12})\.bin\.gz$/);
+      if (match && parseUtc(match[1]).getTime() < cutoff) expired.push(object.key);
     }
-    const dates = await listStoredDatesFromKv(store);
-    await store.put(
-      INDEX_KEY,
-      JSON.stringify({ dates: [...dates].sort(), rebuiltAt: new Date().toISOString() }),
-    );
-    return dates;
-  } catch {
-    return new Set();
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  if (expired.length > 0) {
+    await store.delete(expired);
   }
+  return expired.length;
 };
 
 const getLatest = async (origin) => {
@@ -100,8 +88,8 @@ const getLatest = async (origin) => {
 };
 
 const precompute = async (env) => {
-  const store = env.SATELLITE_CACHE || env.KIM_RAIN_CACHE;
-  if (!store) throw new Error('SATELLITE_CACHE binding is missing');
+  const store = env.SATELLITE_R2;
+  if (!store) throw new Error('SATELLITE_R2 binding is missing');
   const origin = String(env.SATELLITE_ORIGIN || 'https://weather-ljh.pages.dev').replace(/\/$/, '');
   const batchSize = Math.max(1, Math.min(6, Number(env.SATELLITE_BATCH_SIZE) || 4));
   const latest = await getLatest(origin);
@@ -148,19 +136,21 @@ const precompute = async (env) => {
       results.push({ date, ok: false, error: error.message });
     }
   }
+  const prunedFrameCount = await pruneStoredDates(store);
 
   return {
     checkedAt: new Date().toISOString(),
     latest,
     storedFrameCount: stored.size,
     requestedFrameCount: targets.length,
+    prunedFrameCount,
     results,
   };
 };
 
 const status = async (env) => {
-  const store = env.SATELLITE_CACHE || env.KIM_RAIN_CACHE;
-  if (!store) throw new Error('SATELLITE_CACHE binding is missing');
+  const store = env.SATELLITE_R2;
+  if (!store) throw new Error('SATELLITE_R2 binding is missing');
   const origin = String(env.SATELLITE_ORIGIN || 'https://weather-ljh.pages.dev').replace(/\/$/, '');
   const latest = await getLatest(origin);
   const timeline = buildTimeline(latest);
