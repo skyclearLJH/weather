@@ -130,13 +130,19 @@ const MAP_STYLE = {
       source: 'land',
       paint: { 'fill-color': '#2f3945' },
     },
-    // 해안선 = 같은 육지 폴리곤의 외곽선 (별도 해안선 파일과 어긋날 일이 없다)
+    // 한국(남한) 육지는 고해상도 시도 폴리곤으로 같은 색으로 다시 채워, 그 위에서
+    // 저해상도 50m 세계 육지(land)를 덮는다. 섬까지 선명한 sido 윤곽과 한 겹으로
+    // 맞아 '두 겹' 문제가 사라진다. (전구 배경의 나머지 세계는 고해상도 자료가 없어
+    // 50m를 그대로 쓰지만, 배경이라 문제되지 않는다. 북한은 남한 시도에 없어 제외.)
     {
-      id: 'coastline',
-      type: 'line',
-      source: 'land',
-      paint: { 'line-color': '#7f9bb8', 'line-width': 1.3 },
+      id: 'korea-land',
+      type: 'fill',
+      source: 'sido',
+      paint: { 'fill-color': '#2f3945' },
     },
+    // 해안선 선(line)은 50m 저해상도라 고해상도 sido와 어긋나 '두 번째 윤곽'으로
+    // 보였다. 제거한다 — 세계 육지는 채움 면의 육지/바다 색 대비로, 한국 해안선은
+    // 아래 sido 선(외곽 = 해안선)으로 나타낸다.
     {
       id: 'sido',
       type: 'line',
