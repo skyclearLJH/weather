@@ -736,18 +736,19 @@ const handleLatestRequest = async (context, beforeValue = '') => {
     hasHistoricalTarget ? 24 : 2,
   );
   let cachedLatest = null;
+  let storedDates = [];
   if (latest && getSatelliteStore(context.env)) {
     try {
-      const dates = await listStoredSatelliteDates(context.env);
-      cachedLatest = dates.filter((date) => date <= latest).at(-1) ?? null;
+      storedDates = await listStoredSatelliteDates(context.env);
+      cachedLatest = storedDates.filter((date) => date <= latest).at(-1) ?? null;
     } catch {
-      // KV 목록 조회가 실패하면 NOAA 최신 시각을 그대로 사용한다.
+      // 목록 조회가 실패하면 NOAA 최신 시각을 그대로 사용한다.
     }
   }
-  // 라이브(현재) 조회일 때만, cron이 걸러 최신이 R2에 없으면 배경으로 채운다.
-  // 과거 조회(historical)는 그때그때 클라이언트 요청으로 채워지므로 건드리지 않는다.
+  // 라이브(현재) 조회일 때만, cron이 걸러 R2에 빠진 프레임(최신 끝단이든 중간 구멍이든)을
+  // 배경으로 채운다. 과거 조회(historical)는 클라이언트 요청으로 채워지므로 건드리지 않는다.
   if (!hasHistoricalTarget) {
-    maybeFillRecentFrames(context, latest, cachedLatest);
+    maybeFillRecentFrames(context, latest, storedDates);
   }
   return new Response(JSON.stringify({ latest, cachedLatest }), {
     status: latest ? 200 : 404,
@@ -957,19 +958,24 @@ const isDailyGapDate = (date) => date.slice(8, 12) === '1520';
 // 아예 건너뛴다. 아이솔레이트별 최소 간격으로 과요청을 막는다.
 const RECENT_FILL_THROTTLE_MS = 90 * 1000;
 const RECENT_FILL_MAX_FRAMES = 3;
+// 클라이언트 SatelliteView.jsx의 TIMELINE_HOURS와 반드시 같게 유지할 것.
+const SATELLITE_TIMELINE_HOURS = 6;
 let lastRecentFillAt = 0;
 
-const fillRecentFrames = async (origin, latest, cachedLatest) => {
+// latest에서 6시간 전까지 10분 간격 타임라인(최신 우선). 일일 결측 슬롯(1520)은 뺀다.
+const buildSatelliteTimeline = (latest) => {
   const latestMs = parseUtcDate(latest);
-  if (latestMs === null) return;
-  const cachedMs = cachedLatest ? parseUtcDate(cachedLatest) : null;
-  const targets = [];
-  for (let i = 0; i < 12 && targets.length < RECENT_FILL_MAX_FRAMES; i++) {
-    const ms = latestMs - i * 10 * 60 * 1000;
-    if (cachedMs !== null && ms <= cachedMs) break; // 이미 저장된 구간에 도달
-    const date = formatUtcTimestamp(ms);
-    if (!isDailyGapDate(date)) targets.push(date);
+  if (latestMs === null) return [];
+  const frames = [];
+  const count = Math.floor((SATELLITE_TIMELINE_HOURS * 60) / 10);
+  for (let i = 0; i <= count; i++) {
+    const date = formatUtcTimestamp(latestMs - i * 10 * 60 * 1000);
+    if (!isDailyGapDate(date)) frames.push(date);
   }
+  return frames;
+};
+
+const fillFrames = async (origin, targets) => {
   for (const date of targets) {
     try {
       const response = await fetch(`${origin}/api/gk2a-ir?date=${date}&area=pair&precompute=1`, {
@@ -982,15 +988,19 @@ const fillRecentFrames = async (origin, latest, cachedLatest) => {
   }
 };
 
-const maybeFillRecentFrames = (context, latest, cachedLatest) => {
+const maybeFillRecentFrames = (context, latest, storedDates) => {
   if (!getSatelliteStore(context.env) || !latest) return;
   if (typeof context.waitUntil !== 'function') return;
-  if (cachedLatest && cachedLatest >= latest) return; // 이미 최신까지 저장됨
   const now = Date.now();
   if (now - lastRecentFillAt < RECENT_FILL_THROTTLE_MS) return;
+  // 최신 끝단뿐 아니라 창 전체의 결측 구멍을 최신 우선으로 메운다. cron이 밀려
+  // 가운데가 빠져도(예: 10:30~11:00), 열려 있는 페이지의 60초 폴링이 자동 복구한다.
+  const storedSet = new Set(storedDates);
+  const missing = buildSatelliteTimeline(latest).filter((date) => !storedSet.has(date));
+  if (missing.length === 0) return;
   lastRecentFillAt = now;
   const origin = new URL(context.request.url).origin;
-  context.waitUntil(fillRecentFrames(origin, latest, cachedLatest).catch(() => {}));
+  context.waitUntil(fillFrames(origin, missing.slice(0, RECENT_FILL_MAX_FRAMES)).catch(() => {}));
 };
 
 const handleBundleRequest = async (context, bundleStart, edgeCache) => {
