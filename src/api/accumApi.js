@@ -54,17 +54,57 @@ const formatCurrentKstDay = () => {
   return `${date.getUTCFullYear()}${pad2(date.getUTCMonth() + 1)}${pad2(date.getUTCDate())}`;
 };
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 일시적 실패는 자동 재시도한다. 넓은 기간(예: 5일)은 여러 날짜를 동시에 조회하는데,
+// KMA API허브가 잠깐 느리거나 무응답이면 그중 하나가 Cloudflare 522(원본 연결
+// 타임아웃)나 5xx·타임아웃으로 실패해 전체 표출이 깨졌다(다시 열면 정상 = 일시적).
+// 403(호출한도)·기타 4xx는 재시도해도 소용없어 즉시 실패시킨다.
+const KMA_FETCH_ATTEMPTS = 3;
+
 const fetchKmaLines = async (path, params) => {
   const url = new URL(`${KMA_PROXY_BASE}${path}`, window.location.origin);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  const buffer = await response.arrayBuffer();
-  if (!response.ok) {
+  let lastError = null;
+  for (let attempt = 0; attempt < KMA_FETCH_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await delay(500 * attempt);
+    }
+    let response;
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    } catch (error) {
+      // 네트워크 오류·타임아웃 → 재시도
+      lastError =
+        error.name === 'TimeoutError' || error.name === 'AbortError'
+          ? new Error('관측 자료 요청 시간이 초과되었습니다.')
+          : error;
+      continue;
+    }
+    const buffer = await response.arrayBuffer();
+    if (response.ok) {
+      const text = new TextDecoder('euc-kr').decode(buffer);
+      return text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'));
+    }
     const errorText = new TextDecoder().decode(buffer);
-    // API허브 일일 호출한도 초과(403)는 통일 문구로 안내
-    if (response.status === 403 || errorText.includes('Status: 403') || errorText.includes('호출한도') || errorText.includes('호출 한도')) {
+    // API허브 일일 호출한도 초과(403)는 통일 문구로 안내 — 재시도해도 소용없다
+    if (
+      response.status === 403 ||
+      errorText.includes('Status: 403') ||
+      errorText.includes('호출한도') ||
+      errorText.includes('호출 한도')
+    ) {
       throw new Error('하루 최대 호출량을 넘어 데이터를 불러올 수 없습니다.');
     }
+    // 5xx·Cloudflare 52x(522/524 등) 일시적 원본 오류 → 재시도
+    if (response.status >= 500) {
+      lastError = new Error(`관측 자료 요청 실패 (${response.status})`);
+      continue;
+    }
+    // 그 외(4xx 등)는 재시도 무의미 → 즉시 실패
     let detail = '';
     try {
       detail = JSON.parse(errorText)?.result?.message ?? '';
@@ -73,11 +113,7 @@ const fetchKmaLines = async (path, params) => {
     }
     throw new Error(detail || `관측 자료 요청 실패 (${response.status})`);
   }
-  const text = new TextDecoder('euc-kr').decode(buffer);
-  return text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'));
+  throw lastError ?? new Error('관측 자료 요청 실패');
 };
 
 // AWS 지점 좌표·지점명·법정동 주소 (STN_ID, LON, LAT가 앞 세 컬럼,
