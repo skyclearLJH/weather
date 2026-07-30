@@ -246,7 +246,7 @@ export default {
     context.waitUntil(precompute(env));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/status') return jsonResponse(await status(env));
@@ -254,7 +254,10 @@ export default {
         if (!isAuthorizedRefresh(request, env)) {
           return jsonResponse({ error: 'Unauthorized refresh request.' }, 401);
         }
-        return jsonResponse(await precompute(env));
+        // 외부 스케줄러(heartbeat)용. 채우기는 배경(waitUntil)으로 돌리고 즉시 응답해,
+        // 핑 서비스의 요청 타임아웃과 실제 채우기 소요시간을 분리한다(안정적 트리거).
+        ctx.waitUntil(precompute(env).catch(() => {}));
+        return jsonResponse({ triggered: true, at: new Date().toISOString() });
       }
       return jsonResponse({
         name: 'weathernow-satellite-precompute',
