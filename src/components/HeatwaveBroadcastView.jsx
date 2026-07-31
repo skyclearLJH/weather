@@ -769,7 +769,7 @@ const HeatwaveBroadcastView = () => {
         >
           <div className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm" style={{ width: 'clamp(320px, 22vw, 500px)' }}>
             <div className="border-b border-white/15 px-5 py-2 text-sm font-black text-white/80">
-              {mode === 'tropical' ? '열대야 순위 · ASOS' : '최고기온 순위 · ASOS+AWS'}
+              {mode === 'tropical' ? '열대야 순위' : '최고기온 순위'}
             </div>
             <div className="divide-y divide-white/10">
               {top5.map((row, index) => (
