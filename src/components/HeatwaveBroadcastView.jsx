@@ -15,6 +15,8 @@ const GRID_NEIGHBORS = 6;
 const GRID_BUCKET_SIZE = 16;
 const COLUMN_STRIDE = 2;
 const OVERLAY_ALPHA = 218;
+const TROPICAL_EXTRUSION_THRESHOLD = 25;
+const HEAT_EXTRUSION_THRESHOLD = 33;
 const TEMPERATURE_SOURCE_ID = 'heat-temperature-columns';
 const TEMPERATURE_LAYER_ID = 'heat-temperature-columns-layer';
 
@@ -433,8 +435,10 @@ const ensureAdminLayers = (map) => {
 };
 
 const ScaleBar = ({ mode }) => {
-  const palette = mode === 'tropical' ? TROPICAL_PALETTE : HEAT_PALETTE;
-  const labels = mode === 'tropical' ? [18, 22, 25, 27, 30, 33] : [15, 24, 30, 33, 35, 40, 43];
+  const palette = mode === 'tropical'
+    ? TROPICAL_PALETTE
+    : HEAT_PALETTE.filter(({ value }) => value >= 30);
+  const labels = mode === 'tropical' ? [18, 22, 25, 27, 30, 33] : [30, 33, 35, 40, 43];
   const min = palette[0].value;
   const max = palette.at(-1).value;
   return (
@@ -447,7 +451,10 @@ const ScaleBar = ({ mode }) => {
           className="w-3 rounded-sm"
           style={{
             background: `linear-gradient(to top, ${palette
-              .map(({ color }) => `rgb(${color.join(',')})`)
+              .map(
+                ({ value, color }) =>
+                  `rgb(${color.join(',')}) ${((value - min) / (max - min)) * 100}%`,
+              )
               .join(', ')})`,
           }}
         />
@@ -638,11 +645,15 @@ const HeatwaveBroadcastView = () => {
 
     const features = [];
     const halfCell = COLUMN_STRIDE * 0.505;
+    const extrusionThreshold =
+      mode === 'tropical'
+        ? TROPICAL_EXTRUSION_THRESHOLD
+        : HEAT_EXTRUSION_THRESHOLD;
     for (let y = Math.floor(COLUMN_STRIDE / 2); y < GRID_HEIGHT; y += COLUMN_STRIDE) {
       for (let x = Math.floor(COLUMN_STRIDE / 2); x < GRID_WIDTH; x += COLUMN_STRIDE) {
         const index = y * GRID_WIDTH + x;
         const value = values[index];
-        if (!landMask[index] || value < -40 || (mode === 'tropical' && value < 25)) continue;
+        if (!landMask[index] || value < extrusionThreshold) continue;
         const color = interpolatePaletteColor(value, palette);
         features.push({
           type: 'Feature',
