@@ -615,7 +615,7 @@ function SatelliteView({ menuSlot = null }) {
   const [historyEnd, setHistoryEnd] = useState(null);
   const [historyInput, setHistoryInput] = useState('');
   const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState(false);
-  const [readyFrameTimes, setReadyFrameTimes] = useState(() => new Set());
+  const [, setReadyFrameTimes] = useState(() => new Set());
   const pendingFramesRef = useRef({ ko: null, fd: null, la: null });
   const readyFrameTimesRef = useRef(new Set());
   const fullReadyFrameTimesRef = useRef(new Set());
