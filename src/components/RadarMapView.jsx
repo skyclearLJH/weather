@@ -931,7 +931,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
   const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'kim' | 'accum' | 'satellite'
-  const [kimMeta, setKimMeta] = useState(null);
   const [kimFrames, setKimFrames] = useState([]);
   const [kimIndex, setKimIndex] = useState(0);
   const [kimStatus, setKimStatus] = useState('idle'); // idle | loading | ready | error
@@ -3684,18 +3683,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                             : currentFrame.validTime,
                       )}
                     </span>
-                    {isKimView ? (
-                      <span
-                        className="rounded bg-emerald-300 px-1.5 py-0.5 text-xs font-black text-emerald-950"
-                        title={`KIM ${kimMeta?.sourceGridKm ?? 1} km · ${kimMeta?.baseTime ?? ''} 기준`}
-                      >
-                        KIM {kimMeta?.sourceGridKm ?? 1}km
-                      </span>
-                    ) : !isAccumView && currentFrame?.kind === 'fct' ? (
-                      <span className="rounded bg-[#f4c542] px-1.5 py-0.5 text-xs font-black text-[#102a43]">
-                        예측
-                      </span>
-                    ) : null}
                   </div>
                 ) : null}
                 <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
