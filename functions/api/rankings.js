@@ -35,6 +35,11 @@ const PRECIPITATION_MAX_ONE_HOUR_OPEN_RECHECK_MS = 20 * 60 * 1000;
 // 화면에 펼쳐 보이는 순위 개수(App.jsx RANKING_EXPANDED_LIMIT과 맞춘다).
 // 일 강수량이 이 순위의 값보다 낮으면 60분 최대가 그보다 클 수 없어 후보에서 뺀다.
 const PRECIPITATION_MAX_ONE_HOUR_VISIBLE_LIMIT = 30;
+// '60분 최대 강수량' 순위에 표시할 최소값(mm). AWS 방재관측 원자료에는 센서
+// 트레이스·노이즈로 0.1~0.8mm 같은 미세값이 종종 잡히는데(KMA 공식 QC는 0으로
+// 처리), 거의 비가 안 온 날 이 값들이 '최대 강수' 상위로 올라와 실제 강수가 없는
+// 지점이 순위에 뜬다. 1시간 최대 강수량으로 유의미한 값만 노출한다.
+const PRECIPITATION_MAX_ONE_HOUR_MIN_MM = 1.0;
 const AWS_MINUTE_RANGE_REQUEST_TIMEOUT_MS = 12000;
 const RANKING_CACHE_VERSION = 'v8';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
@@ -1297,7 +1302,7 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
 
   const stationValues = new Map();
   Object.values(aggregate?.stations ?? {})
-    .filter((item) => Number.isFinite(item.value) && item.value > 0)
+    .filter((item) => Number.isFinite(item.value) && item.value >= PRECIPITATION_MAX_ONE_HOUR_MIN_MM)
     .forEach((item) => {
       stationValues.set(String(item.stationId), {
         name: item.name,
@@ -1307,7 +1312,7 @@ const buildPrecipitationMaxOneHour = async (context, stationMetadata, period = '
     });
 
   officialRows
-    .filter((item) => Number.isFinite(item.value) && item.value > 0)
+    .filter((item) => Number.isFinite(item.value) && item.value >= PRECIPITATION_MAX_ONE_HOUR_MIN_MM)
     .forEach((item) => {
       const existing = stationValues.get(item.stationId);
       if (!existing || item.value >= existing.value) {
