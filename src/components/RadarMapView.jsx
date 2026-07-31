@@ -966,6 +966,21 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const isKimView = isBroadcast && broadcastView === 'kim';
   const isSatelliteView = isBroadcast && broadcastView === 'satellite';
   const isRadarView = isBroadcast && broadcastView === 'radar';
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (isAccumView) {
+      map.dragRotate.enable();
+      return;
+    }
+    map.dragRotate.disable();
+    map.dragRotate._mousePitch?.enable();
+    if (Math.abs(map.getBearing()) > 0.01) {
+      map.easeTo({ bearing: 0, duration: 350 });
+    }
+  }, [isAccumView]);
+
   // 레이더 화면 위 '시간당 강수량' 최다 5지점 표 (체크박스로 켜고 끈다).
   // 자료는 일반 페이지 '강수량 > 60분 현재'와 같은 서버 랭킹(precipitation-current)을 쓴다.
   const [showHourlyTop5, setShowHourlyTop5] = useState(false);

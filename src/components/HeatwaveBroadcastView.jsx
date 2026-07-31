@@ -505,12 +505,11 @@ const HeatwaveBroadcastView = () => {
       pitch: 52,
       bearing: 0,
       attributionControl: false,
-      dragRotate: false,
+      dragRotate: true,
       pitchWithRotate: true,
       touchPitch: true,
       localIdeographFontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
     });
-    map.dragRotate._mousePitch?.enable();
     map.touchZoomRotate.disableRotation();
     mapRef.current = map;
     if (import.meta.env.DEV) {
