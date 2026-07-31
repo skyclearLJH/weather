@@ -791,12 +791,20 @@ const HeatwaveBroadcastView = () => {
           </span>
           {dataset ? (
             <div className="ml-auto flex shrink-0 flex-col items-end whitespace-nowrap">
-              <span className="font-black tabular-nums" style={{ fontSize: 'clamp(16px, 1.2vw, 26px)' }}>
-                {dataset.observedAtCode.slice(8, 10)}:{dataset.observedAtCode.slice(10, 12)}
-              </span>
-              <span className="text-xs font-semibold text-[#bdd6fb]">
-                {Number(dataset.observedAtCode.slice(4, 6))}/{Number(dataset.observedAtCode.slice(6, 8))}
-              </span>
+              {targetDate ? (
+                <span className="font-black tabular-nums" style={{ fontSize: 'clamp(16px, 1.2vw, 26px)' }}>
+                  {Number(dataset.observedAtCode.slice(4, 6))}/{Number(dataset.observedAtCode.slice(6, 8))}
+                </span>
+              ) : (
+                <>
+                  <span className="font-black tabular-nums" style={{ fontSize: 'clamp(16px, 1.2vw, 26px)' }}>
+                    {dataset.observedAtCode.slice(8, 10)}:{dataset.observedAtCode.slice(10, 12)}
+                  </span>
+                  <span className="text-xs font-semibold text-[#bdd6fb]">
+                    {Number(dataset.observedAtCode.slice(4, 6))}/{Number(dataset.observedAtCode.slice(6, 8))}
+                  </span>
+                </>
+              )}
             </div>
           ) : null}
           <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
