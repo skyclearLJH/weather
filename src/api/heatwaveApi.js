@@ -43,6 +43,23 @@ const setKstWallTime = (date, hour, minute = 0) => {
 
 const subtractKstDays = (date, days) => new Date(date.getTime() - days * 86400000);
 
+const parseKstDateInput = (value = '') => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+};
+
 const formatKoreanDateTime = (date) =>
   `${date.getUTCFullYear()}년 ${date.getUTCMonth() + 1}월 ${date.getUTCDate()}일 ` +
   `${pad2(date.getUTCHours())}시 ${pad2(date.getUTCMinutes())}분`;
@@ -195,13 +212,15 @@ const fetchDailyTemperature = async (day, observation, stationMetadata, refreshT
   return promise;
 };
 
-export const buildTropicalNightWindow = (nowMs = Date.now()) => {
+export const buildTropicalNightWindow = (nowMs = Date.now(), targetDate = '') => {
   const now = getKstWallClock(nowMs);
   const todayStart = new Date(now);
   todayStart.setUTCHours(0, 0, 0, 0);
-  const endOfWindow = setKstWallTime(todayStart, TROPICAL_NIGHT_END_HOUR, 0);
-  const isProvisional = now.getUTCHours() < TROPICAL_NIGHT_END_HOUR;
-  const start = setKstWallTime(subtractKstDays(todayStart, 1), 18, 1);
+  const selectedDay = parseKstDateInput(targetDate) ?? todayStart;
+  const isToday = formatKmaDay(selectedDay) === formatKmaDay(todayStart);
+  const endOfWindow = setKstWallTime(selectedDay, TROPICAL_NIGHT_END_HOUR, 0);
+  const isProvisional = isToday && now.getUTCHours() < TROPICAL_NIGHT_END_HOUR;
+  const start = setKstWallTime(subtractKstDays(selectedDay, 1), 18, 1);
   const end = isProvisional ? now : endOfWindow;
   return {
     start,
@@ -210,8 +229,8 @@ export const buildTropicalNightWindow = (nowMs = Date.now()) => {
   };
 };
 
-const buildTropicalNightData = async (refreshToken = '') => {
-  const window = buildTropicalNightWindow();
+const buildTropicalNightData = async (refreshToken = '', targetDate = '') => {
+  const window = buildTropicalNightWindow(Date.now(), targetDate);
   const [awsStations, asosStations] = await Promise.all([
     fetchStationMetadata('AWS'),
     fetchStationMetadata('ASOS'),
@@ -241,8 +260,13 @@ const buildTropicalNightData = async (refreshToken = '') => {
   };
 };
 
-const buildHeatwaveData = async (refreshToken = '') => {
+const buildHeatwaveData = async (refreshToken = '', targetDate = '') => {
   const now = getKstWallClock();
+  const todayStart = new Date(now);
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const selectedDay = parseKstDateInput(targetDate) ?? todayStart;
+  const isToday = formatKmaDay(selectedDay) === formatKmaDay(todayStart);
+  const observedAt = isToday ? now : setKstWallTime(selectedDay, 23, 59);
   const [awsStations, asosStations] = await Promise.all([
     fetchStationMetadata('AWS'),
     fetchStationMetadata('ASOS'),
@@ -250,7 +274,7 @@ const buildHeatwaveData = async (refreshToken = '') => {
   const stationMetadata = new Map([...awsStations, ...asosStations]);
   const observations = (
     await fetchDailyTemperature(
-      formatKmaDay(now),
+      formatKmaDay(selectedDay),
       'ta_max',
       stationMetadata,
       refreshToken,
@@ -261,20 +285,22 @@ const buildHeatwaveData = async (refreshToken = '') => {
       !HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS.has(String(row.id)),
   );
   if (observations.length < 20) {
-    throw new Error('오늘 최고기온 관측 자료를 충분히 불러오지 못했습니다.');
+    throw new Error('최고기온 관측 자료를 충분히 불러오지 못했습니다.');
   }
   return {
     mode: 'heat',
     observations,
-    observedAt: formatKoreanDateTime(now),
-    observedAtCode: formatKmaMinuteTime(now),
-    status: 'current',
-    note: 'ASOS와 폭염특보 운영 AWS 지점의 오늘 최고기온입니다.',
-    windowLabel: `${now.getUTCMonth() + 1}월 ${now.getUTCDate()}일 00:00 ~ 현재`,
+    observedAt: formatKoreanDateTime(observedAt),
+    observedAtCode: formatKmaMinuteTime(observedAt),
+    status: isToday ? 'current' : 'historical',
+    note: isToday
+      ? 'ASOS와 폭염특보 운영 AWS 지점의 오늘 최고기온입니다.'
+      : '선택한 날짜의 일 최고기온 확정 자료입니다.',
+    windowLabel: `${selectedDay.getUTCMonth() + 1}월 ${selectedDay.getUTCDate()}일 00:00 ~ ${isToday ? '현재' : '24:00'}`,
   };
 };
 
 export const fetchHeatwaveBroadcastData = (mode, options = {}) =>
   mode === 'heat'
-    ? buildHeatwaveData(options.refreshToken)
-    : buildTropicalNightData(options.refreshToken);
+    ? buildHeatwaveData(options.refreshToken, options.targetDate)
+    : buildTropicalNightData(options.refreshToken, options.targetDate);

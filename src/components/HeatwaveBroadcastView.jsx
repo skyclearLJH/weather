@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { CalendarDays, RefreshCw } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
@@ -19,6 +19,18 @@ const TROPICAL_EXTRUSION_THRESHOLD = 25;
 const HEAT_EXTRUSION_THRESHOLD = 33;
 const TEMPERATURE_SOURCE_ID = 'heat-temperature-columns';
 const TEMPERATURE_LAYER_ID = 'heat-temperature-columns-layer';
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+const formatKstDateInput = (nowMs = Date.now()) => {
+  const date = new Date(nowMs + KST_OFFSET_MS);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+};
+
+const formatShortDate = (value) => {
+  const [, month = '', day = ''] = value.split('-');
+  return `${Number(month)}/${Number(day)}`;
+};
 
 const ADMIN_SOURCE_DEFINITIONS = {
   'heat-sido': '/data/map/kr-sido-20260701.geojson',
@@ -485,6 +497,10 @@ const HeatwaveBroadcastView = () => {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
+  const [targetDate, setTargetDate] = useState('');
+  const [dateInput, setDateInput] = useState(() => formatKstDateInput());
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const todayDate = formatKstDateInput();
 
   const palette = mode === 'tropical' ? TROPICAL_PALETTE : HEAT_PALETTE;
   const top5 = useMemo(() => {
@@ -589,6 +605,7 @@ const HeatwaveBroadcastView = () => {
     let active = true;
     fetchHeatwaveBroadcastData(mode, {
       refreshToken: refreshToken ? `${Date.now()}` : '',
+      targetDate,
     })
       .then((result) => {
         if (!active) return;
@@ -603,7 +620,7 @@ const HeatwaveBroadcastView = () => {
     return () => {
       active = false;
     };
-  }, [mode, refreshToken]);
+  }, [mode, refreshToken, targetDate]);
 
   const handleModeChange = useCallback((nextMode) => {
     setDataset(null);
@@ -616,6 +633,29 @@ const HeatwaveBroadcastView = () => {
     setStatus('loading');
     setError('');
     setRefreshToken((value) => value + 1);
+  }, []);
+
+  const handleDateApply = useCallback(() => {
+    if (!dateInput) return;
+    const nextTargetDate = dateInput === formatKstDateInput() ? '' : dateInput;
+    setDataset(null);
+    setStatus('loading');
+    setError('');
+    setIsDatePickerOpen(false);
+    if (nextTargetDate === targetDate) {
+      setRefreshToken((value) => value + 1);
+    } else {
+      setTargetDate(nextTargetDate);
+    }
+  }, [dateInput, targetDate]);
+
+  const handleLatest = useCallback(() => {
+    setDataset(null);
+    setStatus('loading');
+    setError('');
+    setDateInput(formatKstDateInput());
+    setTargetDate('');
+    setIsDatePickerOpen(false);
   }, []);
 
   const renderDataset = useCallback(() => {
@@ -694,9 +734,10 @@ const HeatwaveBroadcastView = () => {
   }, [renderDataset, status]);
 
   useEffect(() => {
+    if (targetDate) return undefined;
     const timer = window.setInterval(handleRefresh, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [handleRefresh]);
+  }, [handleRefresh, targetDate]);
 
   return (
     <section className="fixed inset-0 overflow-hidden bg-[#46536a] text-white">
@@ -742,7 +783,11 @@ const HeatwaveBroadcastView = () => {
             className="whitespace-nowrap font-black tracking-tight"
             style={{ fontSize: 'clamp(25px, 2vw, 44px)', textShadow: '0 2px 6px rgba(0,0,0,0.35)' }}
           >
-            {mode === 'tropical' ? '열대야 현황' : '오늘 최고기온'}
+            {mode === 'tropical'
+              ? '열대야 현황'
+              : dataset?.status === 'historical'
+                ? '최고기온'
+                : '오늘 최고기온'}
           </span>
           {dataset ? (
             <div className="ml-auto flex shrink-0 flex-col items-end whitespace-nowrap">
@@ -798,6 +843,54 @@ const HeatwaveBroadcastView = () => {
       ) : null}
 
       <div className="absolute bottom-6 right-6 z-30 flex items-center gap-2">
+        <div className="relative">
+          {isDatePickerOpen ? (
+            <div className="absolute bottom-14 right-0 flex w-72 flex-col gap-3 rounded-xl border border-white/20 bg-slate-950/90 p-4 shadow-2xl backdrop-blur-md">
+              <label className="text-xs font-black tracking-wide text-white/70" htmlFor="heat-history-date">
+                조회 날짜
+              </label>
+              <input
+                id="heat-history-date"
+                type="date"
+                value={dateInput}
+                max={todayDate}
+                onChange={(event) => setDateInput(event.target.value)}
+                className="h-10 rounded-lg border border-white/15 bg-slate-800 px-3 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:border-blue-400"
+              />
+              <button
+                type="button"
+                onClick={handleDateApply}
+                disabled={!dateInput || status === 'loading'}
+                className="h-10 rounded-lg bg-blue-500 text-sm font-black text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                선택 날짜 조회
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setIsDatePickerOpen((value) => !value)}
+            className={`flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-black shadow-lg backdrop-blur-sm transition ${
+              targetDate
+                ? 'border-blue-300/70 bg-blue-500 text-white hover:bg-blue-400'
+                : 'border-white/25 bg-slate-900/70 text-white/85 hover:bg-slate-800'
+            }`}
+            aria-expanded={isDatePickerOpen}
+            aria-label="과거 기온 날짜 선택"
+          >
+            <CalendarDays className="h-5 w-5" />
+            {targetDate ? formatShortDate(targetDate) : '과거 날짜'}
+          </button>
+        </div>
+        {targetDate ? (
+          <button
+            type="button"
+            onClick={handleLatest}
+            className="h-12 rounded-full border border-white/25 bg-white px-4 text-sm font-black text-slate-900 shadow-lg transition hover:bg-white/85"
+          >
+            최신
+          </button>
+        ) : null}
         <div className="flex h-12 items-center rounded-full border border-white/20 bg-slate-950/75 p-1 shadow-xl backdrop-blur-sm">
           {[
             { id: 'tropical', label: '열대야' },
