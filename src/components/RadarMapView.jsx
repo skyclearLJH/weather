@@ -1466,7 +1466,6 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         kimMappingRef.current = buildKimPixelMapping(CANVAS_WIDTH, canvasHeight, meta);
         await loadKimFrameData(nextFrames[0]);
         if (!isActive) return;
-        setKimMeta(meta);
         setKimFrames(nextFrames);
         setKimIndex(0);
         setKimStatus('ready');
