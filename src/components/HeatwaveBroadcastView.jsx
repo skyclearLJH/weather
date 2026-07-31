@@ -416,7 +416,11 @@ const HeatwaveBroadcastView = () => {
   const top5 = useMemo(() => {
     if (!dataset) return [];
     return [...dataset.observations]
-      .filter((row) => mode === 'heat' || row.value >= 25)
+      .filter(
+        (row) =>
+          mode === 'heat' ||
+          (row.stationType === 'ASOS' && row.value >= 25),
+      )
       .sort((left, right) => right.value - left.value)
       .slice(0, 5)
       .map((row) => ({ ...row, label: formatStationLabel(row) }));

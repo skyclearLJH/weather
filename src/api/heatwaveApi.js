@@ -212,15 +212,19 @@ export const buildTropicalNightWindow = (nowMs = Date.now()) => {
 
 const buildTropicalNightData = async (refreshToken = '') => {
   const window = buildTropicalNightWindow();
-  const asosStations = await fetchStationMetadata('ASOS');
+  const [awsStations, asosStations] = await Promise.all([
+    fetchStationMetadata('AWS'),
+    fetchStationMetadata('ASOS'),
+  ]);
+  const stationMetadata = new Map([...awsStations, ...asosStations]);
   const observations = await fetchDailyTemperature(
     formatKmaDay(window.end),
     'ta_min',
-    asosStations,
+    stationMetadata,
     refreshToken,
   );
   if (observations.length < 20) {
-    throw new Error('ASOS 열대야 관측 자료를 충분히 불러오지 못했습니다.');
+    throw new Error('열대야 관측 자료를 충분히 불러오지 못했습니다.');
   }
   return {
     mode: 'tropical',
