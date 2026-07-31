@@ -264,6 +264,11 @@ export const formatStationLabel = (station) => {
     return `${sido}(${stripCityPrefix(station.name, sido)})`;
   }
   const detail = stripCityPrefix(station.name, sigun);
+  if (sido === '제주' && sigun === '제주') {
+    return normalizePlaceName(station.name) === normalizePlaceName(sigun) || detail === '도'
+      ? '제주'
+      : `제주(${detail})`;
+  }
   // 지점명이 '시·군명 + 도(섬)'뿐이면(울릉→울릉도) 괄호가 군더더기라 붙이지 않는다.
   // 독도처럼 다른 이름은 detail이 '도'가 아니므로 '경북 울릉(독도)'로 그대로 남는다.
   if (normalizePlaceName(station.name) === normalizePlaceName(sigun) || detail === '도') {
