@@ -9,10 +9,11 @@ import { formatStationLabel } from '../api/accumApi';
 import { fetchHeatwaveBroadcastData } from '../api/heatwaveApi';
 
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
-const GRID_WIDTH = 224;
-const GRID_HEIGHT = 220;
+const GRID_WIDTH = 576;
+const GRID_HEIGHT = 715;
 const GRID_NEIGHBORS = 6;
-const COLUMN_STRIDE = 3;
+const GRID_BUCKET_SIZE = 16;
+const COLUMN_STRIDE = 2;
 const OVERLAY_ALPHA = 218;
 const TEMPERATURE_SOURCE_ID = 'heat-temperature-columns';
 const TEMPERATURE_LAYER_ID = 'heat-temperature-columns-layer';
@@ -234,25 +235,89 @@ const smoothMaskedGrid = (source, valid, passes = 2) => {
 };
 
 const buildTemperatureGrid = (observations, landMask) => {
-  const projectedStations = observations.map((station) => ({
-    ...projectGridPoint(station.lon, station.lat),
-    value: station.value,
-  }));
+  const projectedStations = observations
+    .filter(
+      (station) =>
+        Number.isFinite(station.lon) &&
+        Number.isFinite(station.lat) &&
+        Number.isFinite(station.value),
+    )
+    .map((station) => ({
+      ...projectGridPoint(station.lon, station.lat),
+      value: station.value,
+    }))
+    .filter(
+      (station) =>
+        station.x >= 0 &&
+        station.x < GRID_WIDTH &&
+        station.y >= 0 &&
+        station.y < GRID_HEIGHT,
+    );
+  const bucketColumns = Math.ceil(GRID_WIDTH / GRID_BUCKET_SIZE);
+  const bucketRows = Math.ceil(GRID_HEIGHT / GRID_BUCKET_SIZE);
+  const buckets = Array.from(
+    { length: bucketColumns * bucketRows },
+    () => [],
+  );
+  projectedStations.forEach((station) => {
+    const bucketX = Math.min(
+      bucketColumns - 1,
+      Math.floor(station.x / GRID_BUCKET_SIZE),
+    );
+    const bucketY = Math.min(
+      bucketRows - 1,
+      Math.floor(station.y / GRID_BUCKET_SIZE),
+    );
+    buckets[bucketY * bucketColumns + bucketX].push(station);
+  });
+  const maxBucketRing = Math.max(bucketColumns, bucketRows);
   const values = new Float32Array(GRID_WIDTH * GRID_HEIGHT).fill(-1);
   for (let y = 0; y < GRID_HEIGHT; y += 1) {
     for (let x = 0; x < GRID_WIDTH; x += 1) {
       const node = y * GRID_WIDTH + x;
       if (!landMask[node]) continue;
       const nearest = [];
-      projectedStations.forEach((station) => {
-        const distance = (station.x - x) ** 2 + (station.y - y) ** 2;
-        let insertAt = nearest.findIndex((candidate) => distance < candidate.distance);
-        if (insertAt < 0) insertAt = nearest.length;
-        if (insertAt < GRID_NEIGHBORS) {
-          nearest.splice(insertAt, 0, { distance, value: station.value });
-          if (nearest.length > GRID_NEIGHBORS) nearest.pop();
+      const centerBucketX = Math.floor(x / GRID_BUCKET_SIZE);
+      const centerBucketY = Math.floor(y / GRID_BUCKET_SIZE);
+      let stopAfterRing = null;
+      for (let ring = 0; ring <= maxBucketRing; ring += 1) {
+        for (let offsetY = -ring; offsetY <= ring; offsetY += 1) {
+          for (let offsetX = -ring; offsetX <= ring; offsetX += 1) {
+            if (
+              ring > 0 &&
+              Math.abs(offsetX) !== ring &&
+              Math.abs(offsetY) !== ring
+            ) {
+              continue;
+            }
+            const bucketX = centerBucketX + offsetX;
+            const bucketY = centerBucketY + offsetY;
+            if (
+              bucketX < 0 ||
+              bucketX >= bucketColumns ||
+              bucketY < 0 ||
+              bucketY >= bucketRows
+            ) {
+              continue;
+            }
+            buckets[bucketY * bucketColumns + bucketX].forEach((station) => {
+              const distance = (station.x - x) ** 2 + (station.y - y) ** 2;
+              let insertAt = nearest.findIndex(
+                (candidate) => distance < candidate.distance,
+              );
+              if (insertAt < 0) insertAt = nearest.length;
+              if (insertAt < GRID_NEIGHBORS) {
+                nearest.splice(insertAt, 0, { distance, value: station.value });
+                if (nearest.length > GRID_NEIGHBORS) nearest.pop();
+              }
+            });
+          }
         }
-      });
+        if (nearest.length >= GRID_NEIGHBORS && stopAfterRing === null) {
+          stopAfterRing = ring + 1;
+        }
+        if (stopAfterRing !== null && ring >= stopAfterRing) break;
+      }
       let weightedValue = 0;
       let weightSum = 0;
       nearest.forEach(({ distance, value }) => {
@@ -280,10 +345,12 @@ const interpolatePaletteColor = (value, palette) => {
   return palette.at(-1).color;
 };
 
-const temperatureHeight = (value, mode) =>
-  mode === 'tropical'
+const temperatureHeight = (value, mode) => {
+  const baseHeight = mode === 'tropical'
     ? Math.min(105000, 3500 + Math.max(0, value - 25) * 14500)
     : Math.min(115000, 2400 + Math.max(0, value - 12) * 4000);
+  return baseHeight * 2;
+};
 
 const ensureAdminLayers = (map) => {
   Object.entries(ADMIN_SOURCE_DEFINITIONS).forEach(([id, data]) => {
@@ -443,6 +510,7 @@ const HeatwaveBroadcastView = () => {
       touchPitch: true,
       localIdeographFontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
     });
+    map.dragRotate._mousePitch?.enable();
     map.touchZoomRotate.disableRotation();
     mapRef.current = map;
     if (import.meta.env.DEV) {
@@ -570,7 +638,7 @@ const HeatwaveBroadcastView = () => {
     });
 
     const features = [];
-    const halfCell = COLUMN_STRIDE * 0.5;
+    const halfCell = COLUMN_STRIDE * 0.505;
     for (let y = Math.floor(COLUMN_STRIDE / 2); y < GRID_HEIGHT; y += COLUMN_STRIDE) {
       for (let x = Math.floor(COLUMN_STRIDE / 2); x < GRID_WIDTH; x += COLUMN_STRIDE) {
         const index = y * GRID_WIDTH + x;
