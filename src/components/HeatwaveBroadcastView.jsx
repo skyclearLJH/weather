@@ -351,7 +351,7 @@ const temperatureHeight = (value, mode) => {
   const baseHeight = mode === 'tropical'
     ? Math.min(105000, 3500 + Math.max(0, value - 25) * 14500)
     : Math.min(115000, 1800 + Math.max(0, value - 33) * 16000);
-  return baseHeight * 2;
+  return baseHeight * (mode === 'tropical' ? 2 : 1.4);
 };
 
 const ensureAdminLayers = (map) => {
