@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Download, Film, MapPin, X } from 'lucide-react';
+import { Check, Download, Film, MapPin } from 'lucide-react';
 import {
   BufferTarget,
   CanvasSource,
@@ -85,7 +85,6 @@ function VideoExportMenu({
   onPreparePlayback,
   onStartPlayback,
 }) {
-  const [isOpen, setIsOpen] = useState(false);
   const [startInput, setStartInput] = useState(defaultStart);
   const [endInput, setEndInput] = useState(defaultEnd);
   const [durationSec, setDurationSec] = useState(10);
@@ -229,22 +228,12 @@ function VideoExportMenu({
 
   return (
     <div data-video-hide className="absolute right-6 top-6 z-50">
-      {isOpen ? (
-        <div className="w-[360px] rounded-lg border border-white/20 bg-slate-950/95 p-4 text-white shadow-2xl backdrop-blur-md">
-          <div className="mb-4 flex items-center justify-between">
+      <div className="w-[360px] rounded-lg border border-white/20 bg-slate-950/95 p-4 text-white shadow-2xl backdrop-blur-md">
+          <div className="mb-4 flex items-center">
             <div className="flex items-center gap-2 text-base font-black">
               <Film className="h-5 w-5 text-cyan-300" />
               동영상 생성
             </div>
-            <button
-              type="button"
-              onClick={() => setIsOpen(false)}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-white/60 transition hover:bg-white/10 hover:text-white"
-              aria-label="동영상 생성 메뉴 닫기"
-              title="닫기"
-            >
-              <X className="h-4 w-4" />
-            </button>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -335,18 +324,7 @@ function VideoExportMenu({
               ? `MP4 생성 중 ${recordingProgress}%`
               : `${currentLabel} MP4 생성`}
           </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setIsOpen(true)}
-          className="flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-slate-950/75 text-white shadow-xl backdrop-blur-sm transition hover:bg-slate-800"
-          aria-label="동영상 생성 메뉴 열기"
-          title="동영상 생성"
-        >
-          <Film className="h-5 w-5" />
-        </button>
-      )}
+      </div>
     </div>
   );
 }

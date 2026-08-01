@@ -354,6 +354,11 @@ const BROADCAST_ADMIN_LAYER_IDS = [
   'broadcast-emd-label',
   'broadcast-dokdo-dot',
 ];
+const BROADCAST_PLACE_LABEL_LAYER_IDS = [
+  'broadcast-sido-label',
+  'broadcast-sgg-label',
+  'broadcast-emd-label',
+];
 
 const SIDO_SHORT_NAME = [
   'match',
@@ -520,6 +525,14 @@ const setBroadcastAdminVisibility = (map, visible) => {
     ensureBroadcastAdminLayers(map);
   }
   BROADCAST_ADMIN_LAYER_IDS.forEach((id) => {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+    }
+  });
+};
+
+const setBroadcastPlaceLabelVisibility = (map, visible) => {
+  BROADCAST_PLACE_LABEL_LAYER_IDS.forEach((id) => {
     if (map.getLayer(id)) {
       map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
     }
@@ -957,6 +970,7 @@ const RadarMapView = ({
   const [isBroadcast, setIsBroadcast] = useState(initialBroadcast);
   const [isBroadcastMapReady, setIsBroadcastMapReady] = useState(initialBroadcast);
   const [workspaceMode, setWorkspaceMode] = useState(initialWorkspaceMode);
+  const [showPlaceLabels, setShowPlaceLabels] = useState(true);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
@@ -3209,14 +3223,17 @@ const RadarMapView = ({
     const applyVisibility = () => {
       map.setMaxZoom(16);
       setBroadcastAdminVisibility(map, true);
+      setBroadcastPlaceLabelVisibility(map, showPlaceLabels);
       if (map.getZoom() >= 9.4) {
         ensureBroadcastEmdLayers(map);
+        setBroadcastPlaceLabelVisibility(map, showPlaceLabels);
       }
     };
 
     const handleAdminZoom = () => {
       if (map.getZoom() >= 9.4) {
         ensureBroadcastEmdLayers(map);
+        setBroadcastPlaceLabelVisibility(map, showPlaceLabels);
       }
     };
     map.on('zoomend', handleAdminZoom);
@@ -3230,7 +3247,7 @@ const RadarMapView = ({
       map.off('load', applyVisibility);
       map.off('zoomend', handleAdminZoom);
     };
-  }, [isBroadcast]);
+  }, [isBroadcast, showPlaceLabels]);
 
   // 최종 전체화면 크기에서 지도를 맞춘 뒤 첫 렌더가 끝나면 전환 화면을 공개한다.
   useEffect(() => {
@@ -3626,6 +3643,8 @@ const RadarMapView = ({
       onSectionChange={handleWorkspaceSectionChange}
       activeView={broadcastView}
       onViewChange={handleWorkspaceViewChange}
+      showPlaceLabels={showPlaceLabels}
+      onShowPlaceLabelsChange={setShowPlaceLabels}
       onExit={exitBroadcastMode}
     />
   );
@@ -3725,6 +3744,7 @@ const RadarMapView = ({
           <SatelliteView
             menuSlot={workspaceMenu}
             workspaceMode={workspaceMode}
+            showPlaceLabels={showPlaceLabels}
             onBeforeScreenShare={handleBeforeVideoScreenShare}
           />
         ) : null}

@@ -1,4 +1,4 @@
-import { Film, MonitorPlay, Pencil, X } from 'lucide-react';
+import { Film, MapPinned, MonitorPlay, Pencil, X } from 'lucide-react';
 
 const MODE_ITEMS = [
   { id: 'broadcast', label: '방송모드', icon: MonitorPlay },
@@ -62,6 +62,8 @@ function WeatherWorkspaceMenu({
   onSectionChange,
   activeView,
   onViewChange,
+  showPlaceLabels,
+  onShowPlaceLabelsChange,
   onExit,
 }) {
   const viewItems = section === 'rain' ? RAIN_ITEMS : HEAT_ITEMS;
@@ -101,6 +103,21 @@ function WeatherWorkspaceMenu({
           onChange={onViewChange}
           activeClassName={section === 'rain' ? 'bg-blue-500 text-white shadow-sm' : 'bg-rose-500 text-white shadow-sm'}
         />
+        {workspaceMode === 'edit' ? (
+          <button
+            type="button"
+            onClick={() => onShowPlaceLabelsChange(!showPlaceLabels)}
+            aria-pressed={showPlaceLabels}
+            className={`flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black shadow-xl backdrop-blur-md transition ${
+              showPlaceLabels
+                ? 'border-emerald-300/60 bg-emerald-400 text-slate-950'
+                : 'border-white/20 bg-slate-950/85 text-white/65 hover:bg-slate-800 hover:text-white'
+            }`}
+          >
+            <MapPinned className="h-4 w-4" aria-hidden="true" />
+            지명 표시
+          </button>
+        ) : null}
       </div>
     </div>
   );

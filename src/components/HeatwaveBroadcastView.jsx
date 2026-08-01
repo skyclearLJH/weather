@@ -95,6 +95,11 @@ const ADMIN_SOURCE_DEFINITIONS = {
   'heat-sgg-labels': '/data/map/kr-sgg-labels-20260701.geojson',
   'heat-emd-labels': '/data/map/kr-emd-labels-20260701.geojson',
 };
+const HEAT_PLACE_LABEL_LAYER_IDS = [
+  'heat-sido-label',
+  'heat-sgg-label',
+  'heat-emd-label',
+];
 
 const TROPICAL_PALETTE = [
   { value: 18, color: [62, 108, 196] },
@@ -579,6 +584,14 @@ const ensureAdminLayers = (map) => {
   ].forEach((layer) => map.addLayer(layer));
 };
 
+const setHeatPlaceLabelVisibility = (map, visible) => {
+  HEAT_PLACE_LABEL_LAYER_IDS.forEach((id) => {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+    }
+  });
+};
+
 const ScaleBar = ({ mode }) => {
   const palette = mode === 'tropical'
     ? TROPICAL_PALETTE
@@ -642,6 +655,7 @@ const HeatwaveBroadcastView = () => {
   const [workspaceMode, setWorkspaceMode] = useState(() =>
     getWorkspaceModeFromLocation('edit'),
   );
+  const [showPlaceLabels, setShowPlaceLabels] = useState(true);
   const [mapStyleMode, setMapStyleMode] = useState('threeD');
   const [dataset, setDataset] = useState(null);
   const [status, setStatus] = useState('loading');
@@ -787,19 +801,24 @@ const HeatwaveBroadcastView = () => {
       ensureAdminLayers(map);
     });
 
-    const handleEscape = (event) => {
-      if (event.key !== 'Escape') return;
-      if (window.history.length > 1) window.history.back();
-      else window.location.href = '/';
-    };
-    window.addEventListener('keydown', handleEscape);
     return () => {
-      window.removeEventListener('keydown', handleEscape);
       map.remove();
       mapRef.current = null;
       timelineOverlayCanvasRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return undefined;
+    const applyVisibility = () => setHeatPlaceLabelVisibility(map, showPlaceLabels);
+    if (map.isStyleLoaded()) {
+      applyVisibility();
+      return undefined;
+    }
+    map.on('load', applyVisibility);
+    return () => map.off('load', applyVisibility);
+  }, [showPlaceLabels]);
 
   useEffect(() => {
     let active = true;
@@ -1211,6 +1230,8 @@ const HeatwaveBroadcastView = () => {
       }}
       activeView={mode}
       onViewChange={handleModeChange}
+      showPlaceLabels={showPlaceLabels}
+      onShowPlaceLabelsChange={setShowPlaceLabels}
       onExit={() => {
         window.location.href = '/';
       }}
