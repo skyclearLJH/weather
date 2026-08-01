@@ -1156,10 +1156,10 @@ function SatelliteView({ menuSlot = null }) {
         </div>
       </div>
 
-      {displayStatus ? <div className="sat-status">{displayStatus}</div> : null}
+      {displayStatus ? <div data-video-hide className="sat-status">{displayStatus}</div> : null}
 
       {/* 하단 반투명 컨트롤바 — 레이더 방송모드와 동일 형태·위치 */}
-      <div className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
+      <div data-video-hide className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -1223,7 +1223,7 @@ function SatelliteView({ menuSlot = null }) {
       </div>
 
       {/* 우하단: (방송모드) 뷰 전환 + 표시 옵션 + 재생 길이 — 레이더와 동일 위치 */}
-      <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
+      <div data-video-hide className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
         {menuSlot}
         <div className="flex items-center gap-2">
           {isHistoryPickerOpen ? (

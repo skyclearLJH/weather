@@ -1260,6 +1260,7 @@ const HeatwaveBroadcastView = () => {
 
       {top5.length > 0 && (mode !== 'change' || showTimelineTop5) ? (
         <div
+          data-video-hide
           className="pointer-events-none absolute z-20 flex justify-center"
           style={{
             left: '4.4%',
@@ -1290,7 +1291,7 @@ const HeatwaveBroadcastView = () => {
       <ScaleBar mode={mode} />
 
       {mode === 'change' ? (
-        <div className="absolute bottom-0 left-[43%] right-0 z-20 bg-gradient-to-t from-slate-950/75 via-slate-950/35 to-transparent pb-3 pl-6 pr-6 pt-10">
+        <div data-video-hide className="absolute bottom-0 left-[43%] right-0 z-20 bg-gradient-to-t from-slate-950/75 via-slate-950/35 to-transparent pb-3 pl-6 pr-6 pt-10">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -1332,7 +1333,7 @@ const HeatwaveBroadcastView = () => {
         </div>
       ) : null}
 
-      <div className={`absolute right-6 z-30 flex items-center gap-2 ${mode === 'change' ? 'bottom-[7.2rem]' : 'bottom-6'}`}>
+      <div data-video-hide className={`absolute right-6 z-30 flex items-center gap-2 ${mode === 'change' ? 'bottom-[7.2rem]' : 'bottom-6'}`}>
         {mode !== 'change' ? (
           <div className="flex items-center gap-1">
           <button

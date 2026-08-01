@@ -147,6 +147,7 @@ function VideoExportMenu({
 
     let stream = null;
     let sourceVideo = null;
+    let cleanCaptureActive = false;
     try {
       setIsRecording(true);
       setRecordingProgress(0);
@@ -164,6 +165,12 @@ function VideoExportMenu({
 
       sourceVideo = document.createElement('video');
       await waitForVideo(sourceVideo, stream);
+      document.body.classList.add('weather-video-capture');
+      cleanCaptureActive = true;
+      await new Promise((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+      });
+      await wait(120);
       const canvas = document.createElement('canvas');
       canvas.width = VIDEO_WIDTH;
       canvas.height = VIDEO_HEIGHT;
@@ -223,13 +230,14 @@ function VideoExportMenu({
     } finally {
       stream?.getTracks().forEach((track) => track.stop());
       if (sourceVideo) sourceVideo.srcObject = null;
+      if (cleanCaptureActive) document.body.classList.remove('weather-video-capture');
       setIsRecording(false);
       setRecordingProgress(0);
     }
   };
 
   return (
-    <div className="absolute right-6 top-6 z-50">
+    <div data-video-hide className="absolute right-6 top-6 z-50">
       {isOpen ? (
         <div className="w-[360px] rounded-lg border border-white/20 bg-slate-950/95 p-4 text-white shadow-2xl backdrop-blur-md">
           <div className="mb-4 flex items-center justify-between">

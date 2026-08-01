@@ -3793,6 +3793,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             {/* 누적 강수량: 기간 최다 강수 5개 지점 */}
             {isAccumView && accumTop5.length > 0 ? (
               <div
+                data-video-hide
                 className="pointer-events-none absolute z-20 flex justify-center"
                 style={{
                   left: '4.4%',
@@ -3831,6 +3832,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             {/* 레이더: 시간당 강수량 최다 5지점 (체크박스로 표시) — 누적 표와 같은 위치·형태 */}
             {isRadarView && showHourlyTop5 && hourlyTop5.length > 0 ? (
               <div
+                data-video-hide
                 className="pointer-events-none absolute z-20 flex justify-center"
                 style={{
                   left: '4.4%',
@@ -3965,11 +3967,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             </div>
 
             {/* 하단 반투명 컨트롤바 */}
-            <div className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
+            <div data-video-hide className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
               {renderTimeline(true)}
             </div>
 
-            <div className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
+            <div data-video-hide className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
               {broadcastViewPills}
               {isRadarView ? renderRadarHistoryControls(true) : null}
               <div className="flex items-center gap-2">
