@@ -924,6 +924,7 @@ const RadarLegend = () => (
 const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const videoCaptureTransitionRef = useRef(false);
   const overlayCanvasRef = useRef(null);
   const transitionFromCanvasRef = useRef(null);
   const transitionToCanvasRef = useRef(null);
@@ -1999,6 +2000,25 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     },
     [isAccumView, isKimView, videoTimelineDates],
   );
+
+  const handleBeforeVideoScreenShare = useCallback(async () => {
+    const activeView = broadcastView;
+    videoCaptureTransitionRef.current = true;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen().catch(() => {});
+      }
+      setFullscreenMode('css');
+      setIsBroadcast(true);
+      setBroadcastView(activeView);
+      await new Promise((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+      });
+      mapRef.current?.resize();
+    } finally {
+      videoCaptureTransitionRef.current = false;
+    }
+  }, [broadcastView]);
 
   const currentFrame = frames[frameIndex];
 
@@ -3134,7 +3154,13 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   useEffect(() => {
     const handleChange = () => {
       if (!document.fullscreenElement) {
-        setFullscreenMode((mode) => (mode === 'native' ? null : mode));
+        setFullscreenMode((mode) =>
+          mode === 'native'
+            ? videoCaptureTransitionRef.current
+              ? 'css'
+              : null
+            : mode,
+        );
       }
     };
     document.addEventListener('fullscreenchange', handleChange);
@@ -3694,7 +3720,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         ) : null}
 
         {/* 위성 뷰: 자체 화면(fixed)이 지도를 덮고, 뷰 전환 버튼은 슬롯으로 넘겨 그대로 쓴다 */}
-        {isSatelliteView ? <SatelliteView menuSlot={broadcastViewPills} /> : null}
+        {isSatelliteView ? (
+          <SatelliteView
+            menuSlot={broadcastViewPills}
+            onBeforeScreenShare={handleBeforeVideoScreenShare}
+          />
+        ) : null}
 
         {isBroadcast && !isSatelliteView ? (
           <>
@@ -3703,6 +3734,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
               mapRef={mapRef}
               defaultStart={videoDefaultStart}
               defaultEnd={videoDefaultEnd}
+              onBeforeScreenShare={handleBeforeVideoScreenShare}
               onPreparePlayback={handleVideoPrepare}
               onStartPlayback={handleVideoStart}
             />

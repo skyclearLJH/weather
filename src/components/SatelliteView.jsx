@@ -616,7 +616,7 @@ const createCloudLayer = () => {
 };
 
 // menuSlot: 방송모드에서 뷰 전환 버튼(레이더/강수량/위성)을 우하단 그룹 위에 얹는다
-function SatelliteView({ menuSlot = null }) {
+function SatelliteView({ menuSlot = null, onBeforeScreenShare }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const cloudLayerRef = useRef(null);
@@ -1017,6 +1017,11 @@ function SatelliteView({ menuSlot = null }) {
     },
     [timeline],
   );
+  const handleBeforeSatelliteScreenShare = useCallback(async () => {
+    await onBeforeScreenShare?.();
+    mapRef.current?.resize();
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  }, [onBeforeScreenShare]);
 
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
@@ -1080,6 +1085,7 @@ function SatelliteView({ menuSlot = null }) {
         mapRef={mapRef}
         defaultStart={videoDefaultStart}
         defaultEnd={videoDefaultEnd}
+        onBeforeScreenShare={handleBeforeSatelliteScreenShare}
         onPreparePlayback={handleVideoPrepare}
         onStartPlayback={handleVideoStart}
       />

@@ -92,6 +92,7 @@ function VideoExportMenu({
   mapRef,
   defaultStart = '',
   defaultEnd = '',
+  onBeforeScreenShare,
   onPreparePlayback,
   onStartPlayback,
 }) {
@@ -153,6 +154,7 @@ function VideoExportMenu({
       setRecordingProgress(0);
       setError('');
       await onPreparePlayback?.({ start: startInput, end: endInput, durationSec });
+      await onBeforeScreenShare?.();
       stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: VIDEO_WIDTH },
