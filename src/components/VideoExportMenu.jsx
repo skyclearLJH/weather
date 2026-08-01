@@ -56,29 +56,18 @@ const waitForVideo = async (video, stream) => {
   });
 };
 
-const drawVideoCover = (context, video) => {
+const drawVideoFrame = (context, video) => {
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
   if (!sourceWidth || !sourceHeight) return false;
-  const sourceAspect = sourceWidth / sourceHeight;
-  const targetAspect = VIDEO_WIDTH / VIDEO_HEIGHT;
-  let sourceX = 0;
-  let sourceY = 0;
-  let cropWidth = sourceWidth;
-  let cropHeight = sourceHeight;
-  if (sourceAspect > targetAspect) {
-    cropWidth = sourceHeight * targetAspect;
-    sourceX = (sourceWidth - cropWidth) / 2;
-  } else if (sourceAspect < targetAspect) {
-    cropHeight = sourceWidth / targetAspect;
-    sourceY = (sourceHeight - cropHeight) / 2;
-  }
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
   context.drawImage(
     video,
-    sourceX,
-    sourceY,
-    cropWidth,
-    cropHeight,
+    0,
+    0,
+    sourceWidth,
+    sourceHeight,
     0,
     0,
     VIDEO_WIDTH,
@@ -199,7 +188,7 @@ function VideoExportMenu({
       const map = mapRef.current;
       map?.jumpTo?.(startCamera);
       await wait(180);
-      drawVideoCover(context, sourceVideo);
+      drawVideoFrame(context, sourceVideo);
       const frameDuration = 1 / VIDEO_FRAME_RATE;
       await videoSource.add(0, frameDuration);
       map?.easeTo?.({ ...endCamera, duration: durationSec * 1000, essential: true });
@@ -210,7 +199,7 @@ function VideoExportMenu({
       for (let frameIndex = 1; frameIndex < totalFrames; frameIndex += 1) {
         const targetTime = startedAt + frameIndex * (1000 / VIDEO_FRAME_RATE);
         await wait(Math.max(0, targetTime - performance.now()));
-        if (!drawVideoCover(context, sourceVideo)) continue;
+        if (!drawVideoFrame(context, sourceVideo)) continue;
         await videoSource.add(frameIndex / VIDEO_FRAME_RATE, frameDuration);
         if (frameIndex % VIDEO_FRAME_RATE === 0 || frameIndex === totalFrames - 1) {
           setRecordingProgress(Math.round((frameIndex / (totalFrames - 1)) * 100));
