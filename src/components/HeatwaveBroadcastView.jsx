@@ -645,9 +645,10 @@ const HeatwaveBroadcastView = () => {
     setRefreshToken((value) => value + 1);
   }, []);
 
-  const handleDateApply = useCallback(() => {
-    if (!dateInput) return;
-    const nextTargetDate = dateInput === formatKstDateInput() ? '' : dateInput;
+  const handleDateSelect = useCallback((nextDate) => {
+    if (!nextDate) return;
+    const nextTargetDate = nextDate === formatKstDateInput() ? '' : nextDate;
+    setDateInput(nextDate);
     setDataset(null);
     setStatus('loading');
     setError('');
@@ -657,7 +658,7 @@ const HeatwaveBroadcastView = () => {
     } else {
       setTargetDate(nextTargetDate);
     }
-  }, [dateInput, targetDate]);
+  }, [targetDate]);
 
   const handleLatest = useCallback(() => {
     setDataset(null);
@@ -867,14 +868,6 @@ const HeatwaveBroadcastView = () => {
 
       <ScaleBar mode={mode} />
 
-      {dataset ? (
-        <div className="pointer-events-none absolute bottom-5 left-5 z-20 max-w-[46vw] rounded-lg bg-slate-900/55 px-4 py-2 text-sm font-semibold text-white/85 shadow-lg backdrop-blur-sm">
-          <span className="font-black text-white">{dataset.windowLabel}</span>
-          <span className="mx-2 text-white/35">|</span>
-          {dataset.note}
-        </div>
-      ) : null}
-
       <div className="absolute bottom-6 right-6 z-30 flex items-center gap-2">
         <div className="flex items-center gap-1">
           <button
@@ -890,7 +883,7 @@ const HeatwaveBroadcastView = () => {
 
           <div className="relative">
             {isDatePickerOpen ? (
-              <div className="absolute bottom-14 right-0 flex w-72 flex-col gap-3 rounded-xl border border-white/20 bg-slate-950/90 p-4 shadow-2xl backdrop-blur-md">
+              <div className="absolute bottom-14 right-0 flex w-72 flex-col gap-2 rounded-xl border border-white/20 bg-slate-950/90 p-4 shadow-2xl backdrop-blur-md">
                 <label className="text-xs font-black tracking-wide text-white/70" htmlFor="heat-history-date">
                   조회 날짜
                 </label>
@@ -899,17 +892,9 @@ const HeatwaveBroadcastView = () => {
                   type="date"
                   value={dateInput}
                   max={todayDate}
-                  onChange={(event) => setDateInput(event.target.value)}
+                  onInput={(event) => handleDateSelect(event.currentTarget.value)}
                   className="h-10 rounded-lg border border-white/15 bg-slate-800 px-3 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:border-blue-400"
                 />
-                <button
-                  type="button"
-                  onClick={handleDateApply}
-                  disabled={!dateInput || status === 'loading'}
-                  className="h-10 rounded-lg bg-blue-500 text-sm font-black text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  선택 날짜 조회
-                </button>
               </div>
             ) : null}
             <button
