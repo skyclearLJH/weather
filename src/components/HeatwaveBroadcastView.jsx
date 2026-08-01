@@ -481,7 +481,9 @@ const ScaleBar = ({ mode }) => {
           {labels.map((value) => (
             <span
               key={value}
-              className="absolute -translate-y-1/2 text-[10px] font-bold leading-none text-white"
+              className={`absolute text-[10px] font-bold leading-none text-white ${
+                value === max ? 'translate-y-full' : '-translate-y-1/2'
+              }`}
               style={{ bottom: `${((value - min) / (max - min)) * 100}%` }}
             >
               {value}
