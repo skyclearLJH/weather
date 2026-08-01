@@ -500,6 +500,7 @@ const HeatwaveBroadcastView = () => {
   const overlayCanvasRef = useRef(null);
   const landMaskRef = useRef(null);
   const [mode, setMode] = useState('tropical');
+  const [mapStyleMode, setMapStyleMode] = useState('threeD');
   const [dataset, setDataset] = useState(null);
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
@@ -704,37 +705,39 @@ const HeatwaveBroadcastView = () => {
     });
 
     const features = [];
-    const halfCell = COLUMN_STRIDE * 0.505;
-    const extrusionThreshold =
-      mode === 'tropical'
-        ? TROPICAL_EXTRUSION_THRESHOLD
-        : HEAT_EXTRUSION_THRESHOLD;
-    for (let y = Math.floor(COLUMN_STRIDE / 2); y < GRID_HEIGHT; y += COLUMN_STRIDE) {
-      for (let x = Math.floor(COLUMN_STRIDE / 2); x < GRID_WIDTH; x += COLUMN_STRIDE) {
-        const index = y * GRID_WIDTH + x;
-        const value = values[index];
-        if (!landMask[index] || value < extrusionThreshold) continue;
-        const color = interpolatePaletteColor(value, palette);
-        features.push({
-          type: 'Feature',
-          properties: {
-            value: Math.round(value * 10) / 10,
-            height: temperatureHeight(value, mode),
-            color: `rgb(${color.join(',')})`,
-          },
-          geometry: {
-            type: 'Polygon',
-            coordinates: [
-              [
-                [gridLon(x - halfCell), gridLat(y - halfCell)],
-                [gridLon(x + halfCell), gridLat(y - halfCell)],
-                [gridLon(x + halfCell), gridLat(y + halfCell)],
-                [gridLon(x - halfCell), gridLat(y + halfCell)],
-                [gridLon(x - halfCell), gridLat(y - halfCell)],
+    if (mapStyleMode === 'threeD') {
+      const halfCell = COLUMN_STRIDE * 0.505;
+      const extrusionThreshold =
+        mode === 'tropical'
+          ? TROPICAL_EXTRUSION_THRESHOLD
+          : HEAT_EXTRUSION_THRESHOLD;
+      for (let y = Math.floor(COLUMN_STRIDE / 2); y < GRID_HEIGHT; y += COLUMN_STRIDE) {
+        for (let x = Math.floor(COLUMN_STRIDE / 2); x < GRID_WIDTH; x += COLUMN_STRIDE) {
+          const index = y * GRID_WIDTH + x;
+          const value = values[index];
+          if (!landMask[index] || value < extrusionThreshold) continue;
+          const color = interpolatePaletteColor(value, palette);
+          features.push({
+            type: 'Feature',
+            properties: {
+              value: Math.round(value * 10) / 10,
+              height: temperatureHeight(value, mode),
+              color: `rgb(${color.join(',')})`,
+            },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [
+                [
+                  [gridLon(x - halfCell), gridLat(y - halfCell)],
+                  [gridLon(x + halfCell), gridLat(y - halfCell)],
+                  [gridLon(x + halfCell), gridLat(y + halfCell)],
+                  [gridLon(x - halfCell), gridLat(y + halfCell)],
+                  [gridLon(x - halfCell), gridLat(y - halfCell)],
+                ],
               ],
-            ],
-          },
-        });
+            },
+          });
+        }
       }
     }
     map.getSource(TEMPERATURE_SOURCE_ID)?.setData({
@@ -743,7 +746,7 @@ const HeatwaveBroadcastView = () => {
     });
     map.triggerRepaint();
     return true;
-  }, [dataset, mode, palette]);
+  }, [dataset, mapStyleMode, mode, palette]);
 
   useEffect(() => {
     if (status !== 'ready') return undefined;
@@ -943,6 +946,30 @@ const HeatwaveBroadcastView = () => {
             최신
           </button>
         ) : null}
+        <div
+          className="flex h-12 items-center rounded-full border border-white/20 bg-slate-950/75 p-1 shadow-xl backdrop-blur-sm"
+          role="group"
+          aria-label="지도 표현 방식"
+        >
+          {[
+            { id: 'flat', label: '평면' },
+            { id: 'threeD', label: '입체' },
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setMapStyleMode(item.id)}
+              aria-pressed={mapStyleMode === item.id}
+              className={`h-10 rounded-full px-4 text-sm font-black transition ${
+                mapStyleMode === item.id
+                  ? 'bg-white text-slate-900'
+                  : 'text-white/65 hover:text-white'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
         <div className="flex h-12 items-center rounded-full border border-white/20 bg-slate-950/75 p-1 shadow-xl backdrop-blur-sm">
           {[
             { id: 'tropical', label: '열대야' },
