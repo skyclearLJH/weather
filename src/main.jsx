@@ -11,12 +11,13 @@ const searchParams = new URLSearchParams(window.location.search)
 const rainGraphicId = searchParams.get('rainGraphic')
 // 위성 영상 뷰는 작업 중 — URL 게이트로만 진입 (일반 UI에는 미노출)
 const isSatelliteView = searchParams.get('satellite') === '1'
-const isHeatwaveBroadcastView =
-  searchParams.get('view') === 'heatwave' && searchParams.get('mode') === 'broadcast'
+const workspaceModes = new Set(['broadcast', 'record', 'edit'])
+const isHeatwaveWorkspaceView =
+  searchParams.get('view') === 'heatwave' && workspaceModes.has(searchParams.get('mode'))
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    {isHeatwaveBroadcastView ? (
+    {isHeatwaveWorkspaceView ? (
       <HeatwaveBroadcastView />
     ) : isSatelliteView ? (
       <SatelliteView />

@@ -615,8 +615,8 @@ const createCloudLayer = () => {
   return layer;
 };
 
-// menuSlot: 방송모드에서 뷰 전환 버튼(레이더/강수량/위성)을 우하단 그룹 위에 얹는다
-function SatelliteView({ menuSlot = null, onBeforeScreenShare }) {
+// menuSlot: 편집·녹화 모드의 공통 작업 메뉴를 우하단 설정 그룹 위에 얹는다.
+function SatelliteView({ menuSlot = null, workspaceMode = 'edit', onBeforeScreenShare }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const cloudLayerRef = useRef(null);
@@ -1080,15 +1080,17 @@ function SatelliteView({ menuSlot = null, onBeforeScreenShare }) {
   return (
     <div className="sat-view">
       <div ref={mapContainerRef} className="sat-map" />
-      <VideoExportMenu
-        currentTarget="satellite"
-        mapRef={mapRef}
-        defaultStart={videoDefaultStart}
-        defaultEnd={videoDefaultEnd}
-        onBeforeScreenShare={handleBeforeSatelliteScreenShare}
-        onPreparePlayback={handleVideoPrepare}
-        onStartPlayback={handleVideoStart}
-      />
+      {workspaceMode === 'record' ? (
+        <VideoExportMenu
+          currentTarget="satellite"
+          mapRef={mapRef}
+          defaultStart={videoDefaultStart}
+          defaultEnd={videoDefaultEnd}
+          onBeforeScreenShare={handleBeforeSatelliteScreenShare}
+          onPreparePlayback={handleVideoPrepare}
+          onStartPlayback={handleVideoStart}
+        />
+      ) : null}
 
       {/* 좌상단: 타이틀 밴드 — 레이더 방송모드와 동일 형태·위치 */}
       <div
@@ -1229,6 +1231,7 @@ function SatelliteView({ menuSlot = null, onBeforeScreenShare }) {
       </div>
 
       {/* 우하단: (방송모드) 뷰 전환 + 표시 옵션 + 재생 길이 — 레이더와 동일 위치 */}
+      {workspaceMode !== 'broadcast' ? (
       <div data-video-hide className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
         {menuSlot}
         <div className="flex items-center gap-2">
@@ -1308,9 +1311,10 @@ function SatelliteView({ menuSlot = null, onBeforeScreenShare }) {
           </select>
         </div>
       </div>
+      ) : null}
 
-      {convHighlight ? (
-        <div className="sat-conv-legend">
+      {workspaceMode === 'edit' && convHighlight ? (
+        <div data-video-hide className="sat-conv-legend">
           <span className="sat-conv-legend-title">강한 대류운 (운정고도)</span>
           <span className="sat-conv-legend-bar" />
           <span className="sat-conv-legend-labels">

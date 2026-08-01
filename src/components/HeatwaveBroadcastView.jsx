@@ -19,6 +19,11 @@ import {
   fetchTemperatureChangeData,
 } from '../api/heatwaveApi';
 import VideoExportMenu from './VideoExportMenu';
+import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
+import {
+  getWorkspaceModeFromLocation,
+  updateWorkspaceModeInUrl,
+} from '../utils/weatherWorkspaceMode.js';
 
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
 const GRID_WIDTH = 576;
@@ -589,6 +594,7 @@ const ScaleBar = ({ mode }) => {
   const max = palette.at(-1).value;
   return (
     <div
+      data-video-hide
       className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
       style={{ top: 'calc(50% - max(23vh, 140px) - 18.5px)' }}
     >
@@ -633,6 +639,9 @@ const HeatwaveBroadcastView = () => {
   const timelinePlaybackStartedAtRef = useRef(0);
   const videoPrepareResolverRef = useRef(null);
   const [mode, setMode] = useState(getInitialTemperatureMode);
+  const [workspaceMode, setWorkspaceMode] = useState(() =>
+    getWorkspaceModeFromLocation('edit'),
+  );
   const [mapStyleMode, setMapStyleMode] = useState('threeD');
   const [dataset, setDataset] = useState(null);
   const [status, setStatus] = useState('loading');
@@ -847,7 +856,24 @@ const HeatwaveBroadcastView = () => {
     setStatus('loading');
     setError('');
     setMode(nextMode);
+    const url = new URL(window.location.href);
+    url.searchParams.set('temperatureMode', nextMode);
+    window.history.replaceState({}, '', url);
   }, []);
+
+  const handleWorkspaceModeChange = useCallback((nextMode) => {
+    setWorkspaceMode(nextMode);
+    updateWorkspaceModeInUrl(nextMode);
+  }, []);
+
+  useEffect(() => {
+    if (workspaceMode !== 'broadcast') return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') handleWorkspaceModeChange('edit');
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleWorkspaceModeChange, workspaceMode]);
 
   const handleRefresh = useCallback(() => {
     setIsTimelinePlaying(false);
@@ -1174,6 +1200,22 @@ const HeatwaveBroadcastView = () => {
     ? (timelineProgress / timelineMaxProgress) * 100
     : 0;
   const timelineInputMax = buildDefaultTimelineRange().end;
+  const workspaceMenu = workspaceMode === 'broadcast' ? null : (
+    <WeatherWorkspaceMenu
+      workspaceMode={workspaceMode}
+      onWorkspaceModeChange={handleWorkspaceModeChange}
+      section="heat"
+      onSectionChange={(nextSection) => {
+        if (nextSection === 'heat') return;
+        window.location.href = `/?view=radar&mode=${workspaceMode}&videoTarget=radar`;
+      }}
+      activeView={mode}
+      onViewChange={handleModeChange}
+      onExit={() => {
+        window.location.href = '/';
+      }}
+    />
+  );
 
   return (
     <section className="fixed inset-0 overflow-hidden bg-[#46536a] text-white">
@@ -1181,14 +1223,16 @@ const HeatwaveBroadcastView = () => {
         <div ref={mapContainerRef} className="h-full w-full" aria-label="폭염 방송 지도" />
       </div>
 
-      <VideoExportMenu
-        currentTarget="temperature"
-        mapRef={mapRef}
-        defaultStart={timelineRange.start}
-        defaultEnd={timelineRange.end}
-        onPreparePlayback={handleVideoPrepare}
-        onStartPlayback={handleVideoStart}
-      />
+      {workspaceMode === 'record' ? (
+        <VideoExportMenu
+          currentTarget="temperature"
+          mapRef={mapRef}
+          defaultStart={timelineRange.start}
+          defaultEnd={timelineRange.end}
+          onPreparePlayback={handleVideoPrepare}
+          onStartPlayback={handleVideoStart}
+        />
+      ) : null}
 
       {status === 'loading' ? (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/25 text-xl font-bold">
@@ -1258,7 +1302,7 @@ const HeatwaveBroadcastView = () => {
         </div>
       </div>
 
-      {top5.length > 0 && (mode !== 'change' || showTimelineTop5) ? (
+      {top5.length > 0 && showTimelineTop5 ? (
         <div
           data-video-hide
           className="pointer-events-none absolute z-20 flex justify-center"
@@ -1288,7 +1332,7 @@ const HeatwaveBroadcastView = () => {
         </div>
       ) : null}
 
-      <ScaleBar mode={mode} />
+      {workspaceMode !== 'broadcast' ? <ScaleBar mode={mode} /> : null}
 
       {mode === 'change' ? (
         <div data-video-hide className="absolute bottom-0 left-[43%] right-0 z-20 bg-gradient-to-t from-slate-950/75 via-slate-950/35 to-transparent pb-3 pl-6 pr-6 pt-10">
@@ -1333,7 +1377,10 @@ const HeatwaveBroadcastView = () => {
         </div>
       ) : null}
 
-      <div data-video-hide className={`absolute right-6 z-30 flex items-center gap-2 ${mode === 'change' ? 'bottom-[7.2rem]' : 'bottom-6'}`}>
+      <div data-video-hide className={`absolute right-6 z-30 flex flex-col items-end gap-2 ${mode === 'change' ? 'bottom-[7.2rem]' : 'bottom-6'}`}>
+        {workspaceMenu}
+        {workspaceMode !== 'broadcast' ? (
+        <div className="flex items-center gap-2">
         {mode !== 'change' ? (
           <div className="flex items-center gap-1">
           <button
@@ -1448,15 +1495,6 @@ const HeatwaveBroadcastView = () => {
                 {timelineRange.start.slice(11)}–{timelineRange.end.slice(11)}
               </button>
             </div>
-            <label className="flex h-12 cursor-pointer items-center gap-2 rounded-full border border-white/20 bg-slate-950/75 px-4 text-sm font-black text-white shadow-xl backdrop-blur-sm">
-              <input
-                type="checkbox"
-                checked={showTimelineTop5}
-                onChange={(event) => setShowTimelineTop5(event.target.checked)}
-                className="h-4 w-4 accent-[#f4c542]"
-              />
-              최고기온 5위
-            </label>
             <select
               value={timelineDurationSec}
               onChange={(event) => setTimelineDurationSec(Number(event.target.value))}
@@ -1496,31 +1534,15 @@ const HeatwaveBroadcastView = () => {
             ))}
           </div>
         )}
-        <div className="flex h-12 items-center rounded-full border border-white/20 bg-slate-950/75 p-1 shadow-xl backdrop-blur-sm">
-          {[
-            { id: 'tropical', label: '열대야' },
-            { id: 'heat', label: '폭염' },
-            { id: 'change', label: '기온 변화' },
-          ].map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => handleModeChange(item.id)}
-              aria-pressed={mode === item.id}
-              className={`h-10 rounded-full px-4 text-sm font-black transition ${
-                mode === item.id
-                  ? item.id === 'tropical'
-                    ? 'bg-[#2875d9] text-white'
-                    : item.id === 'change'
-                      ? 'bg-[#0f8a78] text-white'
-                      : 'bg-[#ef6c32] text-white'
-                  : 'text-white/65 hover:text-white'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <label className="flex h-12 cursor-pointer items-center gap-2 rounded-full border border-white/20 bg-slate-950/75 px-4 text-sm font-black text-white shadow-xl backdrop-blur-sm">
+          <input
+            type="checkbox"
+            checked={showTimelineTop5}
+            onChange={(event) => setShowTimelineTop5(event.target.checked)}
+            className="h-4 w-4 accent-[#f4c542]"
+          />
+          {mode === 'tropical' ? '열대야 5위' : '최고기온 5위'}
+        </label>
         <button
           type="button"
           onClick={handleRefresh}
@@ -1531,6 +1553,18 @@ const HeatwaveBroadcastView = () => {
         >
           <RefreshCw className={`h-5 w-5 ${status === 'loading' ? 'animate-spin' : ''}`} />
         </button>
+        </div>
+        ) : (
+          <label className="flex h-12 cursor-pointer items-center gap-2 rounded-full border border-white/20 bg-slate-950/75 px-4 text-sm font-black text-white shadow-xl backdrop-blur-sm">
+            <input
+              type="checkbox"
+              checked={showTimelineTop5}
+              onChange={(event) => setShowTimelineTop5(event.target.checked)}
+              className="h-4 w-4 accent-[#f4c542]"
+            />
+            {mode === 'tropical' ? '열대야 5위' : '최고기온 5위'}
+          </label>
+        )}
       </div>
     </section>
   );

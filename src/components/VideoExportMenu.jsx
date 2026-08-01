@@ -24,11 +24,11 @@ const VIDEO_FRAME_RATE = 30;
 const VIDEO_BITRATE = 10_000_000;
 
 const TARGET_URLS = {
-  radar: '/?view=radar&mode=broadcast&videoTarget=radar',
-  satellite: '/?view=radar&mode=broadcast&videoTarget=satellite',
-  kim: '/?view=radar&mode=broadcast&videoTarget=kim',
-  accum: '/?view=radar&mode=broadcast&videoTarget=accum',
-  temperature: '/?view=heatwave&mode=broadcast&temperatureMode=change',
+  radar: '/?view=radar&mode=record&videoTarget=radar',
+  satellite: '/?view=radar&mode=record&videoTarget=satellite',
+  kim: '/?view=radar&mode=record&videoTarget=kim',
+  accum: '/?view=radar&mode=record&videoTarget=accum',
+  temperature: '/?view=heatwave&mode=record&temperatureMode=change',
 };
 
 const readCamera = (map) => {

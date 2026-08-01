@@ -47,9 +47,13 @@ const PRECIPITATION_MAX_AUTO_REFRESH_INTERVAL_MS = 65 * 1000;
 const getInitialView = () => {
   const params = new URLSearchParams(window.location.search);
   const isRadarView = params.get('view') === 'radar';
+  const workspaceMode = params.get('mode');
   return {
     selectedTab: isRadarView ? 'radar' : 'forecast',
-    isBroadcast: isRadarView && params.get('mode') === 'broadcast',
+    isBroadcast: isRadarView && ['broadcast', 'record', 'edit'].includes(workspaceMode),
+    workspaceMode: ['broadcast', 'record', 'edit'].includes(workspaceMode)
+      ? workspaceMode
+      : 'edit',
   };
 };
 
@@ -560,6 +564,7 @@ function App() {
         <RadarMapView
           refreshToken={refreshTrigger}
           initialBroadcast={initialView.isBroadcast}
+          initialWorkspaceMode={initialView.workspaceMode}
         />
       );
     }

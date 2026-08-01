@@ -3,6 +3,8 @@ import { CalendarClock, Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'luc
 import SatelliteView from './SatelliteView.jsx';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import VideoExportMenu from './VideoExportMenu.jsx';
+import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
+import { updateWorkspaceModeInUrl } from '../utils/weatherWorkspaceMode.js';
 import { createAccumSurfaceLayer } from './AccumSurfaceLayer.js';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -921,7 +923,11 @@ const RadarLegend = () => (
   </div>
 );
 
-const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
+const RadarMapView = ({
+  refreshToken = 0,
+  initialBroadcast = false,
+  initialWorkspaceMode = 'edit',
+}) => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const videoCaptureTransitionRef = useRef(false);
@@ -950,6 +956,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   // 방송모드: 전체화면 + 방송 그래픽 레이아웃 (PC 전용)
   const [isBroadcast, setIsBroadcast] = useState(initialBroadcast);
   const [isBroadcastMapReady, setIsBroadcastMapReady] = useState(initialBroadcast);
+  const [workspaceMode, setWorkspaceMode] = useState(initialWorkspaceMode);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
@@ -1009,6 +1016,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   // 레이더 화면 위 '시간당 강수량' 최다 5지점 표 (체크박스로 켜고 끈다).
   // 자료는 일반 페이지 '강수량 > 60분 현재'와 같은 서버 랭킹(precipitation-current)을 쓴다.
   const [showHourlyTop5, setShowHourlyTop5] = useState(false);
+  const [showAccumTop5, setShowAccumTop5] = useState(false);
   const [hourlyTop5, setHourlyTop5] = useState([]);
 
   useEffect(() => {
@@ -3281,10 +3289,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const enterBroadcastMode = useCallback(() => {
     setIsBroadcastMapReady(false);
     setIsBroadcast(true);
+    setWorkspaceMode('edit');
+    updateWorkspaceModeInUrl('edit');
     if (!fullscreenMode) {
       toggleFullscreen();
     }
   }, [fullscreenMode, toggleFullscreen]);
+
+  const handleWorkspaceModeChange = useCallback((nextMode) => {
+    setWorkspaceMode(nextMode);
+    updateWorkspaceModeInUrl(nextMode);
+  }, []);
 
   const exitBroadcastMode = useCallback(() => {
     setIsBroadcast(false);
@@ -3304,19 +3319,19 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     }
   }, [isFullscreen]);
 
-  // CSS 대체 전체화면에서도 Esc 키로 방송모드를 빠져나올 수 있게 한다.
+  // 깔끔한 방송 화면에서는 Esc로 설정을 유지한 채 편집 메뉴를 다시 연다.
   useEffect(() => {
-    if (!isBroadcast) {
+    if (!isBroadcast || workspaceMode !== 'broadcast') {
       return undefined;
     }
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
-        exitBroadcastMode();
+        handleWorkspaceModeChange('edit');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isBroadcast, exitBroadcastMode]);
+  }, [handleWorkspaceModeChange, isBroadcast, workspaceMode]);
 
   // 방송모드에서는 +/− 줌 버튼을 숨긴다(터치스크린 두 손가락 줌 사용).
   useEffect(() => {
@@ -3589,44 +3604,30 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     );
   };
 
-  // 방송모드 뷰 전환 — 지도 화면과 위성 화면 양쪽에서 쓴다.
-  const broadcastViewPills = (
-    <div className="flex rounded-xl border border-cyan-100/45 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md">
-      {[
-        { id: 'radar', label: '레이더' },
-        { id: 'kim', label: '강수 예상' },
-        { id: 'accum', label: '강수량' },
-        { id: 'satellite', label: '위성' },
-      ].map(({ id, label }) => {
-        const isActive = broadcastView === id;
-        return (
-          <button
-            key={id}
-            type="button"
-            onClick={() => {
-              if (!isActive) {
-                setIsPlaying(false);
-                setBroadcastView(id);
-              }
-            }}
-            className={`h-10 rounded-lg px-4 text-sm font-black tracking-tight transition ${
-              isActive
-                ? id === 'accum'
-                  ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30'
-                  : id === 'kim'
-                    ? 'bg-emerald-400 text-slate-950 shadow-md shadow-emerald-950/30'
-                  : id === 'satellite'
-                    ? 'bg-violet-400 text-slate-950 shadow-md shadow-violet-950/30'
-                    : 'bg-cyan-400 text-slate-950 shadow-md shadow-cyan-950/30'
-                : 'text-white/75 hover:bg-white/10 hover:text-white'
-            }`}
-            aria-pressed={isActive}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
+  const handleWorkspaceSectionChange = (nextSection) => {
+    if (nextSection === 'rain') return;
+    window.location.href = `/?view=heatwave&mode=${workspaceMode}&temperatureMode=heat`;
+  };
+
+  const handleWorkspaceViewChange = (nextView) => {
+    if (nextView === broadcastView) return;
+    setIsPlaying(false);
+    setBroadcastView(nextView);
+    const url = new URL(window.location.href);
+    url.searchParams.set('videoTarget', nextView);
+    window.history.replaceState({}, '', url);
+  };
+
+  const workspaceMenu = workspaceMode === 'broadcast' ? null : (
+    <WeatherWorkspaceMenu
+      workspaceMode={workspaceMode}
+      onWorkspaceModeChange={handleWorkspaceModeChange}
+      section="rain"
+      onSectionChange={handleWorkspaceSectionChange}
+      activeView={broadcastView}
+      onViewChange={handleWorkspaceViewChange}
+      onExit={exitBroadcastMode}
+    />
   );
 
   return (
@@ -3722,22 +3723,25 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
         {/* 위성 뷰: 자체 화면(fixed)이 지도를 덮고, 뷰 전환 버튼은 슬롯으로 넘겨 그대로 쓴다 */}
         {isSatelliteView ? (
           <SatelliteView
-            menuSlot={broadcastViewPills}
+            menuSlot={workspaceMenu}
+            workspaceMode={workspaceMode}
             onBeforeScreenShare={handleBeforeVideoScreenShare}
           />
         ) : null}
 
         {isBroadcast && !isSatelliteView ? (
           <>
-            <VideoExportMenu
-              currentTarget={isAccumView ? 'accum' : isKimView ? 'kim' : 'radar'}
-              mapRef={mapRef}
-              defaultStart={videoDefaultStart}
-              defaultEnd={videoDefaultEnd}
-              onBeforeScreenShare={handleBeforeVideoScreenShare}
-              onPreparePlayback={handleVideoPrepare}
-              onStartPlayback={handleVideoStart}
-            />
+            {workspaceMode === 'record' ? (
+              <VideoExportMenu
+                currentTarget={isAccumView ? 'accum' : isKimView ? 'kim' : 'radar'}
+                mapRef={mapRef}
+                defaultStart={videoDefaultStart}
+                defaultEnd={videoDefaultEnd}
+                onBeforeScreenShare={handleBeforeVideoScreenShare}
+                onPreparePlayback={handleVideoPrepare}
+                onStartPlayback={handleVideoStart}
+              />
+            ) : null}
             {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}
             <div
               className="pointer-events-none absolute z-20 flex items-center gap-[1vw]"
@@ -3823,7 +3827,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             </div>
 
             {/* 누적 강수량: 기간 최다 강수 5개 지점 */}
-            {isAccumView && accumTop5.length > 0 ? (
+            {isAccumView && showAccumTop5 && accumTop5.length > 0 ? (
               <div
                 data-video-hide
                 className="pointer-events-none absolute z-20 flex justify-center"
@@ -3907,10 +3911,12 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             ) : null}
 
             {/* 좌측 세로 스케일: 레이더(mm/h) 또는 누적 강수량(mm) */}
-            <div
-              className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
-              style={{ top: 'calc(50% - max(23vh, 140px) - 18.5px)' }}
-            >
+            {workspaceMode !== 'broadcast' ? (
+              <div
+                data-video-hide
+                className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
+                style={{ top: 'calc(50% - max(23vh, 140px) - 18.5px)' }}
+              >
               {isAccumView ? (
                 <>
                   <div className="flex h-[46vh] min-h-[280px]">
@@ -3996,7 +4002,8 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                   </div>
                 </>
               )}
-            </div>
+              </div>
+            ) : null}
 
             {/* 하단 반투명 컨트롤바 */}
             <div data-video-hide className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">
@@ -4004,9 +4011,11 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
             </div>
 
             <div data-video-hide className="absolute bottom-[8.5rem] right-6 z-20 flex flex-col items-end gap-2.5">
-              {broadcastViewPills}
-              {isRadarView ? renderRadarHistoryControls(true) : null}
-              <div className="flex items-center gap-2">
+              {workspaceMenu}
+              {workspaceMode !== 'broadcast' ? (
+                <>
+                  {isRadarView ? renderRadarHistoryControls(true) : null}
+                  <div className="flex items-center gap-2">
                 {isAccumView ? (
                   <>
                     {accumRangeMode === 'custom' ? (
@@ -4148,6 +4157,17 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     시간당 강수량
                   </label>
                 ) : null}
+                {isAccumView ? (
+                  <label className="flex h-10 cursor-pointer items-center gap-2 rounded-full border border-white/25 bg-slate-900/55 px-3.5 text-sm font-semibold text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-900/75">
+                    <input
+                      type="checkbox"
+                      checked={showAccumTop5}
+                      onChange={(event) => setShowAccumTop5(event.target.checked)}
+                      className="h-4 w-4 cursor-pointer accent-[#f4c542]"
+                    />
+                    누적강수량 5위
+                  </label>
+                ) : null}
                 {!isAccumView ? (
                   <button
                     type="button"
@@ -4163,7 +4183,22 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
                     />
                   </button>
                 ) : null}
-              </div>
+                  </div>
+                </>
+              ) : isRadarView || isAccumView ? (
+                <label className="flex h-10 cursor-pointer items-center gap-2 rounded-full border border-white/25 bg-slate-950/75 px-3.5 text-sm font-black text-white shadow-xl backdrop-blur-sm">
+                  <input
+                    type="checkbox"
+                    checked={isRadarView ? showHourlyTop5 : showAccumTop5}
+                    onChange={(event) => {
+                      if (isRadarView) setShowHourlyTop5(event.target.checked);
+                      else setShowAccumTop5(event.target.checked);
+                    }}
+                    className="h-4 w-4 cursor-pointer accent-[#f4c542]"
+                  />
+                  {isRadarView ? '시간당 강수량 5위' : '누적강수량 5위'}
+                </label>
+              ) : null}
             </div>
 
           </>
