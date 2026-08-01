@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, RefreshCw } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
@@ -30,6 +30,13 @@ const formatKstDateInput = (nowMs = Date.now()) => {
 const formatShortDate = (value) => {
   const [, month = '', day = ''] = value.split('-');
   return `${Number(month)}/${Number(day)}`;
+};
+
+const shiftDateInput = (value, dayOffset) => {
+  const [year, month, day] = value.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + dayOffset));
+  const pad = (part) => String(part).padStart(2, '0');
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`;
 };
 
 const ADMIN_SOURCE_DEFINITIONS = {
@@ -658,6 +665,19 @@ const HeatwaveBroadcastView = () => {
     setIsDatePickerOpen(false);
   }, []);
 
+  const handleDateStep = useCallback((dayOffset) => {
+    const currentDate = targetDate || todayDate;
+    const shiftedDate = shiftDateInput(currentDate, dayOffset);
+    const nextTargetDate = shiftedDate >= todayDate ? '' : shiftedDate;
+
+    setDataset(null);
+    setStatus('loading');
+    setError('');
+    setDateInput(nextTargetDate || todayDate);
+    setTargetDate(nextTargetDate);
+    setIsDatePickerOpen(false);
+  }, [targetDate, todayDate]);
+
   const renderDataset = useCallback(() => {
     const map = mapRef.current;
     const canvas = overlayCanvasRef.current;
@@ -851,43 +871,67 @@ const HeatwaveBroadcastView = () => {
       ) : null}
 
       <div className="absolute bottom-6 right-6 z-30 flex items-center gap-2">
-        <div className="relative">
-          {isDatePickerOpen ? (
-            <div className="absolute bottom-14 right-0 flex w-72 flex-col gap-3 rounded-xl border border-white/20 bg-slate-950/90 p-4 shadow-2xl backdrop-blur-md">
-              <label className="text-xs font-black tracking-wide text-white/70" htmlFor="heat-history-date">
-                조회 날짜
-              </label>
-              <input
-                id="heat-history-date"
-                type="date"
-                value={dateInput}
-                max={todayDate}
-                onChange={(event) => setDateInput(event.target.value)}
-                className="h-10 rounded-lg border border-white/15 bg-slate-800 px-3 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:border-blue-400"
-              />
-              <button
-                type="button"
-                onClick={handleDateApply}
-                disabled={!dateInput || status === 'loading'}
-                className="h-10 rounded-lg bg-blue-500 text-sm font-black text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                선택 날짜 조회
-              </button>
-            </div>
-          ) : null}
+        <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => setIsDatePickerOpen((value) => !value)}
-            className={`flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-black shadow-lg backdrop-blur-sm transition ${
-              targetDate
-                ? 'border-blue-300/70 bg-blue-500 text-white hover:bg-blue-400'
-                : 'border-white/25 bg-slate-900/70 text-white/85 hover:bg-slate-800'
-            }`}
-            aria-expanded={isDatePickerOpen}
-            aria-label="과거 기온 날짜 선택"
+            onClick={() => handleDateStep(-1)}
+            disabled={status === 'loading'}
+            className="flex h-12 w-12 items-center justify-center rounded-full border border-white/25 bg-slate-900/70 text-white/85 shadow-lg backdrop-blur-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={`${mode === 'tropical' ? '열대야' : '폭염'} 전날 조회`}
+            title="전날 조회"
           >
-            <CalendarDays className="h-5 w-5" />
-            {targetDate ? formatShortDate(targetDate) : '과거 날짜'}
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+
+          <div className="relative">
+            {isDatePickerOpen ? (
+              <div className="absolute bottom-14 right-0 flex w-72 flex-col gap-3 rounded-xl border border-white/20 bg-slate-950/90 p-4 shadow-2xl backdrop-blur-md">
+                <label className="text-xs font-black tracking-wide text-white/70" htmlFor="heat-history-date">
+                  조회 날짜
+                </label>
+                <input
+                  id="heat-history-date"
+                  type="date"
+                  value={dateInput}
+                  max={todayDate}
+                  onChange={(event) => setDateInput(event.target.value)}
+                  className="h-10 rounded-lg border border-white/15 bg-slate-800 px-3 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:border-blue-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleDateApply}
+                  disabled={!dateInput || status === 'loading'}
+                  className="h-10 rounded-lg bg-blue-500 text-sm font-black text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  선택 날짜 조회
+                </button>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setIsDatePickerOpen((value) => !value)}
+              className={`flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-black shadow-lg backdrop-blur-sm transition ${
+                targetDate
+                  ? 'border-blue-300/70 bg-blue-500 text-white hover:bg-blue-400'
+                  : 'border-white/25 bg-slate-900/70 text-white/85 hover:bg-slate-800'
+              }`}
+              aria-expanded={isDatePickerOpen}
+              aria-label="과거 기온 날짜 선택"
+            >
+              <CalendarDays className="h-5 w-5" />
+              {targetDate ? formatShortDate(targetDate) : '과거 날짜'}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => handleDateStep(1)}
+            disabled={!targetDate || status === 'loading'}
+            className="flex h-12 w-12 items-center justify-center rounded-full border border-white/25 bg-slate-900/70 text-white/85 shadow-lg backdrop-blur-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={`${mode === 'tropical' ? '열대야' : '폭염'} 다음날 조회`}
+            title="다음날 조회"
+          >
+            <ChevronRight className="h-6 w-6" />
           </button>
         </div>
         {targetDate ? (
