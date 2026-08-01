@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Pause,
+  Play,
+  RefreshCw,
+  SlidersHorizontal,
+} from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import krProvinces from '../data/map/krProvinces.json';
 import interKoreanSeam from '../data/map/interKoreanSeam.json';
 import neighborCoasts from '../data/map/neighborCoasts.json';
 import { formatStationLabel } from '../api/accumApi';
-import { fetchHeatwaveBroadcastData } from '../api/heatwaveApi';
+import {
+  fetchHeatwaveBroadcastData,
+  fetchTemperatureChangeData,
+} from '../api/heatwaveApi';
+import VideoExportMenu from './VideoExportMenu';
 
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
 const GRID_WIDTH = 576;
@@ -14,12 +26,17 @@ const GRID_HEIGHT = 715;
 const GRID_NEIGHBORS = 6;
 const GRID_BUCKET_SIZE = 16;
 const COLUMN_STRIDE = 2;
+const TIMELINE_COLUMN_STRIDE = 4;
 const OVERLAY_ALPHA = 218;
 const TROPICAL_EXTRUSION_THRESHOLD = 25;
 const HEAT_EXTRUSION_THRESHOLD = 33;
 const TEMPERATURE_SOURCE_ID = 'heat-temperature-columns';
 const TEMPERATURE_LAYER_ID = 'heat-temperature-columns-layer';
+const TIMELINE_OVERLAY_SOURCE_ID = 'heat-temperature-overlay-next';
+const TIMELINE_OVERLAY_LAYER_ID = 'heat-temperature-overlay-next-layer';
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const TIMELINE_RENDER_INTERVAL_MS = 40;
+const TIMELINE_PLAY_DURATIONS = [6, 8, 10, 12, 15, 20];
 
 const formatKstDateInput = (nowMs = Date.now()) => {
   const date = new Date(nowMs + KST_OFFSET_MS);
@@ -30,6 +47,32 @@ const formatKstDateInput = (nowMs = Date.now()) => {
 const formatShortDate = (value) => {
   const [, month = '', day = ''] = value.split('-');
   return `${Number(month)}/${Number(day)}`;
+};
+
+const formatKstDateTimeInput = (date) => {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}` +
+    `T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+};
+
+const buildDefaultTimelineRange = (nowMs = Date.now()) => {
+  const now = new Date(nowMs + KST_OFFSET_MS - 3 * 60 * 1000);
+  now.setUTCMinutes(Math.floor(now.getUTCMinutes() / 30) * 30, 0, 0);
+  const start = new Date(now);
+  start.setUTCHours(7, 0, 0, 0);
+  if (start >= now) start.setTime(now.getTime() - 30 * 60 * 1000);
+  return {
+    start: formatKstDateTimeInput(start),
+    end: formatKstDateTimeInput(now),
+  };
+};
+
+const formatTimelineClock = (timestamp = '') =>
+  timestamp.length >= 12 ? `${timestamp.slice(8, 10)}:${timestamp.slice(10, 12)}` : '';
+
+const getInitialTemperatureMode = () => {
+  const requested = new URLSearchParams(window.location.search).get('temperatureMode');
+  return requested === 'change' ? 'change' : 'tropical';
 };
 
 const shiftDateInput = (value, dayOffset) => {
@@ -66,6 +109,15 @@ const HEAT_PALETTE = [
   { value: 35, color: [218, 54, 48] },
   { value: 40, color: [128, 42, 138] },
   { value: 43, color: [64, 24, 93] },
+];
+
+const TIMELINE_PALETTE = [
+  { value: 20, color: [55, 105, 196] },
+  { value: 25, color: [69, 190, 205] },
+  { value: 30, color: [245, 207, 58] },
+  { value: 35, color: [239, 105, 43] },
+  { value: 40, color: [198, 39, 72] },
+  { value: 45, color: [73, 25, 103] },
 ];
 
 const MAP_STYLE = {
@@ -367,10 +419,79 @@ const interpolatePaletteColor = (value, palette) => {
 };
 
 const temperatureHeight = (value, mode) => {
+  if (mode === 'change') {
+    const bounded = Math.min(45, Math.max(20, value));
+    return 4500 + (bounded - 20) * 5700;
+  }
   const baseHeight = mode === 'tropical'
     ? Math.min(105000, 3500 + Math.max(0, value - 25) * 14500)
     : Math.min(115000, 1800 + Math.max(0, value - 33) * 16000);
   return baseHeight * (mode === 'tropical' ? 2 : 1.4);
+};
+
+const drawTemperatureGrid = (canvas, grid, palette) => {
+  const context = canvas.getContext('2d');
+  const image = context.createImageData(GRID_WIDTH, GRID_HEIGHT);
+  for (let index = 0; index < grid.length; index += 1) {
+    const value = grid[index];
+    if (value === -1 || value < -40) continue;
+    const color = interpolatePaletteColor(value, palette);
+    const offset = index * 4;
+    image.data[offset] = color[0];
+    image.data[offset + 1] = color[1];
+    image.data[offset + 2] = color[2];
+    image.data[offset + 3] = OVERLAY_ALPHA;
+  }
+  context.putImageData(image, 0, 0);
+};
+
+const buildTimelineExtrusionFeatures = (fromGrid, toGrid) => {
+  const features = [];
+  const halfCell = TIMELINE_COLUMN_STRIDE * 0.505;
+  for (
+    let y = Math.floor(TIMELINE_COLUMN_STRIDE / 2);
+    y < GRID_HEIGHT;
+    y += TIMELINE_COLUMN_STRIDE
+  ) {
+    for (
+      let x = Math.floor(TIMELINE_COLUMN_STRIDE / 2);
+      x < GRID_WIDTH;
+      x += TIMELINE_COLUMN_STRIDE
+    ) {
+      const index = y * GRID_WIDTH + x;
+      const fromValue = fromGrid[index];
+      const toValue = toGrid[index];
+      const fromMissing = fromValue === -1 || fromValue < -40;
+      const toMissing = toValue === -1 || toValue < -40;
+      if (fromMissing && toMissing) continue;
+      const safeFromValue = fromMissing ? toValue : fromValue;
+      const safeToValue = toMissing ? safeFromValue : toValue;
+      const fromColor = interpolatePaletteColor(safeFromValue, TIMELINE_PALETTE);
+      const toColor = interpolatePaletteColor(safeToValue, TIMELINE_PALETTE);
+      features.push({
+        type: 'Feature',
+        properties: {
+          fromHeight: temperatureHeight(safeFromValue, 'change'),
+          toHeight: temperatureHeight(safeToValue, 'change'),
+          fromColor: `rgb(${fromColor.join(',')})`,
+          toColor: `rgb(${toColor.join(',')})`,
+        },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [gridLon(x - halfCell), gridLat(y - halfCell)],
+              [gridLon(x + halfCell), gridLat(y - halfCell)],
+              [gridLon(x + halfCell), gridLat(y + halfCell)],
+              [gridLon(x - halfCell), gridLat(y + halfCell)],
+              [gridLon(x - halfCell), gridLat(y - halfCell)],
+            ],
+          ],
+        },
+      });
+    }
+  }
+  return features;
 };
 
 const ensureAdminLayers = (map) => {
@@ -456,8 +577,14 @@ const ensureAdminLayers = (map) => {
 const ScaleBar = ({ mode }) => {
   const palette = mode === 'tropical'
     ? TROPICAL_PALETTE
-    : HEAT_PALETTE.filter(({ value }) => value >= 30);
-  const labels = mode === 'tropical' ? [18, 22, 25, 27, 30, 33] : [30, 33, 35, 40, 43];
+    : mode === 'change'
+      ? TIMELINE_PALETTE
+      : HEAT_PALETTE.filter(({ value }) => value >= 30);
+  const labels = mode === 'tropical'
+    ? [18, 22, 25, 27, 30, 33]
+    : mode === 'change'
+      ? [20, 25, 30, 35, 40, 45]
+      : [30, 33, 35, 40, 43];
   const min = palette[0].value;
   const max = palette.at(-1).value;
   return (
@@ -500,8 +627,12 @@ const HeatwaveBroadcastView = () => {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const overlayCanvasRef = useRef(null);
+  const timelineOverlayCanvasRef = useRef(null);
   const landMaskRef = useRef(null);
-  const [mode, setMode] = useState('tropical');
+  const timelinePairRef = useRef(-1);
+  const timelinePlaybackStartedAtRef = useRef(0);
+  const videoPrepareResolverRef = useRef(null);
+  const [mode, setMode] = useState(getInitialTemperatureMode);
   const [mapStyleMode, setMapStyleMode] = useState('threeD');
   const [dataset, setDataset] = useState(null);
   const [status, setStatus] = useState('loading');
@@ -510,15 +641,37 @@ const HeatwaveBroadcastView = () => {
   const [targetDate, setTargetDate] = useState('');
   const [dateInput, setDateInput] = useState(() => formatKstDateInput());
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [initialTimelineRange] = useState(buildDefaultTimelineRange);
+  const [timelineStartInput, setTimelineStartInput] = useState(initialTimelineRange.start);
+  const [timelineEndInput, setTimelineEndInput] = useState(initialTimelineRange.end);
+  const [timelineRange, setTimelineRange] = useState(initialTimelineRange);
+  const [isTimelineRangeOpen, setIsTimelineRangeOpen] = useState(false);
+  const [timelineProgress, setTimelineProgress] = useState(0);
+  const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
+  const [timelineDurationSec, setTimelineDurationSec] = useState(10);
+  const [showTimelineTop5, setShowTimelineTop5] = useState(true);
   const todayDate = formatKstDateInput();
 
-  const palette = mode === 'tropical' ? TROPICAL_PALETTE : HEAT_PALETTE;
+  const palette = mode === 'tropical'
+    ? TROPICAL_PALETTE
+    : mode === 'change'
+      ? TIMELINE_PALETTE
+      : HEAT_PALETTE;
+  const timelineFrames = useMemo(
+    () => (mode === 'change' ? dataset?.frames ?? [] : []),
+    [dataset, mode],
+  );
+  const timelineMaxProgress = Math.max(0, timelineFrames.length - 1);
+  const activeTimelineFrame = timelineFrames[
+    Math.min(timelineFrames.length - 1, Math.round(timelineProgress))
+  ] ?? null;
   const top5 = useMemo(() => {
     if (!dataset) return [];
-    return [...dataset.observations]
+    const sourceRows = mode === 'change' ? dataset.ranking ?? [] : dataset.observations ?? [];
+    return [...sourceRows]
       .filter(
         (row) =>
-          mode === 'heat' ||
+          mode === 'heat' || mode === 'change' ||
           (row.stationType === 'ASOS' && row.value >= 25),
       )
       .sort((left, right) => right.value - left.value)
@@ -553,6 +706,10 @@ const HeatwaveBroadcastView = () => {
     overlayCanvas.width = GRID_WIDTH;
     overlayCanvas.height = GRID_HEIGHT;
     overlayCanvasRef.current = overlayCanvas;
+    const timelineOverlayCanvas = document.createElement('canvas');
+    timelineOverlayCanvas.width = GRID_WIDTH;
+    timelineOverlayCanvas.height = GRID_HEIGHT;
+    timelineOverlayCanvasRef.current = timelineOverlayCanvas;
     landMaskRef.current = buildLandMask();
 
     map.on('load', () => {
@@ -573,6 +730,29 @@ const HeatwaveBroadcastView = () => {
           type: 'raster',
           source: 'heat-temperature-overlay',
           paint: { 'raster-opacity': 1, 'raster-resampling': 'linear' },
+        },
+        'province-border',
+      );
+      map.addSource(TIMELINE_OVERLAY_SOURCE_ID, {
+        type: 'canvas',
+        canvas: timelineOverlayCanvas,
+        animate: false,
+        coordinates: [
+          [VIEW_BOUNDS.lonMin, VIEW_BOUNDS.latMax],
+          [VIEW_BOUNDS.lonMax, VIEW_BOUNDS.latMax],
+          [VIEW_BOUNDS.lonMax, VIEW_BOUNDS.latMin],
+          [VIEW_BOUNDS.lonMin, VIEW_BOUNDS.latMin],
+        ],
+      });
+      map.addLayer(
+        {
+          id: TIMELINE_OVERLAY_LAYER_ID,
+          type: 'raster',
+          source: TIMELINE_OVERLAY_SOURCE_ID,
+          paint: {
+            'raster-opacity': 0,
+            'raster-resampling': 'linear',
+          },
         },
         'province-border',
       );
@@ -608,18 +788,46 @@ const HeatwaveBroadcastView = () => {
       window.removeEventListener('keydown', handleEscape);
       map.remove();
       mapRef.current = null;
+      timelineOverlayCanvasRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     let active = true;
-    fetchHeatwaveBroadcastData(mode, {
-      refreshToken: refreshToken ? `${Date.now()}` : '',
-      targetDate,
-    })
-      .then((result) => {
+    const refreshValue = refreshToken ? `${Date.now()}` : '';
+    const request = mode === 'change'
+      ? fetchTemperatureChangeData({
+          start: timelineRange.start,
+          end: timelineRange.end,
+          refreshToken: refreshValue,
+        })
+      : fetchHeatwaveBroadcastData(mode, {
+          refreshToken: refreshValue,
+          targetDate,
+        });
+
+    request
+      .then(async (result) => {
         if (!active) return;
-        setDataset(result);
+        if (mode === 'change') {
+          const landMask = landMaskRef.current;
+          if (!landMask) throw new Error('기온 변화 지도 영역을 준비하지 못했습니다.');
+          const preparedFrames = [];
+          for (const frame of result.frames) {
+            if (!active) return;
+            preparedFrames.push({
+              ...frame,
+              grid: buildTemperatureGrid(frame.observations, landMask),
+            });
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+          }
+          if (!active) return;
+          setDataset({ ...result, frames: preparedFrames });
+          setTimelineProgress(0);
+          timelinePairRef.current = -1;
+        } else {
+          setDataset(result);
+        }
         setStatus('ready');
       })
       .catch((loadError) => {
@@ -630,9 +838,11 @@ const HeatwaveBroadcastView = () => {
     return () => {
       active = false;
     };
-  }, [mode, refreshToken, targetDate]);
+  }, [mode, refreshToken, targetDate, timelineRange]);
 
   const handleModeChange = useCallback((nextMode) => {
+    setIsTimelinePlaying(false);
+    timelinePairRef.current = -1;
     setDataset(null);
     setStatus('loading');
     setError('');
@@ -640,6 +850,7 @@ const HeatwaveBroadcastView = () => {
   }, []);
 
   const handleRefresh = useCallback(() => {
+    setIsTimelinePlaying(false);
     setStatus('loading');
     setError('');
     setRefreshToken((value) => value + 1);
@@ -682,11 +893,102 @@ const HeatwaveBroadcastView = () => {
     setIsDatePickerOpen(false);
   }, [targetDate, todayDate]);
 
+  const handleTimelineRangeApply = useCallback(() => {
+    const startTime = Date.parse(timelineStartInput);
+    const endTime = Date.parse(timelineEndInput);
+    if (
+      !Number.isFinite(startTime) ||
+      !Number.isFinite(endTime) ||
+      startTime >= endTime ||
+      endTime - startTime > 24 * 60 * 60 * 1000
+    ) {
+      setError('시작보다 늦은 종료 시각을 선택하고 기간은 24시간 이내로 설정해 주세요.');
+      setStatus('error');
+      return;
+    }
+    setIsTimelinePlaying(false);
+    setIsTimelineRangeOpen(false);
+    setDataset(null);
+    setStatus('loading');
+    setError('');
+    const nextRange = { start: timelineStartInput, end: timelineEndInput };
+    if (
+      nextRange.start === timelineRange.start &&
+      nextRange.end === timelineRange.end
+    ) {
+      setRefreshToken((value) => value + 1);
+    } else {
+      setTimelineRange(nextRange);
+    }
+  }, [timelineEndInput, timelineRange, timelineStartInput]);
+
+  const handleTimelinePlayToggle = useCallback(() => {
+    if (timelineMaxProgress <= 0) return;
+    if (isTimelinePlaying) {
+      setIsTimelinePlaying(false);
+      return;
+    }
+    if (timelineProgress >= timelineMaxProgress) {
+      setTimelineProgress(0);
+      timelinePairRef.current = -1;
+      timelinePlaybackStartedAtRef.current = performance.now();
+    } else {
+      timelinePlaybackStartedAtRef.current =
+        performance.now() -
+        (timelineProgress / timelineMaxProgress) * timelineDurationSec * 1000;
+    }
+    setIsTimelinePlaying(true);
+  }, [isTimelinePlaying, timelineDurationSec, timelineMaxProgress, timelineProgress]);
+
+  const handleVideoPrepare = useCallback(({ start, end, durationSec }) => {
+    const nextRange = {
+      start: start || timelineRange.start,
+      end: end || timelineRange.end,
+    };
+    setTimelineDurationSec(durationSec);
+    setTimelineStartInput(nextRange.start);
+    setTimelineEndInput(nextRange.end);
+    setIsTimelinePlaying(false);
+    if (
+      mode === 'change' &&
+      status === 'ready' &&
+      nextRange.start === timelineRange.start &&
+      nextRange.end === timelineRange.end
+    ) {
+      return Promise.resolve();
+    }
+    setDataset(null);
+    setStatus('loading');
+    setError('');
+    setMode('change');
+    setTimelineRange(nextRange);
+    return new Promise((resolve, reject) => {
+      videoPrepareResolverRef.current = { resolve, reject };
+    });
+  }, [mode, status, timelineRange]);
+
+  const handleVideoStart = useCallback(({ durationSec }) => {
+    setTimelineDurationSec(durationSec);
+    setTimelineProgress(0);
+    timelinePairRef.current = -1;
+    timelinePlaybackStartedAtRef.current = performance.now();
+    setIsTimelinePlaying(true);
+  }, []);
+
   const renderDataset = useCallback(() => {
     const map = mapRef.current;
     const canvas = overlayCanvasRef.current;
     const landMask = landMaskRef.current;
-    if (!map?.isStyleLoaded() || !dataset || !canvas || !landMask) return false;
+    if (
+      mode === 'change' ||
+      !map?.isStyleLoaded() ||
+      !dataset ||
+      !canvas ||
+      !landMask
+    ) return false;
+    map.setPaintProperty(TIMELINE_OVERLAY_LAYER_ID, 'raster-opacity', 0);
+    map.setPaintProperty(TEMPERATURE_LAYER_ID, 'fill-extrusion-height', ['get', 'height']);
+    map.setPaintProperty(TEMPERATURE_LAYER_ID, 'fill-extrusion-color', ['get', 'color']);
     const values = buildTemperatureGrid(dataset.observations, landMask);
     const context = canvas.getContext('2d');
     const image = context.createImageData(GRID_WIDTH, GRID_HEIGHT);
@@ -751,19 +1053,127 @@ const HeatwaveBroadcastView = () => {
     return true;
   }, [dataset, mapStyleMode, mode, palette]);
 
+  const renderTimelineDataset = useCallback((progress) => {
+    const map = mapRef.current;
+    const baseCanvas = overlayCanvasRef.current;
+    const nextCanvas = timelineOverlayCanvasRef.current;
+    if (
+      mode !== 'change' ||
+      !map?.isStyleLoaded() ||
+      !baseCanvas ||
+      !nextCanvas ||
+      timelineFrames.length < 2
+    ) return false;
+
+    const boundedProgress = Math.min(timelineMaxProgress, Math.max(0, progress));
+    const fromIndex = Math.min(
+      timelineFrames.length - 2,
+      Math.floor(boundedProgress),
+    );
+    const toIndex = fromIndex + 1;
+    const blend = boundedProgress >= timelineMaxProgress
+      ? 1
+      : boundedProgress - fromIndex;
+
+    if (timelinePairRef.current !== fromIndex) {
+      const fromFrame = timelineFrames[fromIndex];
+      const toFrame = timelineFrames[toIndex];
+      drawTemperatureGrid(baseCanvas, fromFrame.grid, TIMELINE_PALETTE);
+      drawTemperatureGrid(nextCanvas, toFrame.grid, TIMELINE_PALETTE);
+      map.getSource('heat-temperature-overlay')?.play?.();
+      map.getSource(TIMELINE_OVERLAY_SOURCE_ID)?.play?.();
+      map.getSource(TEMPERATURE_SOURCE_ID)?.setData({
+        type: 'FeatureCollection',
+        features: buildTimelineExtrusionFeatures(fromFrame.grid, toFrame.grid),
+      });
+      timelinePairRef.current = fromIndex;
+    }
+
+    map.setPaintProperty(TIMELINE_OVERLAY_LAYER_ID, 'raster-opacity', blend);
+    map.setPaintProperty(TEMPERATURE_LAYER_ID, 'fill-extrusion-height', [
+      'interpolate',
+      ['linear'],
+      blend,
+      0,
+      ['get', 'fromHeight'],
+      1,
+      ['get', 'toHeight'],
+    ]);
+    map.setPaintProperty(TEMPERATURE_LAYER_ID, 'fill-extrusion-color', [
+      'interpolate',
+      ['linear'],
+      blend,
+      0,
+      ['get', 'fromColor'],
+      1,
+      ['get', 'toColor'],
+    ]);
+    map.triggerRepaint();
+    return true;
+  }, [mode, timelineFrames, timelineMaxProgress]);
+
   useEffect(() => {
-    if (status !== 'ready') return undefined;
+    if (status !== 'ready' || mode === 'change') return undefined;
     const timer = window.setInterval(() => {
       if (renderDataset()) window.clearInterval(timer);
     }, 100);
     return () => window.clearInterval(timer);
-  }, [renderDataset, status]);
+  }, [mode, renderDataset, status]);
 
   useEffect(() => {
-    if (targetDate) return undefined;
+    if (status !== 'ready' || mode !== 'change') return undefined;
+    if (renderTimelineDataset(timelineProgress)) return undefined;
+    const timer = window.setInterval(() => {
+      if (renderTimelineDataset(timelineProgress)) window.clearInterval(timer);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [mode, renderTimelineDataset, status, timelineProgress]);
+
+  useEffect(() => {
+    if (
+      !isTimelinePlaying ||
+      mode !== 'change' ||
+      status !== 'ready' ||
+      timelineMaxProgress <= 0
+    ) return undefined;
+
+    const timer = window.setInterval(() => {
+      const elapsed = performance.now() - timelinePlaybackStartedAtRef.current;
+      const nextProgress = Math.min(
+        timelineMaxProgress,
+        (elapsed / (timelineDurationSec * 1000)) * timelineMaxProgress,
+      );
+      setTimelineProgress(nextProgress);
+      if (nextProgress >= timelineMaxProgress) setIsTimelinePlaying(false);
+    }, TIMELINE_RENDER_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [isTimelinePlaying, mode, status, timelineDurationSec, timelineMaxProgress]);
+
+  useEffect(() => {
+    if (targetDate || mode === 'change') return undefined;
     const timer = window.setInterval(handleRefresh, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [handleRefresh, targetDate]);
+  }, [handleRefresh, mode, targetDate]);
+
+  useEffect(() => {
+    const pending = videoPrepareResolverRef.current;
+    if (!pending || mode !== 'change') return;
+    if (status === 'ready') {
+      videoPrepareResolverRef.current = null;
+      pending.resolve();
+    } else if (status === 'error') {
+      videoPrepareResolverRef.current = null;
+      pending.reject(new Error(error || '기온 변화 자료를 준비하지 못했습니다.'));
+    }
+  }, [error, mode, status]);
+
+  const displayObservedAtCode = mode === 'change'
+    ? activeTimelineFrame?.observedAtCode ?? ''
+    : dataset?.observedAtCode ?? '';
+  const timelineProgressPercent = timelineMaxProgress > 0
+    ? (timelineProgress / timelineMaxProgress) * 100
+    : 0;
+  const timelineInputMax = buildDefaultTimelineRange().end;
 
   return (
     <section className="fixed inset-0 overflow-hidden bg-[#46536a] text-white">
@@ -771,9 +1181,18 @@ const HeatwaveBroadcastView = () => {
         <div ref={mapContainerRef} className="h-full w-full" aria-label="폭염 방송 지도" />
       </div>
 
+      <VideoExportMenu
+        currentTarget="temperature"
+        mapRef={mapRef}
+        defaultStart={timelineRange.start}
+        defaultEnd={timelineRange.end}
+        onPreparePlayback={handleVideoPrepare}
+        onStartPlayback={handleVideoStart}
+      />
+
       {status === 'loading' ? (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-900/25 text-xl font-bold">
-          {mode === 'tropical' ? '열대야' : '폭염'} 관측 자료를 불러오는 중입니다…
+          {mode === 'tropical' ? '열대야' : mode === 'change' ? '기온 변화' : '폭염'} 관측 자료를 불러오는 중입니다…
         </div>
       ) : null}
       {status === 'error' ? (
@@ -811,23 +1230,25 @@ const HeatwaveBroadcastView = () => {
           >
             {mode === 'tropical'
               ? '열대야 현황'
+              : mode === 'change'
+                ? '기온 변화'
               : dataset?.status === 'historical'
                 ? '최고기온'
                 : '오늘 최고기온'}
           </span>
-          {dataset ? (
+          {displayObservedAtCode ? (
             <div className="ml-auto flex shrink-0 flex-col items-end whitespace-nowrap">
-              {targetDate ? (
+              {targetDate && mode !== 'change' ? (
                 <span className="font-black tabular-nums" style={{ fontSize: 'clamp(16px, 1.2vw, 26px)' }}>
-                  {Number(dataset.observedAtCode.slice(4, 6))}/{Number(dataset.observedAtCode.slice(6, 8))}
+                  {Number(displayObservedAtCode.slice(4, 6))}/{Number(displayObservedAtCode.slice(6, 8))}
                 </span>
               ) : (
                 <>
                   <span className="font-black tabular-nums" style={{ fontSize: 'clamp(16px, 1.2vw, 26px)' }}>
-                    {dataset.observedAtCode.slice(8, 10)}:{dataset.observedAtCode.slice(10, 12)}
+                    {displayObservedAtCode.slice(8, 10)}:{displayObservedAtCode.slice(10, 12)}
                   </span>
                   <span className="text-xs font-semibold text-[#bdd6fb]">
-                    {Number(dataset.observedAtCode.slice(4, 6))}/{Number(dataset.observedAtCode.slice(6, 8))}
+                    {Number(displayObservedAtCode.slice(4, 6))}/{Number(displayObservedAtCode.slice(6, 8))}
                   </span>
                 </>
               )}
@@ -837,7 +1258,7 @@ const HeatwaveBroadcastView = () => {
         </div>
       </div>
 
-      {top5.length > 0 ? (
+      {top5.length > 0 && (mode !== 'change' || showTimelineTop5) ? (
         <div
           className="pointer-events-none absolute z-20 flex justify-center"
           style={{
@@ -868,8 +1289,52 @@ const HeatwaveBroadcastView = () => {
 
       <ScaleBar mode={mode} />
 
-      <div className="absolute bottom-6 right-6 z-30 flex items-center gap-2">
-        <div className="flex items-center gap-1">
+      {mode === 'change' ? (
+        <div className="absolute bottom-0 left-[43%] right-0 z-20 bg-gradient-to-t from-slate-950/75 via-slate-950/35 to-transparent pb-3 pl-6 pr-6 pt-10">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleTimelinePlayToggle}
+              disabled={status !== 'ready' || timelineFrames.length < 2}
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#1d5fd1] text-white shadow-xl transition hover:bg-[#2875d9] disabled:cursor-wait disabled:opacity-45"
+              aria-label={isTimelinePlaying ? '기온 변화 일시정지' : '기온 변화 재생'}
+              title={isTimelinePlaying ? '일시정지' : '재생'}
+            >
+              {isTimelinePlaying ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="mb-2 flex items-center justify-between text-xs font-bold tabular-nums text-white/75">
+                <span>{formatTimelineClock(timelineFrames[0]?.observedAtCode)}</span>
+                <span className="rounded-full bg-slate-950/75 px-3 py-1 text-sm text-white">
+                  {formatTimelineClock(activeTimelineFrame?.observedAtCode)}
+                </span>
+                <span>{formatTimelineClock(timelineFrames.at(-1)?.observedAtCode)}</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={timelineMaxProgress}
+                step="0.01"
+                value={timelineProgress}
+                onChange={(event) => {
+                  setIsTimelinePlaying(false);
+                  setTimelineProgress(Number(event.target.value));
+                }}
+                disabled={timelineFrames.length < 2}
+                className="h-2.5 w-full cursor-pointer appearance-none rounded-full accent-[#2875d9] disabled:cursor-wait"
+                style={{
+                  background: `linear-gradient(to right, #2875d9 ${timelineProgressPercent}%, rgba(255,255,255,0.28) ${timelineProgressPercent}%)`,
+                }}
+                aria-label="기온 변화 재생 위치"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className={`absolute right-6 z-30 flex items-center gap-2 ${mode === 'change' ? 'bottom-[7.2rem]' : 'bottom-6'}`}>
+        {mode !== 'change' ? (
+          <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => handleDateStep(-1)}
@@ -923,8 +1388,9 @@ const HeatwaveBroadcastView = () => {
           >
             <ChevronRight className="h-6 w-6" />
           </button>
-        </div>
-        {targetDate ? (
+          </div>
+        ) : null}
+        {targetDate && mode !== 'change' ? (
           <button
             type="button"
             onClick={handleLatest}
@@ -933,45 +1399,120 @@ const HeatwaveBroadcastView = () => {
             최신
           </button>
         ) : null}
-        <div
-          className="flex h-12 items-center rounded-full border border-white/20 bg-slate-950/75 p-1 shadow-xl backdrop-blur-sm"
-          role="group"
-          aria-label="지도 표현 방식"
-        >
-          {[
-            { id: 'flat', label: '평면' },
-            { id: 'threeD', label: '입체' },
-          ].map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setMapStyleMode(item.id)}
-              aria-pressed={mapStyleMode === item.id}
-              className={`h-10 rounded-full px-4 text-sm font-black transition ${
-                mapStyleMode === item.id
-                  ? 'bg-white text-slate-900'
-                  : 'text-white/65 hover:text-white'
-              }`}
+        {mode === 'change' ? (
+          <>
+            <div className="relative">
+              {isTimelineRangeOpen ? (
+                <div className="absolute bottom-14 right-0 flex w-80 flex-col gap-3 rounded-lg border border-white/20 bg-slate-950/95 p-4 shadow-2xl backdrop-blur-md">
+                  <label className="flex flex-col gap-1.5 text-xs font-black text-white/70">
+                    시작 시각
+                    <input
+                      type="datetime-local"
+                      step="1800"
+                      value={timelineStartInput}
+                      max={timelineEndInput || timelineInputMax}
+                      onChange={(event) => setTimelineStartInput(event.target.value)}
+                      className="h-10 rounded-md border border-white/15 bg-slate-800 px-3 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:border-blue-400"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-xs font-black text-white/70">
+                    종료 시각
+                    <input
+                      type="datetime-local"
+                      step="1800"
+                      value={timelineEndInput}
+                      min={timelineStartInput || undefined}
+                      max={timelineInputMax}
+                      onChange={(event) => setTimelineEndInput(event.target.value)}
+                      className="h-10 rounded-md border border-white/15 bg-slate-800 px-3 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:border-blue-400"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleTimelineRangeApply}
+                    className="h-10 rounded-md bg-blue-500 text-sm font-black text-white transition hover:bg-blue-400"
+                  >
+                    기간 적용
+                  </button>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setIsTimelineRangeOpen((value) => !value)}
+                aria-expanded={isTimelineRangeOpen}
+                className="flex h-12 items-center gap-2 rounded-full border border-white/25 bg-slate-950/75 px-4 text-sm font-black text-white shadow-xl backdrop-blur-sm transition hover:bg-slate-800"
+                aria-label="기온 변화 기간 설정"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                {timelineRange.start.slice(11)}–{timelineRange.end.slice(11)}
+              </button>
+            </div>
+            <label className="flex h-12 cursor-pointer items-center gap-2 rounded-full border border-white/20 bg-slate-950/75 px-4 text-sm font-black text-white shadow-xl backdrop-blur-sm">
+              <input
+                type="checkbox"
+                checked={showTimelineTop5}
+                onChange={(event) => setShowTimelineTop5(event.target.checked)}
+                className="h-4 w-4 accent-[#f4c542]"
+              />
+              최고기온 5위
+            </label>
+            <select
+              value={timelineDurationSec}
+              onChange={(event) => setTimelineDurationSec(Number(event.target.value))}
+              className="h-12 cursor-pointer rounded-full border border-white/20 bg-slate-950/75 px-4 text-sm font-black text-white shadow-xl outline-none backdrop-blur-sm"
+              aria-label="기온 변화 재생 길이"
             >
-              {item.label}
-            </button>
-          ))}
-        </div>
+              {TIMELINE_PLAY_DURATIONS.map((seconds) => (
+                <option key={seconds} value={seconds} className="text-slate-900">
+                  {seconds}초
+                </option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <div
+            className="flex h-12 items-center rounded-full border border-white/20 bg-slate-950/75 p-1 shadow-xl backdrop-blur-sm"
+            role="group"
+            aria-label="지도 표현 방식"
+          >
+            {[
+              { id: 'flat', label: '평면' },
+              { id: 'threeD', label: '입체' },
+            ].map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setMapStyleMode(item.id)}
+                aria-pressed={mapStyleMode === item.id}
+                className={`h-10 rounded-full px-4 text-sm font-black transition ${
+                  mapStyleMode === item.id
+                    ? 'bg-white text-slate-900'
+                    : 'text-white/65 hover:text-white'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex h-12 items-center rounded-full border border-white/20 bg-slate-950/75 p-1 shadow-xl backdrop-blur-sm">
           {[
             { id: 'tropical', label: '열대야' },
             { id: 'heat', label: '폭염' },
+            { id: 'change', label: '기온 변화' },
           ].map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => handleModeChange(item.id)}
               aria-pressed={mode === item.id}
-              className={`h-10 rounded-full px-5 text-sm font-black transition ${
+              className={`h-10 rounded-full px-4 text-sm font-black transition ${
                 mode === item.id
                   ? item.id === 'tropical'
                     ? 'bg-[#2875d9] text-white'
-                    : 'bg-[#ef6c32] text-white'
+                    : item.id === 'change'
+                      ? 'bg-[#0f8a78] text-white'
+                      : 'bg-[#ef6c32] text-white'
                   : 'text-white/65 hover:text-white'
               }`}
             >

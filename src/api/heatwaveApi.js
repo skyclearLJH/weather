@@ -2,6 +2,10 @@ const KMA_BROADCAST_PROXY_BASE = '/api/kma-broadcast/';
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
 const TROPICAL_NIGHT_END_HOUR = 9;
+const TEMPERATURE_TIMELINE_STEP_MINUTES = 30;
+const TEMPERATURE_TIMELINE_MAX_FRAMES = 49;
+const TEMPERATURE_FRAME_FALLBACK_MINUTES = [0, 3, 5, 10];
+const TEMPERATURE_FRAME_FETCH_CONCURRENCY = 4;
 
 const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
   '128',
@@ -25,6 +29,7 @@ const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
 
 const stationCache = new Map();
 const dailyCache = new Map();
+const temperatureFrameCache = new Map();
 
 const pad2 = (value) => String(value).padStart(2, '0');
 const formatKmaMinuteTime = (date) =>
@@ -59,6 +64,31 @@ const parseKstDateInput = (value = '') => {
   }
   return date;
 };
+
+const parseKstDateTimeInput = (value = '') => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const date = new Date(Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+  ));
+  if (
+    date.getUTCFullYear() !== Number(match[1]) ||
+    date.getUTCMonth() !== Number(match[2]) - 1 ||
+    date.getUTCDate() !== Number(match[3]) ||
+    date.getUTCHours() !== Number(match[4]) ||
+    date.getUTCMinutes() !== Number(match[5])
+  ) {
+    return null;
+  }
+  return date;
+};
+
+const subtractMinutes = (date, minutes) =>
+  new Date(date.getTime() - minutes * 60 * 1000);
 
 const formatKoreanDateTime = (date) =>
   `${date.getUTCFullYear()}년 ${date.getUTCMonth() + 1}월 ${date.getUTCDate()}일 ` +
@@ -187,6 +217,111 @@ const parseDailyTemperature = (rawText, stationMetadata) => {
   return rows;
 };
 
+const parseMinuteTemperature = (rawText, stationMetadata) => {
+  const rows = [];
+  rawText.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const fields = trimmed.split(/\s+/);
+    if (fields.length < 18) return;
+    const station = stationMetadata.get(fields[1]);
+    const value = parseNumericValue(fields[8]);
+    if (!station || !Number.isFinite(value) || value <= -50 || value >= 60) return;
+    rows.push({ ...station, value });
+  });
+  return rows;
+};
+
+const fetchTemperatureFrameCandidate = async (
+  requestedDate,
+  candidateDate,
+  stationMetadata,
+  refreshToken,
+) => {
+  const observedAtCode = formatKmaMinuteTime(candidateDate);
+  if (!refreshToken && temperatureFrameCache.has(observedAtCode)) {
+    return temperatureFrameCache.get(observedAtCode);
+  }
+
+  const promise = fetchKmaText(
+    'api/typ01/cgi-bin/url/nph-aws2_min',
+    { tm2: observedAtCode, stn: 0, disp: 0, help: 0 },
+    refreshToken,
+  )
+    .then((rawText) => {
+      const observations = parseMinuteTemperature(rawText, stationMetadata);
+      if (observations.length < 100) return null;
+      return {
+        requestedAtCode: formatKmaMinuteTime(requestedDate),
+        observedAtCode,
+        observations,
+      };
+    })
+    .catch((error) => {
+      temperatureFrameCache.delete(observedAtCode);
+      throw error;
+    });
+
+  if (!refreshToken) temperatureFrameCache.set(observedAtCode, promise);
+  return promise;
+};
+
+const fetchTemperatureFrame = async (date, stationMetadata, refreshToken) => {
+  let lastError = null;
+  for (const offsetMinutes of TEMPERATURE_FRAME_FALLBACK_MINUTES) {
+    try {
+      const frame = await fetchTemperatureFrameCandidate(
+        date,
+        subtractMinutes(date, offsetMinutes),
+        stationMetadata,
+        refreshToken,
+      );
+      if (frame) return frame;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error(`${formatKoreanWindowTime(date)} 기온 분자료를 찾지 못했습니다.`);
+};
+
+const mapWithConcurrency = async (items, limit, mapper) => {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+};
+
+const buildTemperatureTimelineDates = (startInput, endInput) => {
+  const start = parseKstDateTimeInput(startInput);
+  const end = parseKstDateTimeInput(endInput);
+  if (!start || !end || start > end) {
+    throw new Error('기온 변화 시작·종료 시각을 다시 확인해 주세요.');
+  }
+  const dates = [];
+  for (
+    let time = start.getTime();
+    time <= end.getTime();
+    time += TEMPERATURE_TIMELINE_STEP_MINUTES * 60 * 1000
+  ) {
+    dates.push(new Date(time));
+  }
+  if (dates.length < 2) {
+    throw new Error('기온 변화 기간은 최소 30분 이상이어야 합니다.');
+  }
+  if (dates.length > TEMPERATURE_TIMELINE_MAX_FRAMES) {
+    throw new Error('기온 변화 기간은 최대 24시간까지 선택할 수 있습니다.');
+  }
+  return dates;
+};
+
 const fetchDailyTemperature = async (day, observation, stationMetadata, refreshToken) => {
   const cacheKey = `${day}:${observation}:${stationMetadata.size}`;
   if (!refreshToken && dailyCache.has(cacheKey)) {
@@ -297,6 +432,33 @@ const buildHeatwaveData = async (refreshToken = '', targetDate = '') => {
       ? 'ASOS와 폭염특보 운영 AWS 지점의 오늘 최고기온입니다.'
       : '선택한 날짜의 일 최고기온 확정 자료입니다.',
     windowLabel: `${selectedDay.getUTCMonth() + 1}월 ${selectedDay.getUTCDate()}일 00:00 ~ ${isToday ? '현재' : '24:00'}`,
+  };
+};
+
+export const fetchTemperatureChangeData = async (options = {}) => {
+  const { start, end, refreshToken = '' } = options;
+  const dates = buildTemperatureTimelineDates(start, end);
+  const [awsStations, dailyRanking] = await Promise.all([
+    fetchStationMetadata('AWS'),
+    buildHeatwaveData(refreshToken, end.slice(0, 10)),
+  ]);
+  const frames = await mapWithConcurrency(
+    dates,
+    TEMPERATURE_FRAME_FETCH_CONCURRENCY,
+    (date) => fetchTemperatureFrame(date, awsStations, refreshToken),
+  );
+  const uniqueFrames = frames.filter(
+    (frame, index) => index === 0 || frame.observedAtCode !== frames[index - 1].observedAtCode,
+  );
+  if (uniqueFrames.length < 2) {
+    throw new Error('재생할 기온 변화 자료가 충분하지 않습니다.');
+  }
+  return {
+    mode: 'change',
+    frames: uniqueFrames,
+    ranking: dailyRanking.observations,
+    startAtCode: uniqueFrames[0].observedAtCode,
+    endAtCode: uniqueFrames.at(-1).observedAtCode,
   };
 };
 

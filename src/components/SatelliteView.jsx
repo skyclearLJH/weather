@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarClock } from 'lucide-react';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
+import VideoExportMenu from './VideoExportMenu.jsx';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
@@ -53,6 +54,22 @@ const formatLocalDateTimeInput = (date) => {
     `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
     `T${pad(date.getHours())}:${pad(date.getMinutes())}`
   );
+};
+
+const findTimelineRange = (dates, startInput, endInput) => {
+  if (dates.length === 0) return null;
+  const startMs = Date.parse(startInput);
+  const endMs = Date.parse(endInput);
+  const firstMatchingIndex = Number.isFinite(startMs)
+    ? dates.findIndex((date) => date.getTime() >= startMs)
+    : 0;
+  const lastMatchingIndex = Number.isFinite(endMs)
+    ? dates.findLastIndex((date) => date.getTime() <= endMs)
+    : dates.length - 1;
+  if (firstMatchingIndex < 0 || lastMatchingIndex < 0) return null;
+  return firstMatchingIndex < lastMatchingIndex
+    ? { startIndex: firstMatchingIndex, endIndex: lastMatchingIndex }
+    : null;
 };
 const DOKDO_GEOJSON = {
   type: 'FeatureCollection',
@@ -612,6 +629,7 @@ function SatelliteView({ menuSlot = null }) {
   const [exaggeration, setExaggeration] = useState(6);
   const [convHighlight, setConvHighlight] = useState(true);
   const [playDurationSec, setPlayDurationSec] = useState(10);
+  const [videoPlayRange, setVideoPlayRange] = useState(null);
   const [historyEnd, setHistoryEnd] = useState(null);
   const [historyInput, setHistoryInput] = useState('');
   const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState(false);
@@ -950,8 +968,10 @@ function SatelliteView({ menuSlot = null }) {
   // 준비된 전 구간만 선택한 재생 길이에 맞춰 진행하고 마지막에서 멈춘다.
   useEffect(() => {
     if (!isPlaying || timeline.length === 0) return undefined;
-    const last = timeline.length - 1;
-    const intervalMs = Math.max(45, Math.round((playDurationSec * 1000) / timeline.length));
+    const start = videoPlayRange?.startIndex ?? 0;
+    const last = videoPlayRange?.endIndex ?? timeline.length - 1;
+    const transitionCount = Math.max(1, last - start);
+    const intervalMs = Math.max(45, Math.round((playDurationSec * 1000) / transitionCount));
     playTimerRef.current = setInterval(() => {
       const next = Math.min(frameIndexRef.current + 1, last);
       setFrameIndex(next);
@@ -960,7 +980,7 @@ function SatelliteView({ menuSlot = null }) {
       }
     }, intervalMs);
     return () => clearInterval(playTimerRef.current);
-  }, [isPlaying, timeline.length, playDurationSec]);
+  }, [isPlaying, timeline.length, playDurationSec, videoPlayRange]);
 
   // 끝에서 다시 재생을 누르면 처음부터
   const handlePlayToggle = useCallback(() => {
@@ -969,11 +989,34 @@ function SatelliteView({ menuSlot = null }) {
       return;
     }
     if (timeline.length === 0) return;
-    if (frameIndex >= timeline.length - 1) {
-      setFrameIndex(0);
-    }
+    const startIndex = frameIndex >= timeline.length - 1 ? 0 : frameIndex;
+    setVideoPlayRange({ startIndex, endIndex: timeline.length - 1 });
+    if (startIndex !== frameIndex) setFrameIndex(startIndex);
     setIsPlaying(true);
   }, [frameIndex, isPlaying, timeline.length]);
+
+  const videoDefaultStart = timeline[0] ? formatLocalDateTimeInput(timeline[0]) : '';
+  const videoDefaultEnd = timeline.at(-1) ? formatLocalDateTimeInput(timeline.at(-1)) : '';
+  const handleVideoPrepare = useCallback(
+    async ({ start, end }) => {
+      if (!findTimelineRange(timeline, start, end)) {
+        throw new Error('선택한 기간에 재생할 위성 프레임이 2개 이상 필요합니다.');
+      }
+      setIsPlaying(false);
+    },
+    [timeline],
+  );
+  const handleVideoStart = useCallback(
+    ({ start, end, durationSec }) => {
+      const range = findTimelineRange(timeline, start, end);
+      if (!range) return;
+      setPlayDurationSec(durationSec);
+      setVideoPlayRange(range);
+      setFrameIndex(range.startIndex);
+      window.requestAnimationFrame(() => setIsPlaying(true));
+    },
+    [timeline],
+  );
 
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
@@ -1032,6 +1075,14 @@ function SatelliteView({ menuSlot = null }) {
   return (
     <div className="sat-view">
       <div ref={mapContainerRef} className="sat-map" />
+      <VideoExportMenu
+        currentTarget="satellite"
+        mapRef={mapRef}
+        defaultStart={videoDefaultStart}
+        defaultEnd={videoDefaultEnd}
+        onPreparePlayback={handleVideoPrepare}
+        onStartPlayback={handleVideoStart}
+      />
 
       {/* 좌상단: 타이틀 밴드 — 레이더 방송모드와 동일 형태·위치 */}
       <div

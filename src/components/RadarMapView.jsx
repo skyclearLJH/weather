@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarClock, Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
+import VideoExportMenu from './VideoExportMenu.jsx';
 import { createAccumSurfaceLayer } from './AccumSurfaceLayer.js';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -71,6 +72,27 @@ const ACCUM_DISPLAY_STEP_LADDER_HOURS = [1, 2, 3, 6, 12, 24];
 const MAX_ACCUM_DISPLAY_FRAMES = 121;
 // 브라우저가 실제로 그릴 수 있는 최소 간격. 이보다 짧아지면 프레임을 건너뛴다.
 const ACCUM_MIN_FRAME_INTERVAL_MS = 60;
+
+const getInitialBroadcastView = () => {
+  const target = new URLSearchParams(window.location.search).get('videoTarget');
+  return ['radar', 'kim', 'accum', 'satellite'].includes(target) ? target : 'radar';
+};
+
+const findTimelineRange = (dates, startInput, endInput) => {
+  if (dates.length === 0) return null;
+  const startMs = Date.parse(startInput);
+  const endMs = Date.parse(endInput);
+  const firstMatchingIndex = Number.isFinite(startMs)
+    ? dates.findIndex((date) => date.getTime() >= startMs)
+    : 0;
+  const lastMatchingIndex = Number.isFinite(endMs)
+    ? dates.findLastIndex((date) => date.getTime() <= endMs)
+    : dates.length - 1;
+  if (firstMatchingIndex < 0 || lastMatchingIndex < 0) return null;
+  return firstMatchingIndex < lastMatchingIndex
+    ? { startIndex: firstMatchingIndex, endIndex: lastMatchingIndex }
+    : null;
+};
 
 const pickAccumDisplayStepHours = (spanHours) =>
   ACCUM_DISPLAY_STEP_LADDER_HOURS.find(
@@ -930,13 +952,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
-  const [broadcastView, setBroadcastView] = useState('radar'); // 'radar' | 'kim' | 'accum' | 'satellite'
+  const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView); // 'radar' | 'kim' | 'accum' | 'satellite'
   const [kimFrames, setKimFrames] = useState([]);
   const [kimIndex, setKimIndex] = useState(0);
   const [kimStatus, setKimStatus] = useState('idle'); // idle | loading | ready | error
   const [kimError, setKimError] = useState('');
   const [kimRefreshTick, setKimRefreshTick] = useState(0);
   const [kimPlayIntervalMs, setKimPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
+  const [kimPlayTarget, setKimPlayTarget] = useState(null);
   const [accumDays, setAccumDays] = useState(1);
   const [accumHours, setAccumHours] = useState([]);
   const [accumIndex, setAccumIndex] = useState(0);
@@ -945,6 +968,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
   const [accumTop5, setAccumTop5] = useState([]);
   const [accumDisplayMode, setAccumDisplayMode] = useState('flat'); // 'flat' | '3d'
   const [accum3dStyle, setAccum3dStyle] = useState('columns'); // 'columns' | 'surface'
+  const [accumPlayRange, setAccumPlayRange] = useState(null);
   // 임의 기간: 입력값은 타이핑마다 재조회하지 않도록 '적용'을 눌러야 range에 반영된다.
   const [accumRangeMode, setAccumRangeMode] = useState('preset'); // 'preset' | 'custom'
   const [accumCustomStartInput, setAccumCustomStartInput] = useState('');
@@ -1825,13 +1849,15 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     // 많을 때 최소 간격에 걸리거나(30일이면 5초 설정에도 43초) 렌더가 타이머보다 느려
     // 계속 밀렸다. 경과 비율로 인덱스를 잡으면 렌더가 느린 기기에서도 몇 칸씩 건너뛰며
     // 설정한 재생 길이를 그대로 지킨다.
-    const transitions = accumHours.length - 1;
+    const startIndex = accumPlayRange?.startIndex ?? 0;
+    const endIndex = accumPlayRange?.endIndex ?? accumHours.length - 1;
+    const transitions = Math.max(1, endIndex - startIndex);
     const durationMs = Math.max(1, playDurationSec * 1000);
     const startedAt = performance.now();
     let timer = null;
     const tick = () => {
       const progress = Math.min(1, (performance.now() - startedAt) / durationMs);
-      setAccumIndex(Math.min(transitions, Math.round(progress * transitions)));
+      setAccumIndex(Math.min(endIndex, startIndex + Math.round(progress * transitions)));
       if (progress < 1) {
         timer = window.setTimeout(tick, ACCUM_MIN_FRAME_INTERVAL_MS);
       }
@@ -1840,27 +1866,30 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     return () => {
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [isAccumView, isPlaying, accumHours.length, playDurationSec]);
+  }, [isAccumView, isPlaying, accumHours.length, playDurationSec, accumPlayRange]);
 
   useEffect(() => {
-    if (isAccumView && isPlaying && accumIndex >= accumHours.length - 1) {
+    const endIndex = accumPlayRange?.endIndex ?? accumHours.length - 1;
+    if (isAccumView && isPlaying && accumIndex >= endIndex) {
       setIsPlaying(false);
     }
-  }, [isAccumView, isPlaying, accumIndex, accumHours.length]);
+  }, [isAccumView, isPlaying, accumIndex, accumHours.length, accumPlayRange]);
 
   useEffect(() => {
     if (!isKimView || !isPlaying || kimFrames.length < 2) return undefined;
+    const targetIndex = kimPlayTarget ?? kimFrames.length - 1;
     const timer = window.setInterval(() => {
-      setKimIndex((previous) => Math.min(previous + 1, kimFrames.length - 1));
+      setKimIndex((previous) => Math.min(previous + 1, targetIndex));
     }, kimPlayIntervalMs);
     return () => window.clearInterval(timer);
-  }, [isKimView, isPlaying, kimFrames.length, kimPlayIntervalMs]);
+  }, [isKimView, isPlaying, kimFrames.length, kimPlayIntervalMs, kimPlayTarget]);
 
   useEffect(() => {
-    if (isKimView && isPlaying && kimIndex >= kimFrames.length - 1) {
+    const targetIndex = kimPlayTarget ?? kimFrames.length - 1;
+    if (isKimView && isPlaying && kimIndex >= targetIndex) {
       setIsPlaying(false);
     }
-  }, [isKimView, isPlaying, kimIndex, kimFrames.length]);
+  }, [isKimView, isPlaying, kimIndex, kimFrames.length, kimPlayTarget]);
 
   // 방송모드 재생은 목표 지점(현재 또는 예측 끝)에 도달하면 멈춘다.
   useEffect(() => {
@@ -1882,6 +1911,10 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       if (accumIndex >= accumHours.length - 1) {
         setAccumIndex(0);
       }
+      setAccumPlayRange({
+        startIndex: accumIndex >= accumHours.length - 1 ? 0 : accumIndex,
+        endIndex: accumHours.length - 1,
+      });
       setIsPlaying(true);
       return;
     }
@@ -1890,6 +1923,7 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
       const startIndex = kimIndex >= kimFrames.length - 1 ? 0 : kimIndex;
       if (startIndex !== kimIndex) setKimIndex(startIndex);
       const transitionCount = Math.max(1, kimFrames.length - 1 - startIndex);
+      setKimPlayTarget(kimFrames.length - 1);
       setKimPlayIntervalMs(Math.max(60, Math.round((playDurationSec * 1000) / transitionCount)));
       setIsPlaying(true);
       return;
@@ -1920,6 +1954,51 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
     setPlayIntervalMs(Math.max(45, Math.round((playDurationSec * 1000) / transitionCount)));
     setIsPlaying(true);
   };
+
+  const videoTimelineDates = useMemo(() => {
+    if (isAccumView) return accumHours;
+    if (isKimView) return kimFrames.map((frame) => frame.validTime);
+    return frames.map((frame) => frame.validTime);
+  }, [accumHours, frames, isAccumView, isKimView, kimFrames]);
+  const videoDefaultStart = videoTimelineDates[0]
+    ? formatLocalDateTimeInput(videoTimelineDates[0])
+    : '';
+  const videoDefaultEnd = videoTimelineDates.at(-1)
+    ? formatLocalDateTimeInput(videoTimelineDates.at(-1))
+    : '';
+
+  const handleVideoPrepare = useCallback(
+    async ({ start, end }) => {
+      if (!findTimelineRange(videoTimelineDates, start, end)) {
+        throw new Error('선택한 기간에 재생할 프레임이 2개 이상 필요합니다.');
+      }
+      setIsPlaying(false);
+    },
+    [videoTimelineDates],
+  );
+
+  const handleVideoStart = useCallback(
+    ({ start, end, durationSec }) => {
+      const range = findTimelineRange(videoTimelineDates, start, end);
+      if (!range) return;
+      const transitionCount = Math.max(1, range.endIndex - range.startIndex);
+      setPlayDurationSec(durationSec);
+      if (isAccumView) {
+        setAccumPlayRange(range);
+        setAccumIndex(range.startIndex);
+      } else if (isKimView) {
+        setKimPlayTarget(range.endIndex);
+        setKimIndex(range.startIndex);
+        setKimPlayIntervalMs(Math.max(60, Math.round((durationSec * 1000) / transitionCount)));
+      } else {
+        setFrameIndex(range.startIndex);
+        setPlayTarget(range.endIndex);
+        setPlayIntervalMs(Math.max(45, Math.round((durationSec * 1000) / transitionCount)));
+      }
+      window.requestAnimationFrame(() => setIsPlaying(true));
+    },
+    [isAccumView, isKimView, videoTimelineDates],
+  );
 
   const currentFrame = frames[frameIndex];
 
@@ -3619,6 +3698,14 @@ const RadarMapView = ({ refreshToken = 0, initialBroadcast = false }) => {
 
         {isBroadcast && !isSatelliteView ? (
           <>
+            <VideoExportMenu
+              currentTarget={isAccumView ? 'accum' : isKimView ? 'kim' : 'radar'}
+              mapRef={mapRef}
+              defaultStart={videoDefaultStart}
+              defaultEnd={videoDefaultEnd}
+              onPreparePlayback={handleVideoPrepare}
+              onStartPlayback={handleVideoStart}
+            />
             {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}
             <div
               className="pointer-events-none absolute z-20 flex items-center gap-[1vw]"
