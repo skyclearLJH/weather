@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Download, Film, MapPin, X } from 'lucide-react';
+import {
+  BufferTarget,
+  CanvasSource,
+  getFirstEncodableVideoCodec,
+  Mp4OutputFormat,
+  Output,
+  Quality,
+} from 'mediabunny';
 
 const VIDEO_TARGETS = [
   { id: 'radar', label: '레이더' },
@@ -10,6 +18,10 @@ const VIDEO_TARGETS = [
 ];
 
 const VIDEO_DURATIONS = [5, 8, 10, 12, 15, 20, 30];
+const VIDEO_WIDTH = 1920;
+const VIDEO_HEIGHT = 1080;
+const VIDEO_FRAME_RATE = 30;
+const VIDEO_BITRATE = 10_000_000;
 
 const TARGET_URLS = {
   radar: '/?view=radar&mode=broadcast&videoTarget=radar',
@@ -30,16 +42,50 @@ const readCamera = (map) => {
   };
 };
 
-const chooseMimeType = () => {
-  const candidates = [
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm',
-  ];
-  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? '';
+const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
+const waitForVideo = async (video, stream) => {
+  video.srcObject = stream;
+  video.muted = true;
+  video.playsInline = true;
+  await video.play();
+  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  await new Promise((resolve, reject) => {
+    video.addEventListener('loadeddata', resolve, { once: true });
+    video.addEventListener('error', reject, { once: true });
+  });
 };
 
-const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+const drawVideoCover = (context, video) => {
+  const sourceWidth = video.videoWidth;
+  const sourceHeight = video.videoHeight;
+  if (!sourceWidth || !sourceHeight) return false;
+  const sourceAspect = sourceWidth / sourceHeight;
+  const targetAspect = VIDEO_WIDTH / VIDEO_HEIGHT;
+  let sourceX = 0;
+  let sourceY = 0;
+  let cropWidth = sourceWidth;
+  let cropHeight = sourceHeight;
+  if (sourceAspect > targetAspect) {
+    cropWidth = sourceHeight * targetAspect;
+    sourceX = (sourceWidth - cropWidth) / 2;
+  } else if (sourceAspect < targetAspect) {
+    cropHeight = sourceWidth / targetAspect;
+    sourceY = (sourceHeight - cropHeight) / 2;
+  }
+  context.drawImage(
+    video,
+    sourceX,
+    sourceY,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    VIDEO_WIDTH,
+    VIDEO_HEIGHT,
+  );
+  return true;
+};
 
 function VideoExportMenu({
   currentTarget,
@@ -56,6 +102,7 @@ function VideoExportMenu({
   const [startCamera, setStartCamera] = useState(null);
   const [endCamera, setEndCamera] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingProgress, setRecordingProgress] = useState(0);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -85,8 +132,8 @@ function VideoExportMenu({
   };
 
   const handleRecord = async () => {
-    if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === 'undefined') {
-      setError('이 브라우저에서는 화면 녹화를 지원하지 않습니다.');
+    if (!navigator.mediaDevices?.getDisplayMedia || typeof VideoEncoder === 'undefined') {
+      setError('이 브라우저에서는 MP4 영상 인코딩을 지원하지 않습니다.');
       return;
     }
     if (!startCamera || !endCamera) {
@@ -99,40 +146,74 @@ function VideoExportMenu({
     }
 
     let stream = null;
+    let sourceVideo = null;
     try {
       setIsRecording(true);
+      setRecordingProgress(0);
       setError('');
       await onPreparePlayback?.({ start: startInput, end: endInput, durationSec });
       stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 30 },
+        video: {
+          width: { ideal: VIDEO_WIDTH },
+          height: { ideal: VIDEO_HEIGHT },
+          frameRate: { ideal: VIDEO_FRAME_RATE, max: VIDEO_FRAME_RATE },
+        },
         audio: false,
         preferCurrentTab: true,
       });
-      const chunks = [];
-      const mimeType = chooseMimeType();
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      const stopped = new Promise((resolve) => {
-        recorder.addEventListener('dataavailable', (event) => {
-          if (event.data.size > 0) chunks.push(event.data);
-        });
-        recorder.addEventListener('stop', resolve, { once: true });
+
+      sourceVideo = document.createElement('video');
+      await waitForVideo(sourceVideo, stream);
+      const canvas = document.createElement('canvas');
+      canvas.width = VIDEO_WIDTH;
+      canvas.height = VIDEO_HEIGHT;
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) throw new Error('영상 합성 화면을 만들 수 없습니다.');
+
+      const format = new Mp4OutputFormat();
+      const codec = await getFirstEncodableVideoCodec(
+        format.getSupportedVideoCodecs().filter((candidate) => candidate === 'avc'),
+        { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+      );
+      if (codec !== 'avc') {
+        throw new Error('이 기기에서 H.264 MP4 인코더를 사용할 수 없습니다.');
+      }
+      const target = new BufferTarget();
+      const output = new Output({ format, target });
+      const videoSource = new CanvasSource(canvas, {
+        codec,
+        quality: new Quality({ bitrate: VIDEO_BITRATE }),
       });
+      output.addVideoTrack(videoSource, { frameRate: VIDEO_FRAME_RATE });
+      await output.start();
 
       const map = mapRef.current;
       map?.jumpTo?.(startCamera);
-      recorder.start(250);
       await wait(180);
+      drawVideoCover(context, sourceVideo);
+      const frameDuration = 1 / VIDEO_FRAME_RATE;
+      await videoSource.add(0, frameDuration);
       map?.easeTo?.({ ...endCamera, duration: durationSec * 1000, essential: true });
       onStartPlayback?.({ start: startInput, end: endInput, durationSec });
-      await wait(durationSec * 1000 + 220);
-      recorder.stop();
-      await stopped;
 
-      const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+      const totalFrames = durationSec * VIDEO_FRAME_RATE;
+      const startedAt = performance.now();
+      for (let frameIndex = 1; frameIndex < totalFrames; frameIndex += 1) {
+        const targetTime = startedAt + frameIndex * (1000 / VIDEO_FRAME_RATE);
+        await wait(Math.max(0, targetTime - performance.now()));
+        if (!drawVideoCover(context, sourceVideo)) continue;
+        await videoSource.add(frameIndex / VIDEO_FRAME_RATE, frameDuration);
+        if (frameIndex % VIDEO_FRAME_RATE === 0 || frameIndex === totalFrames - 1) {
+          setRecordingProgress(Math.round((frameIndex / (totalFrames - 1)) * 100));
+        }
+      }
+      await output.finalize();
+
+      const blob = new Blob([target.buffer], { type: 'video/mp4' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `kbs-weather-${currentTarget}-${Date.now()}.webm`;
+      link.download = `kbs-weather-${currentTarget}-${Date.now()}.mp4`;
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (recordError) {
@@ -141,7 +222,9 @@ function VideoExportMenu({
       }
     } finally {
       stream?.getTracks().forEach((track) => track.stop());
+      if (sourceVideo) sourceVideo.srcObject = null;
       setIsRecording(false);
+      setRecordingProgress(0);
     }
   };
 
@@ -217,6 +300,11 @@ function VideoExportMenu({
               </select>
             </label>
 
+            <div className="col-span-2 flex h-9 items-center justify-between rounded-md border border-white/10 bg-white/5 px-3 text-xs font-bold text-white/65">
+              <span>출력 형식</span>
+              <span className="text-white">1920 × 1080 · H.264 MP4</span>
+            </div>
+
             <button
               type="button"
               onClick={() => captureCamera(setStartCamera)}
@@ -244,7 +332,9 @@ function VideoExportMenu({
             className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-md bg-cyan-400 text-sm font-black text-slate-950 transition hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
-            {isRecording ? '생성 중' : `${currentLabel} 파일 생성`}
+            {isRecording
+              ? `MP4 생성 중 ${recordingProgress}%`
+              : `${currentLabel} MP4 생성`}
           </button>
         </div>
       ) : (
