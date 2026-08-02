@@ -23,7 +23,15 @@ import {
   laCellToLonLat,
   probeLatestSatDate,
 } from '../api/satApi';
+import {
+  clearPlayRange,
+  readPlayRange,
+  resolvePlayRange,
+  writePlayRange,
+} from '../utils/broadcastPlayRange.js';
 import './SatelliteView.css';
+
+const PLAY_RANGE_VIEW_ID = 'satellite';
 
 // 6시간(36프레임). 12시간(72프레임)은 프레임당 약 4.3MB라 브라우저가 ~314MB를 들고
 // 있어야 해서, 메모리 압박으로 캐시가 밀려나며 스크럽 시 빈 화면이 보였다.
@@ -706,6 +714,7 @@ function SatelliteView({
   const [convHighlight, setConvHighlight] = useState(true);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [videoPlayRange, setVideoPlayRange] = useState(null);
+  const [playRangeVersion, setPlayRangeVersion] = useState(0);
   const [historyEnd, setHistoryEnd] = useState(null);
   const [historyInput, setHistoryInput] = useState('');
   const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState(false);
@@ -1073,18 +1082,54 @@ function SatelliteView({
     return () => clearInterval(playTimerRef.current);
   }, [isPlaying, timeline.length, playDurationSec, videoPlayRange]);
 
-  // 끝에서 다시 재생을 누르면 처음부터
+  // 편집모드에서 지정한 재생 구간(시작/끝 프레임). 타임스탬프 키로 저장.
+  const persistentPlayRange = useMemo(
+    () => resolvePlayRange(PLAY_RANGE_VIEW_ID, timeline, (date) => date.getTime()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [timeline, playRangeVersion],
+  );
+
+  const markPlayBound = useCallback(
+    (which) => {
+      const frame = timeline[frameIndex];
+      if (!frame) return;
+      const existing = readPlayRange(PLAY_RANGE_VIEW_ID);
+      const firstKey = timeline[0]?.getTime();
+      const lastKey = timeline.at(-1)?.getTime();
+      const key = frame.getTime();
+      const next =
+        which === 'start'
+          ? { start: key, end: existing?.end ?? lastKey }
+          : { start: existing?.start ?? firstKey, end: key };
+      writePlayRange(PLAY_RANGE_VIEW_ID, next);
+      setPlayRangeVersion((value) => value + 1);
+    },
+    [timeline, frameIndex],
+  );
+
+  const handleClearPlayRange = useCallback(() => {
+    clearPlayRange(PLAY_RANGE_VIEW_ID);
+    setPlayRangeVersion((value) => value + 1);
+  }, []);
+
+  // 끝에서 다시 재생을 누르면 처음부터. 지정 구간이 있으면 그 구간만 재생한다.
   const handlePlayToggle = useCallback(() => {
     if (isPlaying) {
       setIsPlaying(false);
       return;
     }
     if (timeline.length === 0) return;
+    if (persistentPlayRange) {
+      setVideoPlayRange(persistentPlayRange);
+      setFrameIndex(persistentPlayRange.startIndex);
+      window.requestAnimationFrame(() => setIsPlaying(true));
+      return;
+    }
     const startIndex = frameIndex >= timeline.length - 1 ? 0 : frameIndex;
     setVideoPlayRange({ startIndex, endIndex: timeline.length - 1 });
     if (startIndex !== frameIndex) setFrameIndex(startIndex);
     setIsPlaying(true);
-  }, [frameIndex, isPlaying, timeline.length]);
+  }, [frameIndex, isPlaying, timeline.length, persistentPlayRange]);
 
   const videoDefaultStart = timeline[0] ? formatLocalDateTimeInput(timeline[0]) : '';
   const videoDefaultEnd = timeline.at(-1) ? formatLocalDateTimeInput(timeline.at(-1)) : '';
@@ -1301,6 +1346,50 @@ function SatelliteView({
                 background: `linear-gradient(to right, #64748b ${progressPercent}%, #2563eb ${progressPercent}%)`,
               }}
             />
+            {persistentPlayRange && maxIndex > 0 ? (
+              <>
+                <span
+                  className="pointer-events-none absolute top-[calc(2rem+0.3125rem)] z-20 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-300 shadow"
+                  style={{ left: `${(persistentPlayRange.startIndex / maxIndex) * 100}%` }}
+                  title="시작 화면"
+                />
+                <span
+                  className="pointer-events-none absolute top-[calc(2rem+0.3125rem)] z-20 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-300 shadow"
+                  style={{ left: `${(persistentPlayRange.endIndex / maxIndex) * 100}%` }}
+                  title="끝 화면"
+                />
+              </>
+            ) : null}
+            {workspaceMode !== 'broadcast' ? (
+              <div className="mt-2 flex items-center justify-end gap-2">
+                <span className="mr-auto text-xs font-bold text-white/70">
+                  {persistentPlayRange ? '재생 구간 지정됨' : '재생 구간 미지정 (전체 재생)'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => markPlayBound('start')}
+                  className="h-9 rounded-full border border-emerald-300/50 bg-emerald-500/15 px-3 text-xs font-black text-emerald-200 transition hover:bg-emerald-500/25"
+                >
+                  시작으로 지정
+                </button>
+                <button
+                  type="button"
+                  onClick={() => markPlayBound('end')}
+                  className="h-9 rounded-full border border-rose-300/50 bg-rose-500/15 px-3 text-xs font-black text-rose-200 transition hover:bg-rose-500/25"
+                >
+                  끝으로 지정
+                </button>
+                {persistentPlayRange ? (
+                  <button
+                    type="button"
+                    onClick={handleClearPlayRange}
+                    className="h-9 rounded-full border border-white/25 bg-slate-900/70 px-3 text-xs font-black text-white/80 transition hover:bg-slate-800"
+                  >
+                    구간 해제
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <div className="relative mt-1 h-9">
               {ticks.map((tick) => (
                 <div
