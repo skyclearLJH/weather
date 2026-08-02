@@ -431,7 +431,12 @@ const interpolatePaletteColor = (value, palette) => {
 const temperatureHeight = (value, mode) => {
   if (mode === 'change') {
     const bounded = Math.min(45, Math.max(20, value));
-    return 4500 + (bounded - 20) * 5700;
+    // 온도가 높을수록 막대 증가폭이 커지는 볼록(가속) 곡선.
+    // 30도 이하는 완만하게 낮고, 30도 이상에서 급격히 상승한다.
+    // 기준점 유지: 20도 → 4500, 45도 → 147000(기존 선형 최대와 동일).
+    // 이차식이라 증가폭(1차 미분)이 온도에 비례해 계속 커진다.
+    const t = bounded - 20; // 0~25
+    return 4500 + 228 * t * t;
   }
   const baseHeight = mode === 'tropical'
     ? Math.min(105000, 3500 + Math.max(0, value - 25) * 14500)
