@@ -430,13 +430,14 @@ const interpolatePaletteColor = (value, palette) => {
 
 const temperatureHeight = (value, mode) => {
   if (mode === 'change') {
-    const bounded = Math.min(45, Math.max(20, value));
+    const bounded = Math.min(43, Math.max(20, value));
     // 온도가 높을수록 막대 증가폭이 커지는 볼록(가속) 곡선.
     // 30도 이하는 완만하게 낮고, 30도 이상에서 급격히 상승한다.
-    // 기준점: 20도 → 4500, 45도 → 161000(폭염 지도 최대 높이와 동일).
-    // 이차식이라 증가폭(1차 미분)이 온도에 비례해 계속 커진다.
-    const t = bounded - 20; // 0~25
-    return 4500 + 250.4 * t * t;
+    // 기준점: 20도 → 4500, 43도 이상 → 161000(폭염 지도 최대 높이와 동일).
+    // 폭염 지도가 40도대에서 최대에 도달하듯, 실제 최고기온이 최대 막대에
+    // 가깝게 보이도록 45도가 아닌 43도에서 포화시킨다.
+    const t = bounded - 20; // 0~23
+    return 4500 + 295.84 * t * t;
   }
   const baseHeight = mode === 'tropical'
     ? Math.min(105000, 3500 + Math.max(0, value - 25) * 14500)
