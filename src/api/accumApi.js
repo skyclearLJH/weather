@@ -179,7 +179,7 @@ const SIDO_SHORT_LABELS = {
   전라북도: '전북',
   전북특별자치도: '전북',
   전라남도: '전남',
-  전남광주통합특별시: '전남',
+  전남광주통합특별시: '전남광주',
   경상북도: '경북',
   경상남도: '경남',
   제주특별자치도: '제주',
@@ -230,7 +230,10 @@ export const formatStationLabel = (station) => {
 
   const sidoRaw = tokens[0] ?? '';
   const sido = SIDO_SHORT_LABELS[sidoRaw] ?? sidoRaw.slice(0, 2);
-  const isMetro = /(특별시|광역시|특별자치시)$/.test(sidoRaw);
+  // 전남광주통합특별시는 '특별시'로 끝나지만 광역시가 아니라 산하 시군(광양시 등)을
+  // 가지므로, 광역시로 취급하지 않고(시군을 표시) 도(道)처럼 다룬다.
+  const isMetro =
+    sidoRaw !== '전남광주통합특별시' && /(특별시|광역시|특별자치시)$/.test(sidoRaw);
   const sigunToken = tokens[1] ?? '';
   // 법정동 주소는 일반구를 가진 시(市)를 '포항시북구', '성남시분당구'처럼 시+구를
   // 공백 없이 붙여 쓴다. 이 경우 토큰이 '구'로 끝나 /(시|군)$/에 걸리지 않아 시·군명이
@@ -250,9 +253,13 @@ export const formatStationLabel = (station) => {
   // 철원(철원장흥) → 철원(장흥), 대구(대구북구) → 대구(북구). 남는 글자가 있을 때만.
   const stripCityPrefix = (name, prefix) => {
     const text = String(name ?? '');
-    return prefix && text.length > prefix.length && text.startsWith(prefix)
-      ? text.slice(prefix.length)
-      : text;
+    if (!prefix || text.length <= prefix.length || !text.startsWith(prefix)) {
+      return text;
+    }
+    const rest = text.slice(prefix.length);
+    // 남는 게 행정단위 접미사 한 글자(읍/면/동/리/가)뿐이면 떼지 않고 전체 이름을 쓴다.
+    // 광양시 광양읍 → '광양(읍)'이 아니라 '광양(광양읍)'. 섬 표기 '도'는 호출부에서 별도 처리.
+    return /^[읍면동리가]$/.test(rest) ? text : rest;
   };
   if (!sido) {
     return station.name;
