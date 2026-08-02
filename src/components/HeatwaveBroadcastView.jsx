@@ -24,6 +24,14 @@ import {
   getWorkspaceModeFromLocation,
   updateWorkspaceModeInUrl,
 } from '../utils/weatherWorkspaceMode.js';
+import {
+  clearPlayRange,
+  readPlayRange,
+  resolvePlayRange,
+  writePlayRange,
+} from '../utils/broadcastPlayRange.js';
+
+const PLAY_RANGE_VIEW_ID = 'heatwave:change';
 
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
 const GRID_WIDTH = 576;
@@ -679,6 +687,7 @@ const HeatwaveBroadcastView = () => {
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
   const [timelineDurationSec, setTimelineDurationSec] = useState(10);
   const [showTimelineTop5, setShowTimelineTop5] = useState(true);
+  const [playRangeVersion, setPlayRangeVersion] = useState(0);
   const todayDate = formatKstDateInput();
 
   const palette = mode === 'tropical'
@@ -694,6 +703,20 @@ const HeatwaveBroadcastView = () => {
   const activeTimelineFrame = timelineFrames[
     Math.min(timelineFrames.length - 1, Math.round(timelineProgress))
   ] ?? null;
+  // 편집모드에서 지정한 재생 구간(시작/끝 프레임). 저장은 관측시각 코드 기준.
+  const playRange = useMemo(
+    () =>
+      resolvePlayRange(
+        PLAY_RANGE_VIEW_ID,
+        timelineFrames,
+        (frame) => frame.observedAtCode,
+      ),
+    // playRangeVersion으로 지정/해제 시 재계산을 강제한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [timelineFrames, playRangeVersion],
+  );
+  const playFrom = playRange ? playRange.startIndex : 0;
+  const playTo = playRange ? playRange.endIndex : timelineMaxProgress;
   const top5 = useMemo(() => {
     if (!dataset) return [];
     const sourceRows = mode === 'change' ? dataset.ranking ?? [] : dataset.observations ?? [];
@@ -979,17 +1002,43 @@ const HeatwaveBroadcastView = () => {
       setIsTimelinePlaying(false);
       return;
     }
-    if (timelineProgress >= timelineMaxProgress) {
-      setTimelineProgress(0);
+    // 지정 구간 [playFrom, playTo] 안에서만 재생. 구간 미지정이면 0~끝 전체.
+    const span = Math.max(0.0001, playTo - playFrom);
+    if (timelineProgress < playFrom || timelineProgress >= playTo) {
+      setTimelineProgress(playFrom);
       timelinePairRef.current = -1;
       timelinePlaybackStartedAtRef.current = performance.now();
     } else {
       timelinePlaybackStartedAtRef.current =
         performance.now() -
-        (timelineProgress / timelineMaxProgress) * timelineDurationSec * 1000;
+        ((timelineProgress - playFrom) / span) * timelineDurationSec * 1000;
     }
     setIsTimelinePlaying(true);
-  }, [isTimelinePlaying, timelineDurationSec, timelineMaxProgress, timelineProgress]);
+  }, [isTimelinePlaying, playFrom, playTo, timelineDurationSec, timelineMaxProgress, timelineProgress]);
+
+  // 편집모드에서 현재 슬라이더 위치를 시작/끝 프레임으로 지정한다.
+  const markPlayBound = useCallback(
+    (which) => {
+      const index = Math.round(timelineProgress);
+      const frame = timelineFrames[index];
+      if (!frame) return;
+      const existing = readPlayRange(PLAY_RANGE_VIEW_ID);
+      const firstCode = timelineFrames[0]?.observedAtCode;
+      const lastCode = timelineFrames.at(-1)?.observedAtCode;
+      const next =
+        which === 'start'
+          ? { start: frame.observedAtCode, end: existing?.end ?? lastCode }
+          : { start: existing?.start ?? firstCode, end: frame.observedAtCode };
+      writePlayRange(PLAY_RANGE_VIEW_ID, next);
+      setPlayRangeVersion((value) => value + 1);
+    },
+    [timelineFrames, timelineProgress],
+  );
+
+  const handleClearPlayRange = useCallback(() => {
+    clearPlayRange(PLAY_RANGE_VIEW_ID);
+    setPlayRangeVersion((value) => value + 1);
+  }, []);
 
   const handleVideoPrepare = useCallback(({ start, end, durationSec }) => {
     const nextRange = {
@@ -1188,17 +1237,18 @@ const HeatwaveBroadcastView = () => {
       timelineMaxProgress <= 0
     ) return undefined;
 
+    const span = Math.max(0.0001, playTo - playFrom);
     const timer = window.setInterval(() => {
       const elapsed = performance.now() - timelinePlaybackStartedAtRef.current;
       const nextProgress = Math.min(
-        timelineMaxProgress,
-        (elapsed / (timelineDurationSec * 1000)) * timelineMaxProgress,
+        playTo,
+        playFrom + (elapsed / (timelineDurationSec * 1000)) * span,
       );
       setTimelineProgress(nextProgress);
-      if (nextProgress >= timelineMaxProgress) setIsTimelinePlaying(false);
+      if (nextProgress >= playTo) setIsTimelinePlaying(false);
     }, TIMELINE_RENDER_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [isTimelinePlaying, mode, status, timelineDurationSec, timelineMaxProgress]);
+  }, [isTimelinePlaying, mode, status, timelineDurationSec, timelineMaxProgress, playFrom, playTo]);
 
   useEffect(() => {
     if (targetDate || mode === 'change') return undefined;
@@ -1382,25 +1432,75 @@ const HeatwaveBroadcastView = () => {
                 </span>
                 <span>{formatTimelineClock(timelineFrames.at(-1)?.observedAtCode)}</span>
               </div>
-              <input
-                type="range"
-                min={0}
-                max={timelineMaxProgress}
-                step="0.01"
-                value={timelineProgress}
-                onChange={(event) => {
-                  setIsTimelinePlaying(false);
-                  setTimelineProgress(Number(event.target.value));
-                }}
-                disabled={timelineFrames.length < 2}
-                className="h-2.5 w-full cursor-pointer appearance-none rounded-full accent-[#2875d9] disabled:cursor-wait"
-                style={{
-                  background: `linear-gradient(to right, #2875d9 ${timelineProgressPercent}%, rgba(255,255,255,0.28) ${timelineProgressPercent}%)`,
-                }}
-                aria-label="기온 변화 재생 위치"
-              />
+              <div className="relative">
+                <input
+                  type="range"
+                  min={0}
+                  max={timelineMaxProgress}
+                  step="0.01"
+                  value={timelineProgress}
+                  onChange={(event) => {
+                    setIsTimelinePlaying(false);
+                    setTimelineProgress(Number(event.target.value));
+                  }}
+                  disabled={timelineFrames.length < 2}
+                  className="h-2.5 w-full cursor-pointer appearance-none rounded-full accent-[#2875d9] disabled:cursor-wait"
+                  style={{
+                    background: `linear-gradient(to right, #2875d9 ${timelineProgressPercent}%, rgba(255,255,255,0.28) ${timelineProgressPercent}%)`,
+                  }}
+                  aria-label="기온 변화 재생 위치"
+                />
+                {playRange && timelineMaxProgress > 0 ? (
+                  <>
+                    <span
+                      className="pointer-events-none absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-300 shadow"
+                      style={{ left: `${(playFrom / timelineMaxProgress) * 100}%` }}
+                      title="시작 화면"
+                    />
+                    <span
+                      className="pointer-events-none absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-300 shadow"
+                      style={{ left: `${(playTo / timelineMaxProgress) * 100}%` }}
+                      title="끝 화면"
+                    />
+                  </>
+                ) : null}
+              </div>
             </div>
           </div>
+          {workspaceMode !== 'broadcast' ? (
+            <div className="mt-2 flex items-center justify-end gap-2 pl-[3.75rem]">
+              <span className="mr-auto text-xs font-bold text-white/60">
+                {playRange
+                  ? `재생 구간 ${formatTimelineClock(timelineFrames[playRange.startIndex]?.observedAtCode)}–${formatTimelineClock(timelineFrames[playRange.endIndex]?.observedAtCode)}`
+                  : '재생 구간 미지정 (전체 재생)'}
+              </span>
+              <button
+                type="button"
+                onClick={() => markPlayBound('start')}
+                disabled={timelineFrames.length < 2}
+                className="h-9 rounded-full border border-emerald-300/50 bg-emerald-500/15 px-3 text-xs font-black text-emerald-200 transition hover:bg-emerald-500/25 disabled:opacity-40"
+              >
+                시작으로 지정
+              </button>
+              <button
+                type="button"
+                onClick={() => markPlayBound('end')}
+                disabled={timelineFrames.length < 2}
+                className="h-9 rounded-full border border-rose-300/50 bg-rose-500/15 px-3 text-xs font-black text-rose-200 transition hover:bg-rose-500/25 disabled:opacity-40"
+              >
+                끝으로 지정
+              </button>
+              {playRange ? (
+                <button
+                  type="button"
+                  onClick={handleClearPlayRange}
+                  className="h-9 rounded-full border border-white/25 bg-slate-900/70 px-3 text-xs font-black text-white/80 transition hover:bg-slate-800"
+                >
+                  구간 해제
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
