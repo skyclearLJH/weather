@@ -27,7 +27,14 @@ export const readPlayRange = (viewId) => {
 export const writePlayRange = (viewId, range) => {
   const all = readAll();
   if (range && range.start != null && range.end != null) {
-    all[viewId] = { start: String(range.start), end: String(range.end) };
+    // 프레임 키 + 시작/끝 지도 카메라(위치·확대·기울기·방위)를 함께 보관.
+    // 카메라는 지정 시점에 캡처하며, 없으면 null(카메라 이동 없음).
+    all[viewId] = {
+      start: String(range.start),
+      end: String(range.end),
+      startCamera: range.startCamera ?? null,
+      endCamera: range.endCamera ?? null,
+    };
   } else {
     delete all[viewId];
   }
@@ -75,8 +82,46 @@ export const resolvePlayRange = (viewId, frames, keyOf) => {
   if (startIndex < 0 && endIndex < 0) return null;
   if (startIndex < 0) startIndex = 0;
   if (endIndex < 0) endIndex = frames.length - 1;
+  let startCamera = range.startCamera ?? null;
+  let endCamera = range.endCamera ?? null;
   if (startIndex > endIndex) {
     [startIndex, endIndex] = [endIndex, startIndex];
+    [startCamera, endCamera] = [endCamera, startCamera];
   }
-  return { startIndex, endIndex };
+  return { startIndex, endIndex, startCamera, endCamera };
+};
+
+// 현재 지도 카메라(위치·확대·기울기·방위)를 캡처한다.
+export const captureCamera = (map) => {
+  if (!map) return null;
+  const center = map.getCenter();
+  return {
+    center: [center.lng, center.lat],
+    zoom: map.getZoom(),
+    pitch: map.getPitch(),
+    bearing: map.getBearing(),
+  };
+};
+
+// 재생 시작 시 시작 카메라로 즉시 이동하고, 끝 카메라로 durationMs 동안 부드럽게
+// 이동한다. 카메라가 지정되지 않은 쪽은 건드리지 않는다.
+export const applyPlayCamera = (map, range, durationMs) => {
+  if (!map || !range) return;
+  if (range.startCamera) {
+    map.jumpTo({
+      center: range.startCamera.center,
+      zoom: range.startCamera.zoom,
+      pitch: range.startCamera.pitch,
+      bearing: range.startCamera.bearing,
+    });
+  }
+  if (range.endCamera) {
+    map.easeTo({
+      center: range.endCamera.center,
+      zoom: range.endCamera.zoom,
+      pitch: range.endCamera.pitch,
+      bearing: range.endCamera.bearing,
+      duration: Math.max(0, durationMs),
+    });
+  }
 };

@@ -25,6 +25,8 @@ import {
   updateWorkspaceModeInUrl,
 } from '../utils/weatherWorkspaceMode.js';
 import {
+  applyPlayCamera,
+  captureCamera,
   clearPlayRange,
   readPlayRange,
   resolvePlayRange,
@@ -999,6 +1001,7 @@ const HeatwaveBroadcastView = () => {
   const handleTimelinePlayToggle = useCallback(() => {
     if (timelineMaxProgress <= 0) return;
     if (isTimelinePlaying) {
+      mapRef.current?.stop(); // 카메라 이동도 함께 멈춘다
       setIsTimelinePlaying(false);
       return;
     }
@@ -1013,10 +1016,13 @@ const HeatwaveBroadcastView = () => {
         performance.now() -
         ((timelineProgress - playFrom) / span) * timelineDurationSec * 1000;
     }
+    // 지정 카메라가 있으면 시작 카메라로 점프 후 끝 카메라로 재생 길이만큼 이동.
+    applyPlayCamera(mapRef.current, playRange, timelineDurationSec * 1000);
     setIsTimelinePlaying(true);
-  }, [isTimelinePlaying, playFrom, playTo, timelineDurationSec, timelineMaxProgress, timelineProgress]);
+  }, [isTimelinePlaying, playFrom, playTo, playRange, timelineDurationSec, timelineMaxProgress, timelineProgress]);
 
   // 편집모드에서 현재 슬라이더 위치를 시작/끝 프레임으로 지정한다.
+  // 현재 지도 카메라(위치·확대·기울기)도 함께 캡처해 재생 시 이동에 쓴다.
   const markPlayBound = useCallback(
     (which) => {
       const index = Math.round(timelineProgress);
@@ -1025,10 +1031,21 @@ const HeatwaveBroadcastView = () => {
       const existing = readPlayRange(PLAY_RANGE_VIEW_ID);
       const firstCode = timelineFrames[0]?.observedAtCode;
       const lastCode = timelineFrames.at(-1)?.observedAtCode;
+      const camera = captureCamera(mapRef.current);
       const next =
         which === 'start'
-          ? { start: frame.observedAtCode, end: existing?.end ?? lastCode }
-          : { start: existing?.start ?? firstCode, end: frame.observedAtCode };
+          ? {
+              start: frame.observedAtCode,
+              end: existing?.end ?? lastCode,
+              startCamera: camera,
+              endCamera: existing?.endCamera ?? null,
+            }
+          : {
+              start: existing?.start ?? firstCode,
+              end: frame.observedAtCode,
+              startCamera: existing?.startCamera ?? null,
+              endCamera: camera,
+            };
       writePlayRange(PLAY_RANGE_VIEW_ID, next);
       setPlayRangeVersion((value) => value + 1);
     },

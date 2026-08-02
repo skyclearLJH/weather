@@ -24,6 +24,8 @@ import {
   probeLatestSatDate,
 } from '../api/satApi';
 import {
+  applyPlayCamera,
+  captureCamera,
   clearPlayRange,
   readPlayRange,
   resolvePlayRange,
@@ -1097,10 +1099,21 @@ function SatelliteView({
       const firstKey = timeline[0]?.getTime();
       const lastKey = timeline.at(-1)?.getTime();
       const key = frame.getTime();
+      const camera = captureCamera(mapRef.current);
       const next =
         which === 'start'
-          ? { start: key, end: existing?.end ?? lastKey }
-          : { start: existing?.start ?? firstKey, end: key };
+          ? {
+              start: key,
+              end: existing?.end ?? lastKey,
+              startCamera: camera,
+              endCamera: existing?.endCamera ?? null,
+            }
+          : {
+              start: existing?.start ?? firstKey,
+              end: key,
+              startCamera: existing?.startCamera ?? null,
+              endCamera: camera,
+            };
       writePlayRange(PLAY_RANGE_VIEW_ID, next);
       setPlayRangeVersion((value) => value + 1);
     },
@@ -1115,6 +1128,7 @@ function SatelliteView({
   // 끝에서 다시 재생을 누르면 처음부터. 지정 구간이 있으면 그 구간만 재생한다.
   const handlePlayToggle = useCallback(() => {
     if (isPlaying) {
+      mapRef.current?.stop(); // 카메라 이동도 함께 멈춘다
       setIsPlaying(false);
       return;
     }
@@ -1122,6 +1136,12 @@ function SatelliteView({
     if (persistentPlayRange) {
       setVideoPlayRange(persistentPlayRange);
       setFrameIndex(persistentPlayRange.startIndex);
+      const transitionCount = Math.max(
+        1,
+        persistentPlayRange.endIndex - persistentPlayRange.startIndex,
+      );
+      const durationMs = Math.max(45, Math.round((playDurationSec * 1000) / transitionCount)) * transitionCount;
+      applyPlayCamera(mapRef.current, persistentPlayRange, durationMs);
       window.requestAnimationFrame(() => setIsPlaying(true));
       return;
     }
@@ -1129,7 +1149,7 @@ function SatelliteView({
     setVideoPlayRange({ startIndex, endIndex: timeline.length - 1 });
     if (startIndex !== frameIndex) setFrameIndex(startIndex);
     setIsPlaying(true);
-  }, [frameIndex, isPlaying, timeline.length, persistentPlayRange]);
+  }, [frameIndex, isPlaying, timeline.length, persistentPlayRange, playDurationSec]);
 
   const videoDefaultStart = timeline[0] ? formatLocalDateTimeInput(timeline[0]) : '';
   const videoDefaultEnd = timeline.at(-1) ? formatLocalDateTimeInput(timeline.at(-1)) : '';

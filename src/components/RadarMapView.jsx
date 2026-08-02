@@ -6,6 +6,8 @@ import VideoExportMenu from './VideoExportMenu.jsx';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
 import { updateWorkspaceModeInUrl } from '../utils/weatherWorkspaceMode.js';
 import {
+  applyPlayCamera,
+  captureCamera,
   clearPlayRange,
   readPlayRange,
   resolvePlayRange,
@@ -1978,10 +1980,21 @@ const RadarMapView = ({
       const firstKey = keyOf(subFrames[0]);
       const lastKey = keyOf(subFrames[subFrames.length - 1]);
       const key = keyOf(frame);
+      const camera = captureCamera(mapRef.current);
       const next =
         which === 'start'
-          ? { start: key, end: existing?.end ?? lastKey }
-          : { start: existing?.start ?? firstKey, end: key };
+          ? {
+              start: key,
+              end: existing?.end ?? lastKey,
+              startCamera: camera,
+              endCamera: existing?.endCamera ?? null,
+            }
+          : {
+              start: existing?.start ?? firstKey,
+              end: key,
+              startCamera: existing?.startCamera ?? null,
+              endCamera: camera,
+            };
       writePlayRange(viewId, next);
       setPlayRangeVersion((value) => value + 1);
     },
@@ -1996,9 +2009,11 @@ const RadarMapView = ({
 
   const handlePlayButton = () => {
     if (isPlaying) {
+      mapRef.current?.stop(); // 카메라 이동도 함께 멈춘다
       setIsPlaying(false);
       return;
     }
+    const cameraDurationMs = playDurationSec * 1000;
     if (isAccumView) {
       if (accumHours.length < 2 || accumStatus !== 'ready') {
         return;
@@ -2012,6 +2027,7 @@ const RadarMapView = ({
       if (endIndex <= startIndex) return;
       setAccumIndex(startIndex);
       setAccumPlayRange({ startIndex, endIndex });
+      applyPlayCamera(mapRef.current, activePlayRange, cameraDurationMs);
       setIsPlaying(true);
       return;
     }
@@ -2028,6 +2044,7 @@ const RadarMapView = ({
       const transitionCount = Math.max(1, endIndex - startIndex);
       setKimPlayTarget(endIndex);
       setKimPlayIntervalMs(Math.max(60, Math.round((playDurationSec * 1000) / transitionCount)));
+      applyPlayCamera(mapRef.current, activePlayRange, cameraDurationMs);
       setIsPlaying(true);
       return;
     }
@@ -2043,6 +2060,7 @@ const RadarMapView = ({
       const transitionCount = endIndex - startIndex;
       setPlayTarget(endIndex);
       setPlayIntervalMs(Math.max(45, Math.round((playDurationSec * 1000) / transitionCount)));
+      applyPlayCamera(mapRef.current, activePlayRange, cameraDurationMs);
       setIsPlaying(true);
       return;
     }
