@@ -5,6 +5,12 @@ import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import VideoExportMenu from './VideoExportMenu.jsx';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
 import { updateWorkspaceModeInUrl } from '../utils/weatherWorkspaceMode.js';
+import {
+  clearPlayRange,
+  readPlayRange,
+  resolvePlayRange,
+  writePlayRange,
+} from '../utils/broadcastPlayRange.js';
 import { createAccumSurfaceLayer } from './AccumSurfaceLayer.js';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -1012,6 +1018,7 @@ const RadarMapView = ({
   const isKimView = isBroadcast && broadcastView === 'kim';
   const isSatelliteView = isBroadcast && broadcastView === 'satellite';
   const isRadarView = isBroadcast && broadcastView === 'radar';
+  const [playRangeVersion, setPlayRangeVersion] = useState(0);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1922,6 +1929,71 @@ const RadarMapView = ({
   }, [isBroadcast, isPlaying, playTarget, frameIndex, isAccumView, isKimView]);
 
   // 관측 프레임은 선택 지점→현재, 예측 프레임은 선택 지점→예측 끝으로 재생한다.
+  // 현재 하위 뷰(레이더/누적/KIM)의 재생 구간 지정 컨텍스트.
+  // 위성은 SatelliteView가 자체 처리하므로 여기서는 제외한다.
+  const playRangeContext = useMemo(() => {
+    if (isAccumView) {
+      return {
+        viewId: 'radar:accum',
+        frames: accumHours,
+        keyOf: (frame) => String(frame?.getTime?.() ?? ''),
+        current: accumIndex,
+      };
+    }
+    if (isKimView) {
+      return {
+        viewId: 'radar:kim',
+        frames: kimFrames,
+        keyOf: (frame) => String(frame?.validTime?.getTime?.() ?? ''),
+        current: kimIndex,
+      };
+    }
+    if (isRadarView) {
+      return {
+        viewId: 'radar:radar',
+        frames,
+        keyOf: (frame) => String(frame?.validTime?.getTime?.() ?? ''),
+        current: frameIndex,
+      };
+    }
+    return null;
+  }, [isAccumView, isKimView, isRadarView, accumHours, kimFrames, frames, accumIndex, kimIndex, frameIndex]);
+
+  const activePlayRange = useMemo(
+    () =>
+      playRangeContext
+        ? resolvePlayRange(playRangeContext.viewId, playRangeContext.frames, playRangeContext.keyOf)
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [playRangeContext, playRangeVersion],
+  );
+
+  const markPlayBound = useCallback(
+    (which) => {
+      if (!playRangeContext) return;
+      const { viewId, frames: subFrames, keyOf, current } = playRangeContext;
+      const frame = subFrames[current];
+      if (!frame) return;
+      const existing = readPlayRange(viewId);
+      const firstKey = keyOf(subFrames[0]);
+      const lastKey = keyOf(subFrames[subFrames.length - 1]);
+      const key = keyOf(frame);
+      const next =
+        which === 'start'
+          ? { start: key, end: existing?.end ?? lastKey }
+          : { start: existing?.start ?? firstKey, end: key };
+      writePlayRange(viewId, next);
+      setPlayRangeVersion((value) => value + 1);
+    },
+    [playRangeContext],
+  );
+
+  const handleClearPlayRange = useCallback(() => {
+    if (!playRangeContext) return;
+    clearPlayRange(playRangeContext.viewId);
+    setPlayRangeVersion((value) => value + 1);
+  }, [playRangeContext]);
+
   const handlePlayButton = () => {
     if (isPlaying) {
       setIsPlaying(false);
@@ -1931,27 +2003,46 @@ const RadarMapView = ({
       if (accumHours.length < 2 || accumStatus !== 'ready') {
         return;
       }
-      if (accumIndex >= accumHours.length - 1) {
-        setAccumIndex(0);
-      }
-      setAccumPlayRange({
-        startIndex: accumIndex >= accumHours.length - 1 ? 0 : accumIndex,
-        endIndex: accumHours.length - 1,
-      });
+      const startIndex = activePlayRange
+        ? activePlayRange.startIndex
+        : accumIndex >= accumHours.length - 1
+          ? 0
+          : accumIndex;
+      const endIndex = activePlayRange ? activePlayRange.endIndex : accumHours.length - 1;
+      if (endIndex <= startIndex) return;
+      setAccumIndex(startIndex);
+      setAccumPlayRange({ startIndex, endIndex });
       setIsPlaying(true);
       return;
     }
     if (isKimView) {
       if (kimFrames.length < 2 || kimStatus !== 'ready') return;
-      const startIndex = kimIndex >= kimFrames.length - 1 ? 0 : kimIndex;
+      const startIndex = activePlayRange
+        ? activePlayRange.startIndex
+        : kimIndex >= kimFrames.length - 1
+          ? 0
+          : kimIndex;
+      const endIndex = activePlayRange ? activePlayRange.endIndex : kimFrames.length - 1;
+      if (endIndex <= startIndex) return;
       if (startIndex !== kimIndex) setKimIndex(startIndex);
-      const transitionCount = Math.max(1, kimFrames.length - 1 - startIndex);
-      setKimPlayTarget(kimFrames.length - 1);
+      const transitionCount = Math.max(1, endIndex - startIndex);
+      setKimPlayTarget(endIndex);
       setKimPlayIntervalMs(Math.max(60, Math.round((playDurationSec * 1000) / transitionCount)));
       setIsPlaying(true);
       return;
     }
     if (!isBroadcast) {
+      setIsPlaying(true);
+      return;
+    }
+
+    if (activePlayRange) {
+      const { startIndex, endIndex } = activePlayRange;
+      if (endIndex <= startIndex) return;
+      setFrameIndex(startIndex);
+      const transitionCount = endIndex - startIndex;
+      setPlayTarget(endIndex);
+      setPlayIntervalMs(Math.max(45, Math.round((playDurationSec * 1000) / transitionCount)));
       setIsPlaying(true);
       return;
     }
@@ -2065,6 +2156,22 @@ const RadarMapView = ({
   const timelineSpan = timelineMaxOffset - timelineMinOffset;
   const thumbPercent = ((currentOffset - timelineMinOffset) / timelineSpan) * 100;
   const currentPercent = ((0 - timelineMinOffset) / timelineSpan) * 100;
+
+  // 지정 구간 시작/끝 마커의 슬라이더상 위치(%). 뷰마다 슬라이더 척도가 달라
+  // (레이더=분 오프셋, 누적/KIM=인덱스) 각각 계산한다.
+  const playRangePercents = useMemo(() => {
+    if (!activePlayRange || !playRangeContext) return null;
+    const { startIndex, endIndex } = activePlayRange;
+    if (isRadarView) {
+      const span = timelineSpan || 1;
+      return {
+        start: ((frameOffsets[startIndex] - timelineMinOffset) / span) * 100,
+        end: ((frameOffsets[endIndex] - timelineMinOffset) / span) * 100,
+      };
+    }
+    const max = Math.max(1, playRangeContext.frames.length - 1);
+    return { start: (startIndex / max) * 100, end: (endIndex / max) * 100 };
+  }, [activePlayRange, playRangeContext, isRadarView, frameOffsets, timelineMinOffset, timelineSpan]);
 
   const handleTimelineChange = (offsetMinutes) => {
     if (frameOffsets.length === 0) {
@@ -3430,6 +3537,7 @@ const RadarMapView = ({
 
   // 컨트롤바(재생 버튼 + 슬라이더 + 눈금). 방송모드에서는 어두운 배경 위에 얹는다.
   const renderTimeline = (broadcast) => (
+    <div className="flex flex-col gap-2">
     <div className="flex items-center gap-3">
       <button
         type="button"
@@ -3522,6 +3630,20 @@ const RadarMapView = ({
               : `linear-gradient(to right, #64748b ${currentPercent}%, #2563eb ${currentPercent}%)`,
           }}
         />
+        {playRangePercents ? (
+          <>
+            <span
+              className="pointer-events-none absolute top-1/2 z-20 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-300 shadow"
+              style={{ left: `${Math.min(Math.max(playRangePercents.start, 0), 100)}%` }}
+              title="시작 화면"
+            />
+            <span
+              className="pointer-events-none absolute top-1/2 z-20 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-300 shadow"
+              style={{ left: `${Math.min(Math.max(playRangePercents.end, 0), 100)}%` }}
+              title="끝 화면"
+            />
+          </>
+        ) : null}
         <div className="relative mt-1 h-9">
           {(isAccumView ? accumTicks : isKimView ? kimTicks : timelineTicks).map(
             ({ offsetMinutes, key, position, isLabeled, label, dateLabel }) => (
@@ -3561,6 +3683,37 @@ const RadarMapView = ({
           ))}
         </div>
       </div>
+    </div>
+    {broadcast && workspaceMode !== 'broadcast' && playRangeContext ? (
+      <div className="flex items-center justify-end gap-2 pl-14">
+        <span className="mr-auto text-xs font-bold text-white/70">
+          {activePlayRange ? '재생 구간 지정됨' : '재생 구간 미지정 (전체 재생)'}
+        </span>
+        <button
+          type="button"
+          onClick={() => markPlayBound('start')}
+          className="h-9 rounded-full border border-emerald-300/50 bg-emerald-500/15 px-3 text-xs font-black text-emerald-200 transition hover:bg-emerald-500/25"
+        >
+          시작으로 지정
+        </button>
+        <button
+          type="button"
+          onClick={() => markPlayBound('end')}
+          className="h-9 rounded-full border border-rose-300/50 bg-rose-500/15 px-3 text-xs font-black text-rose-200 transition hover:bg-rose-500/25"
+        >
+          끝으로 지정
+        </button>
+        {activePlayRange ? (
+          <button
+            type="button"
+            onClick={handleClearPlayRange}
+            className="h-9 rounded-full border border-white/25 bg-slate-900/70 px-3 text-xs font-black text-white/80 transition hover:bg-slate-800"
+          >
+            구간 해제
+          </button>
+        ) : null}
+      </div>
+    ) : null}
     </div>
   );
 

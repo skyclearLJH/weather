@@ -41,15 +41,37 @@ export const writePlayRange = (viewId, range) => {
 export const clearPlayRange = (viewId) => writePlayRange(viewId, null);
 
 // 저장된 시작/끝 키를 현재 프레임 배열의 인덱스로 되돌린다.
-// keyOf(frame, index) → 문자열. 정확히 일치하는 키가 없으면 해당 끝을
-// 타임라인 경계(0 또는 마지막)로 보정한다. 둘 다 없으면 null.
+// keyOf(frame, index) → 문자열. 레이더/KIM/위성처럼 타임라인이 "현재" 기준으로
+// 계속 갱신되는 뷰는 편집↔방송 사이에 프레임 시각이 미세하게 밀려 정확한 키가
+// 안 맞으므로, 키를 숫자(관측시각 코드·타임스탬프)로 보고 "가장 가까운 프레임"을
+// 찾는다. 숫자로 못 읽는 키는 정확 일치만 시도한다. 해당 끝을 못 찾으면
+// 타임라인 경계(0 또는 마지막)로 보정. 둘 다 없으면 null.
 // 반환: { startIndex, endIndex } (start ≤ end 보장) 또는 null.
 export const resolvePlayRange = (viewId, frames, keyOf) => {
   const range = readPlayRange(viewId);
   if (!range || !frames || frames.length === 0) return null;
   const keys = frames.map((frame, index) => String(keyOf(frame, index)));
-  let startIndex = keys.indexOf(String(range.start));
-  let endIndex = keys.indexOf(String(range.end));
+  const findNearest = (target) => {
+    if (target == null) return -1;
+    const exact = keys.indexOf(String(target));
+    if (exact >= 0) return exact;
+    const numericTarget = Number(target);
+    if (!Number.isFinite(numericTarget)) return -1;
+    let bestIndex = -1;
+    let bestDiff = Infinity;
+    for (let index = 0; index < keys.length; index += 1) {
+      const value = Number(keys[index]);
+      if (!Number.isFinite(value)) continue;
+      const diff = Math.abs(value - numericTarget);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIndex = index;
+      }
+    }
+    return bestIndex;
+  };
+  let startIndex = findNearest(range.start);
+  let endIndex = findNearest(range.end);
   if (startIndex < 0 && endIndex < 0) return null;
   if (startIndex < 0) startIndex = 0;
   if (endIndex < 0) endIndex = frames.length - 1;
