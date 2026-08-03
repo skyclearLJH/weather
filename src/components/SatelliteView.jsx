@@ -99,31 +99,9 @@ const LAPSE_C_PER_KM = 6.5;
 const MAX_CLOUD_KM = 16;
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-const SATELLITE_PLACE_LABEL_LAYER_IDS = [
-  'satellite-sido-label',
-  'satellite-sgg-label',
-];
-const SATELLITE_SIDO_SHORT_NAME = [
-  'match',
-  ['get', 'sidonm'],
-  '서울특별시', '서울',
-  '부산광역시', '부산',
-  '대구광역시', '대구',
-  '인천광역시', '인천',
-  '대전광역시', '대전',
-  '울산광역시', '울산',
-  '세종특별자치시', '세종',
-  '경기도', '경기',
-  '강원특별자치도', '강원',
-  '충청북도', '충북',
-  '충청남도', '충남',
-  '전북특별자치도', '전북',
-  '전남광주통합특별시', '전남광주',
-  '경상북도', '경북',
-  '경상남도', '경남',
-  '제주특별자치도', '제주',
-  ['get', 'sidonm'],
-];
+// 위성 화면에는 지명(시도·시군구) 라벨을 표시하지 않는다. 심볼 라벨을 켜면
+// FD(전구) 메쉬 갱신이 눈에 띄게 느려지는 렌더 경합이 있어(라벨 OFF=10분, ON=20분),
+// 방송 안정성을 위해 위성에서는 라벨 소스·레이어 자체를 두지 않는다.
 
 // 대류운 강조: 의사 운정고도(휘도온도에서 유도) 기준 — 높을수록 강한 대류.
 // 권계면 높이가 계절에 따라 달라 같은 강도의 대류라도 겨울엔 운정이 낮다.
@@ -171,8 +149,6 @@ const MAP_STYLE = {
     // 전 세계 육지 — FD 전구 디스크가 보여주는 모든 영역(인도·중앙아시아·호주 등)을 덮는다
     land: { type: 'geojson', data: '/data/map/land-50m-world.geojson' },
     sido: { type: 'geojson', data: '/data/map/kr-sido-20260701.geojson' },
-    sidoLabels: { type: 'geojson', data: '/data/map/kr-sido-labels-20260701.geojson' },
-    sggLabels: { type: 'geojson', data: '/data/map/kr-sgg-labels-20260701.geojson' },
   },
   layers: [
     // 배경 = 바다, land 폴리곤 = 육지 — 구름이 덮여도 면 대비로 지형이 읽히게 한다.
@@ -203,51 +179,7 @@ const MAP_STYLE = {
       source: 'sido',
       paint: { 'line-color': '#647d97', 'line-width': 1.0 },
     },
-    {
-      id: 'satellite-sido-label',
-      type: 'symbol',
-      source: 'sidoLabels',
-      maxzoom: 6.7,
-      layout: {
-        'text-field': SATELLITE_SIDO_SHORT_NAME,
-        'text-size': ['interpolate', ['linear'], ['zoom'], 3.8, 11, 6.7, 16],
-        'text-font': ['Open Sans Bold'],
-        'text-allow-overlap': false,
-        'text-padding': 4,
-      },
-      paint: {
-        'text-color': '#f8fafc',
-        'text-halo-color': 'rgba(15,23,42,0.9)',
-        'text-halo-width': 1.5,
-      },
-    },
-    {
-      id: 'satellite-sgg-label',
-      type: 'symbol',
-      source: 'sggLabels',
-      minzoom: 6.5,
-      layout: {
-        'text-field': ['get', 'sggnm'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 6.5, 9, 9, 13],
-        'text-font': ['Open Sans Semibold'],
-        'text-allow-overlap': false,
-        'text-padding': 2,
-      },
-      paint: {
-        'text-color': '#f8fafc',
-        'text-halo-color': 'rgba(15,23,42,0.92)',
-        'text-halo-width': 1.3,
-      },
-    },
   ],
-};
-
-const setSatellitePlaceLabelVisibility = (map, visible) => {
-  SATELLITE_PLACE_LABEL_LAYER_IDS.forEach((id) => {
-    if (map.getLayer(id)) {
-      map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
-    }
-  });
 };
 
 // KO(동아시아) 3D 높이 메쉬는 데이터 해상도(1809x1066)와 분리해 성기게 만든다.
@@ -700,7 +632,6 @@ const createCloudLayer = () => {
 function SatelliteView({
   menuSlot = null,
   workspaceMode = 'edit',
-  showPlaceLabels = true,
   onBeforeScreenShare,
 }) {
   const mapContainerRef = useRef(null);
@@ -783,9 +714,6 @@ function SatelliteView({
       layer.convHighlight = convHighlightRef.current;
       cloudLayerRef.current = layer;
       map.addLayer(layer);
-      SATELLITE_PLACE_LABEL_LAYER_IDS.forEach((id) => {
-        if (map.getLayer(id)) map.moveLayer(id);
-      });
       map.addSource('satellite-dokdo', { type: 'geojson', data: DOKDO_GEOJSON });
       map.addLayer({
         id: 'satellite-dokdo-dot',
@@ -813,18 +741,6 @@ function SatelliteView({
       cloudLayerRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return undefined;
-    const applyVisibility = () => setSatellitePlaceLabelVisibility(map, showPlaceLabels);
-    if (map.isStyleLoaded()) {
-      applyVisibility();
-      return undefined;
-    }
-    map.on('load', applyVisibility);
-    return () => map.off('load', applyVisibility);
-  }, [showPlaceLabels]);
 
   useEffect(() => {
     exaggerationRef.current = exaggeration;

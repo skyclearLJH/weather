@@ -3925,7 +3925,6 @@ const RadarMapView = ({
           <SatelliteView
             menuSlot={workspaceMenu}
             workspaceMode={workspaceMode}
-            showPlaceLabels={showPlaceLabels}
             onBeforeScreenShare={handleBeforeVideoScreenShare}
           />
         ) : null}
