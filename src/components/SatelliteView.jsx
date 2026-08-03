@@ -1155,10 +1155,13 @@ function SatelliteView({
   const videoDefaultEnd = timeline.at(-1) ? formatLocalDateTimeInput(timeline.at(-1)) : '';
   const handleVideoPrepare = useCallback(
     async ({ start, end }) => {
-      if (!findTimelineRange(timeline, start, end)) {
+      const range = findTimelineRange(timeline, start, end);
+      if (!range) {
         throw new Error('선택한 기간에 재생할 위성 프레임이 2개 이상 필요합니다.');
       }
       setIsPlaying(false);
+      // 녹화 첫 컷이 직전 화면이 아니라 시작 프레임이 되도록 미리 이동해 둔다.
+      setFrameIndex(range.startIndex);
     },
     [timeline],
   );

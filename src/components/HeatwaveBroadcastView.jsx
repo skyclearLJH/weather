@@ -1066,6 +1066,9 @@ const HeatwaveBroadcastView = () => {
     setTimelineStartInput(nextRange.start);
     setTimelineEndInput(nextRange.end);
     setIsTimelinePlaying(false);
+    // 녹화 첫 컷이 직전 화면이 아니라 시작 프레임이 되도록 진행위치를 0으로 되돌린다.
+    setTimelineProgress(0);
+    timelinePairRef.current = -1;
     if (
       mode === 'change' &&
       status === 'ready' &&
@@ -1406,13 +1409,13 @@ const HeatwaveBroadcastView = () => {
             width: 'clamp(430px, 29vw, 700px)',
           }}
         >
-          <div className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm" style={{ width: 'clamp(320px, 22vw, 500px)' }}>
-            <div className="border-b border-white/15 px-5 py-2 text-sm font-black text-white/80">
+          <div className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm" style={{ width: 'clamp(368px, 25vw, 575px)' }}>
+            <div className="border-b border-white/15 px-6 py-2.5 text-base font-black text-white/80">
               {mode === 'tropical' ? '열대야 순위' : '최고기온 순위'}
             </div>
             <div className="divide-y divide-white/10">
               {top5.map((row, index) => (
-                <div key={row.id} className="flex items-center gap-2.5 px-5 py-[0.9vh]" style={{ fontSize: 'clamp(16px, 1.25vw, 26px)' }}>
+                <div key={row.id} className="flex items-center gap-3 px-6 py-[1.05vh]" style={{ fontSize: 'clamp(18px, 1.44vw, 30px)' }}>
                   <span className="w-[1.2em] shrink-0 font-black text-[#f4c542]">{index + 1}</span>
                   <span className="min-w-0 flex-1 truncate font-semibold">{row.label}</span>
                   <span className="shrink-0 font-black tabular-nums">

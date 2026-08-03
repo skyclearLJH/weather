@@ -2101,12 +2101,18 @@ const RadarMapView = ({
 
   const handleVideoPrepare = useCallback(
     async ({ start, end }) => {
-      if (!findTimelineRange(videoTimelineDates, start, end)) {
+      const range = findTimelineRange(videoTimelineDates, start, end);
+      if (!range) {
         throw new Error('선택한 기간에 재생할 프레임이 2개 이상 필요합니다.');
       }
       setIsPlaying(false);
+      // 녹화 첫 컷이 '직전에 머물던 화면'이 아니라 시작 프레임이 되도록,
+      // 캡처 전에 표시를 시작 프레임으로 옮겨 둔다.
+      if (isAccumView) setAccumIndex(range.startIndex);
+      else if (isKimView) setKimIndex(range.startIndex);
+      else setFrameIndex(range.startIndex);
     },
-    [videoTimelineDates],
+    [videoTimelineDates, isAccumView, isKimView],
   );
 
   const handleVideoStart = useCallback(
