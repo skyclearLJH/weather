@@ -497,6 +497,15 @@ const createCloudLayer = () => {
 
     onAdd(map, gl) {
       this.map = map;
+      // 전용 VAO: MapLibre(WebGL2)는 레이어마다 VAO를 바인딩한다. 커스텀 레이어가
+      // 전역 VAO에 attribute를 설정하면, 태풍 진로도의 fill/line(과거의 지명 symbol)
+      // 레이어가 추가되는 순간 MapLibre가 남긴 VAO 상태와 뒤섞여 FD(전구) 드로우가
+      // 깨졌다(FD가 통째로 사라지거나 일부 프레임만 그려짐). 우리 VAO 안에서만
+      // attribute/인덱스를 설정하고 끝나면 해제해 완전히 격리한다.
+      this.vao = gl.createVertexArray ? gl.createVertexArray() : null;
+      // 버퍼 생성 중 ELEMENT_ARRAY_BUFFER 바인딩은 '현재 VAO'에 기록되므로, 남의
+      // VAO(=MapLibre 것)를 건드리지 않도록 우리 VAO 안에서 만든다.
+      if (this.vao) gl.bindVertexArray(this.vao);
       const makeBuffer = (target, data, usage) => {
         const buffer = gl.createBuffer();
         gl.bindBuffer(target, buffer);
@@ -669,6 +678,7 @@ const createCloudLayer = () => {
       // 그리기 순서: FD(배경) → KO(정밀) → LA(빠른 첫 화면)
       this.meshes = [fdMesh, koMesh, laMesh];
       this.meshByArea = { ko: koMesh, fd: fdMesh, la: laMesh };
+      if (this.vao) gl.bindVertexArray(null);
     },
 
     setFrame(area, data) {
@@ -760,6 +770,9 @@ const createCloudLayer = () => {
         if (mesh.dirty && mesh.frameData) this.convertMesh(gl, mesh);
       }
 
+      // 우리 VAO 안에서만 attribute/인덱스를 설정한다(MapLibre VAO와 격리).
+      if (this.vao) gl.bindVertexArray(this.vao);
+
       const shader = this.getShader(gl, renderArgs.shaderData);
       gl.useProgram(shader.program);
       gl.uniformMatrix4fv(shader.uProjMatrix, false, projectionData.mainMatrix);
@@ -823,6 +836,9 @@ const createCloudLayer = () => {
         const useFull = mesh.indexBufferFull && !koHasData;
         drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, 1, useFull);
       }
+
+      // MapLibre가 이어서 자기 레이어를 그리므로 VAO 바인딩을 해제해 돌려준다.
+      if (this.vao) gl.bindVertexArray(null);
     },
   };
   return layer;
@@ -990,14 +1006,12 @@ function SatelliteView({
           id: env.fillId,
           type: 'fill',
           source: env.sourceId,
-          layout: { visibility: 'none' },
           paint: { 'fill-color': env.color, 'fill-opacity': env.fillOpacity },
         });
         map.addLayer({
           id: env.lineId,
           type: 'line',
           source: env.sourceId,
-          layout: { visibility: 'none' },
           paint: { 'line-color': env.lineColor, 'line-width': 1.2, 'line-opacity': 0.7 },
         });
       });
@@ -1006,7 +1020,7 @@ function SatelliteView({
         id: 'typhoon-track-past-line',
         type: 'line',
         source: 'typhoon-track-past',
-        layout: { visibility: 'none', 'line-cap': 'round' },
+        layout: { 'line-cap': 'round' },
         paint: { 'line-color': '#e2e8f0', 'line-width': 1.4, 'line-opacity': 0.7, 'line-dasharray': [2, 2] },
       });
       map.addSource('typhoon-track', { type: 'geojson', data: emptyFC() });
@@ -1014,7 +1028,7 @@ function SatelliteView({
         id: 'typhoon-track-line',
         type: 'line',
         source: 'typhoon-track',
-        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
           'line-color': '#ef4444',
           'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.2, 6, 3, 9, 3.6],
@@ -1128,32 +1142,17 @@ function SatelliteView({
     // 리빌 값은 ref로 읽는다. (리빌 시작 시 reveal 효과가 ref를 먼저 0으로 낮추므로,
     // 태풍이 막 선택된 첫 렌더에서 완성된 진로도가 한 프레임 번쩍이는 것을 막는다.)
     const geo = buildTyphoonGeoJson(typhoon, typhoonRevealRef.current);
-    const on = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'visible');
-    const off = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'none');
 
-    map.getSource('typhoon-prob')?.setData(geo.prob);
-    map.getSource('typhoon-wind15')?.setData(geo.wind15);
-    map.getSource('typhoon-wind25')?.setData(geo.wind25);
-    map.getSource('typhoon-track-past')?.setData(geo.pastLine);
-    map.getSource('typhoon-track')?.setData(geo.trackLine);
-
+    // 표시/숨김은 visibility가 아니라 '데이터'로만 제어한다. visibility만 끄면 소스에
+    // 완성된 진로도가 그대로 남아, 다시 켤 때 setData(비동기 반영) 전에 옛 완성본이
+    // 한 프레임 그려졌다(리빌 전에 전체가 번쩍이던 원인). 끌 때 소스를 비워두면
+    // 다시 켤 때 새어나올 데이터 자체가 없다.
     const show = { prob: showProb, wind15: showWind15, wind25: showWind25 };
-    TYPHOON_ENVELOPES.forEach((env) => {
-      if (typhoon && show[env.key]) {
-        on(env.fillId);
-        on(env.lineId);
-      } else {
-        off(env.fillId);
-        off(env.lineId);
-      }
-    });
-    if (typhoon) {
-      on('typhoon-track-past-line');
-      on('typhoon-track-line');
-    } else {
-      off('typhoon-track-past-line');
-      off('typhoon-track-line');
-    }
+    map.getSource('typhoon-prob')?.setData(typhoon && show.prob ? geo.prob : emptyFC());
+    map.getSource('typhoon-wind15')?.setData(typhoon && show.wind15 ? geo.wind15 : emptyFC());
+    map.getSource('typhoon-wind25')?.setData(typhoon && show.wind25 ? geo.wind25 : emptyFC());
+    map.getSource('typhoon-track-past')?.setData(typhoon ? geo.pastLine : emptyFC());
+    map.getSource('typhoon-track')?.setData(typhoon ? geo.trackLine : emptyFC());
   }, [typhoonEnabled, selectedTyphoon, showProb, showWind15, showWind25, mapReady, typhoonReveal]);
 
   // ── 태풍: 중심 마크(DOM 마커) 재생성 + 클릭 팝업 ──
