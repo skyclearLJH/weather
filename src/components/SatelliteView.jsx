@@ -836,8 +836,10 @@ const createCloudLayer = () => {
         if (!mesh.frameData) continue;
         const useFull = mesh.indexBufferFull && !koHasData;
         if (mixT < 1 && mesh.hasPrev) {
-          // 이전 프레임(전체 불투명) → 새 프레임(알파 상승)로 덧그려 디졸브
-          drawMesh(mesh, mesh.prevCloudBuffer, mesh.prevDataTex, 1, useFull);
+          // 진짜 크로스페이드: 이전(1−t) 위에 새 프레임(t)을 겹쳐 그린다. 전환이
+          // 끝나는 순간(t=1) 이전 기여가 0이 되어 '현재만 그리기'와 매끄럽게 이어져
+          // 밀도가 튀지 않는다(예전엔 이전을 1로 고정해 끝에서 번쩍임 발생).
+          drawMesh(mesh, mesh.prevCloudBuffer, mesh.prevDataTex, 1 - mixT, useFull);
           drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, mixT, useFull);
         } else {
           drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, 1, useFull);
@@ -1671,16 +1673,27 @@ function SatelliteView({
               <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
             </svg>
           </div>
-          {/* 타이틀: '위성 영상' ↔ 태풍 이름 크로스페이드(디졸브). 두 span을 같은
-              그리드 셀에 겹쳐 두고 불투명도로 전환한다(레이아웃 폭은 둘 중 큰 쪽 유지). */}
+          {/* 타이틀: '위성 영상' ↔ 태풍 이름 크로스페이드(디졸브). 폭은 '현재 표시
+              중인' 타이틀만큼만 차지하도록 보이지 않는 스페이서로 잡는다(진로도를 끄면
+              '위성 영상' 폭으로 돌아와, 넓은 태풍 이름 폭이 남아 시간이 밴드 밖으로
+              밀리는 문제를 막는다). 두 텍스트 레이어는 그 위에 겹쳐 불투명도만 전환. */}
           <span
-            className="grid whitespace-nowrap font-black tracking-tight text-white"
+            className="relative whitespace-nowrap font-black tracking-tight text-white"
             style={{ fontSize: 'clamp(26px, 2.1vw, 46px)', textShadow: '0 2px 6px rgba(0,0,0,0.35)' }}
           >
-            <span style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 0 : 1 }}>
+            <span className="invisible" aria-hidden="true">
+              {typhoonActive ? typhoonBandTitle ?? '' : '위성 영상'}
+            </span>
+            <span
+              className="absolute left-0 top-0"
+              style={{ transition: 'opacity 0.5s ease', opacity: typhoonActive ? 0 : 1 }}
+            >
               위성 영상
             </span>
-            <span style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 1 : 0 }}>
+            <span
+              className="absolute left-0 top-0"
+              style={{ transition: 'opacity 0.5s ease', opacity: typhoonActive ? 1 : 0 }}
+            >
               {typhoonBandTitle ?? ''}
             </span>
           </span>
