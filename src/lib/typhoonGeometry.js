@@ -65,6 +65,49 @@ const arc = (lat, lon, fromBearing, toBearing, r, steps = 12) => {
   return out;
 };
 
+// 커스텀 WebGL 레이어용 삼각형 메쉬. 폴리곤 삼각분할(earcut) 없이, 진로 좌/우
+// 오프셋 점을 번갈아 잇는 TRIANGLE_STRIP + 양 끝 반원 팬으로 채운다. 삼각형이
+// 서로 겹치지 않아 반투명으로 그려도 겹침 부위가 진해지지 않는다.
+//  반환: { strip: [[lon,lat],...](스트립 순서), fans: [[[lon,lat],...], ...] }
+export const sweptEnvelopeMesh = (points, radiiKm) => {
+  if (!Array.isArray(points) || points.length === 0) return null;
+  const radii = radiiKm.map((r) => (Number.isFinite(r) && r > 0 ? r : 0));
+  if (radii.every((r) => r === 0)) return null;
+
+  const fans = [];
+  if (points.length === 1) {
+    const r = radii[0];
+    if (r === 0) return null;
+    const center = [points[0].lon, points[0].lat];
+    const ring = arc(points[0].lat, points[0].lon, 0, 360, r, 48);
+    fans.push([center, ...ring]);
+    return { strip: [], fans };
+  }
+
+  const tangents = tangentBearings(points);
+  const strip = [];
+  for (let i = 0; i < points.length; i += 1) {
+    strip.push(destPoint(points[i].lat, points[i].lon, tangents[i] - 90, radii[i]));
+    strip.push(destPoint(points[i].lat, points[i].lon, tangents[i] + 90, radii[i]));
+  }
+
+  const last = points.length - 1;
+  // 끝 캡(전방 반원) / 시작 캡(후방 반원) — 중심을 첫 정점으로 하는 팬
+  if (radii[last] > 0) {
+    fans.push([
+      [points[last].lon, points[last].lat],
+      ...arc(points[last].lat, points[last].lon, tangents[last] - 90, tangents[last] + 90, radii[last], 16),
+    ]);
+  }
+  if (radii[0] > 0) {
+    fans.push([
+      [points[0].lon, points[0].lat],
+      ...arc(points[0].lat, points[0].lon, tangents[0] + 90, tangents[0] + 270, radii[0], 16),
+    ]);
+  }
+  return { strip, fans };
+};
+
 // points: [{lat, lon}], radiiKm: number[] (지점별 반경, km). 진로를 따라 반경이
 // 연속으로 이어진 하나의 띠 폴리곤(GeoJSON Polygon)을 반환. 유효 반경이 없으면 null.
 export const sweptEnvelopePolygon = (points, radiiKm) => {

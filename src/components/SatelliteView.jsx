@@ -32,7 +32,7 @@ import {
   writePlayRange,
 } from '../utils/broadcastPlayRange.js';
 import { fetchActiveTyphoons, formatAnnounceLabel, GRADE_LABELS } from '../api/typhoonApi';
-import { sweptEnvelopePolygon } from '../lib/typhoonGeometry';
+import { sweptEnvelopeMesh, sweptEnvelopePolygon } from '../lib/typhoonGeometry';
 import './SatelliteView.css';
 
 const PLAY_RANGE_VIEW_ID = 'satellite';
@@ -58,10 +58,12 @@ const waitFor = (milliseconds) => new Promise((resolve) => setTimeout(resolve, m
 const TYPHOON_REFRESH_MS = 10 * 60 * 1000;
 // 반경 엔벨로프(진로를 따라 이은 반투명 띠) 3종. fill 순서상 큰 것부터 아래에 깔아
 // 위의 작은 반경이 보이게 한다. (강풍15 반경 > 폭풍25 반경, 확률원은 별도 원뿔)
+// 반경 엔벨로프 3종 — 커스텀 WebGL 레이어가 직접 그린다(색은 0~1 RGB).
+// 큰 반경이 아래, 작은 반경이 위로 오도록 이 순서로 그린다.
 const TYPHOON_ENVELOPES = [
-  { key: 'prob', sourceId: 'typhoon-prob', fillId: 'typhoon-prob-fill', lineId: 'typhoon-prob-line', color: '#e2e8f0', fillOpacity: 0.22, lineColor: '#f8fafc' },
-  { key: 'wind15', sourceId: 'typhoon-wind15', fillId: 'typhoon-wind15-fill', lineId: 'typhoon-wind15-line', color: '#facc15', fillOpacity: 0.22, lineColor: '#fde047' },
-  { key: 'wind25', sourceId: 'typhoon-wind25', fillId: 'typhoon-wind25-fill', lineId: 'typhoon-wind25-line', color: '#ef4444', fillOpacity: 0.3, lineColor: '#f87171' },
+  { key: 'prob', pick: (p, current) => (p === current ? 0 : p.radProb), fill: [0.886, 0.91, 0.941], fillAlpha: 0.22, line: [0.973, 0.98, 0.988] },
+  { key: 'wind15', pick: (p) => p.rad15, fill: [0.98, 0.8, 0.082], fillAlpha: 0.22, line: [0.992, 0.878, 0.278] },
+  { key: 'wind25', pick: (p) => p.rad25, fill: [0.937, 0.267, 0.267], fillAlpha: 0.3, line: [0.973, 0.443, 0.443] },
 ];
 
 // 등급별 중심 마크 색
@@ -112,96 +114,51 @@ const typhoonMarkScale = (zoom) => {
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 
 // 선택 태풍 + 반경 토글로 각 소스에 넣을 GeoJSON을 만든다.
-const buildTyphoonGeoJson = (typhoon, reveal = 1) => {
-  if (!typhoon) {
-    return {
-      prob: emptyFC(),
-      wind15: emptyFC(),
-      wind25: emptyFC(),
-      pastLine: emptyFC(),
-      trackLine: emptyFC(),
-      centers: emptyFC(),
-    };
-  }
-  const { current, forecast, analysis } = typhoon;
-  // 예보 트랙 = 현재 위치 + 예측 지점들
+// 리빌: 현재(가까운 시점)에서 미래로 reveal(0~1)만큼만 이어지는 트랙 지점 배열.
+// 마지막 부분 구간은 위치·반경을 보간해 부드럽게 확장시킨다.
+const revealTrackPoints = (typhoon, reveal) => {
+  const { current, forecast } = typhoon;
   const trackPts = [current, ...forecast];
-  const lonLat = (p) => [p.lon, p.lat];
+  if (reveal >= 1) return trackPts;
   const maxTmd = trackPts[trackPts.length - 1]?.tmd || 1;
-
-  // 리빌: 현재(가까운 시점)에서 미래로 reveal(0~1)만큼만 이어 그린다. 마지막
-  // 부분 구간은 위치·반경을 보간해 부드럽게 확장시킨다.
   const lerp = (a, b, f) => {
     const av = Number.isFinite(a) && a > 0 ? a : 0;
     const bv = Number.isFinite(b) && b > 0 ? b : 0;
     return av + (bv - av) * f;
   };
-  const revealedTrack = (reveal) => {
-    if (reveal >= 1) return trackPts;
-    const rt = reveal * maxTmd;
-    const out = [];
-    for (let i = 0; i < trackPts.length; i += 1) {
-      const p = trackPts[i];
-      if (p.tmd <= rt + 1e-6) {
-        out.push(p);
-        continue;
-      }
-      const prev = trackPts[i - 1];
-      const span = p.tmd - (prev?.tmd ?? 0);
-      const f = span > 0 ? (rt - prev.tmd) / span : 0;
-      if (prev && f > 0.02) {
-        out.push({
-          lat: prev.lat + (p.lat - prev.lat) * f,
-          lon: prev.lon + (p.lon - prev.lon) * f,
-          tmd: rt,
-          radProb: lerp(prev === current ? 0 : prev.radProb, p.radProb, f),
-          rad15: lerp(prev.rad15, p.rad15, f),
-          rad25: lerp(prev.rad25, p.rad25, f),
-        });
-      }
-      break;
+  const rt = reveal * maxTmd;
+  const out = [];
+  for (let i = 0; i < trackPts.length; i += 1) {
+    const p = trackPts[i];
+    if (p.tmd <= rt + 1e-6) {
+      out.push(p);
+      continue;
     }
-    return out.length >= 1 ? out : [trackPts[0]];
-  };
-  const shown = revealedTrack(reveal);
+    const prev = trackPts[i - 1];
+    const span = p.tmd - (prev?.tmd ?? 0);
+    const f = span > 0 ? (rt - prev.tmd) / span : 0;
+    if (prev && f > 0.02) {
+      out.push({
+        lat: prev.lat + (p.lat - prev.lat) * f,
+        lon: prev.lon + (p.lon - prev.lon) * f,
+        tmd: rt,
+        radProb: lerp(prev === current ? 0 : prev.radProb, p.radProb, f),
+        rad15: lerp(prev.rad15, p.rad15, f),
+        rad25: lerp(prev.rad25, p.rad25, f),
+      });
+    }
+    break;
+  }
+  return out.length >= 1 ? out : [trackPts[0]];
+};
 
-  const envelope = (points, pick) => {
-    const poly = sweptEnvelopePolygon(
-      points.map((p) => ({ lat: p.lat, lon: p.lon })),
-      points.map(pick),
-    );
-    return poly
-      ? { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: poly, properties: {} }] }
-      : emptyFC();
-  };
-
-  // 확률원뿔: 현재(반경0)에서 예측으로 넓어지는 70% 확률반경
-  const prob = envelope(shown, (p) => (p === current ? 0 : p.radProb));
-  // 강풍/폭풍 반경: 현재+예측 지점의 반경을 따라 이음
-  const wind15 = envelope(shown, (p) => p.rad15);
-  const wind25 = envelope(shown, (p) => p.rad25);
-
-  const pastLine =
-    analysis.length > 1
-      ? {
-          type: 'FeatureCollection',
-          features: [
-            { type: 'Feature', geometry: { type: 'LineString', coordinates: analysis.map(lonLat) }, properties: {} },
-          ],
-        }
-      : emptyFC();
-
-  const trackLine =
-    shown.length > 1
-      ? {
-          type: 'FeatureCollection',
-          features: [
-            { type: 'Feature', geometry: { type: 'LineString', coordinates: shown.map(lonLat) }, properties: {} },
-          ],
-        }
-      : emptyFC();
-
-  // 중심 마크: 현재 + 예측 지점마다(항상 전체 생성, 리빌은 마커 불투명도로 처리).
+// 중심 마크(DOM 마커)용 좌표·속성. 진로선·반경은 커스텀 WebGL 레이어가 직접 그린다.
+const buildTyphoonCenters = (typhoon) => {
+  if (!typhoon) return emptyFC();
+  const { current, forecast } = typhoon;
+  const trackPts = [current, ...forecast];
+  const lonLat = (p) => [p.lon, p.lat];
+  const maxTmd = trackPts[trackPts.length - 1]?.tmd || 1;
   // frac = 지점의 진행 비율(현재 0 → 마지막 예측 1) → 리빌 임계값으로 사용.
   const centers = {
     type: 'FeatureCollection',
@@ -224,7 +181,7 @@ const buildTyphoonGeoJson = (typhoon, reveal = 1) => {
     })),
   };
 
-  return { prob, wind15, wind25, pastLine, trackLine, centers };
+  return centers;
 };
 
 const floorToTenMinutesLocal = (date) => {
@@ -844,6 +801,179 @@ const createCloudLayer = () => {
   return layer;
 };
 
+// --- 태풍 진로도 커스텀 WebGL 레이어 ---
+// MapLibre의 fill/line(GeoJSON) 레이어로 그리면 두 가지 문제가 있었다:
+//  (1) 벡터 레이어가 추가되는 순간 커스텀 구름 레이어의 FD(전구)가 깨졌다.
+//  (2) setData가 비동기라, 껐다 켤 때 소스에 남은 완성 진로도가 한 프레임 새어나왔다.
+// 진로도도 커스텀 레이어로 직접 그리면 둘 다 구조적으로 사라진다. 지오메트리는
+// 매 프레임 CPU에서 만들어도 정점 수백 개 수준이라 부담이 없고, 리빌 진행도를
+// 렌더 시점에 직접 계산하므로 React 상태 지연으로 완성본이 새어나갈 수 없다.
+const createTyphoonLayer = () => ({
+  id: 'typhoon-vector',
+  type: 'custom',
+  renderingMode: '3d',
+  typhoon: null,
+  options: { prob: false, wind15: false, wind25: false },
+  revealStart: 0,
+  revealMs: 2000,
+  reveal: 0,
+  shaderMap: new Map(),
+
+  onAdd(map, gl) {
+    this.map = map;
+    this.vao = gl.createVertexArray ? gl.createVertexArray() : null;
+    if (this.vao) gl.bindVertexArray(this.vao);
+    this.buffer = gl.createBuffer();
+    if (this.vao) gl.bindVertexArray(null);
+  },
+
+  // typhoon=null이면 아무것도 그리지 않는다. restart=true면 리빌을 처음부터.
+  setTyphoon(typhoon, restart) {
+    this.typhoon = typhoon ?? null;
+    if (restart) this.revealStart = performance.now();
+    this.map?.triggerRepaint();
+  },
+
+  setOptions(options) {
+    this.options = { ...this.options, ...options };
+    this.map?.triggerRepaint();
+  },
+
+  getShader(gl, shaderDescription) {
+    if (this.shaderMap.has(shaderDescription.variantName)) {
+      return this.shaderMap.get(shaderDescription.variantName);
+    }
+    const vertexSource = `#version 300 es
+      ${shaderDescription.vertexShaderPrelude}
+      ${shaderDescription.define}
+      in vec2 aPos;
+      void main() {
+        gl_Position = projectTileWithElevation(aPos, 0.0);
+      }`;
+    const fragmentSource = `#version 300 es
+      precision highp float;
+      uniform vec4 uColor;
+      out vec4 fragColor;
+      void main() {
+        // 프리멀티플라이드 알파 (blendFunc: ONE, ONE_MINUS_SRC_ALPHA)
+        fragColor = vec4(uColor.rgb * uColor.a, uColor.a);
+      }`;
+    const compile = (type, source) => {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('[typhoon] shader compile:', gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    };
+    const program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('[typhoon] program link:', gl.getProgramInfoLog(program));
+    }
+    const shader = {
+      program,
+      aPos: gl.getAttribLocation(program, 'aPos'),
+      uColor: gl.getUniformLocation(program, 'uColor'),
+      uProjMatrix: gl.getUniformLocation(program, 'u_projection_matrix'),
+      uFallbackMatrix: gl.getUniformLocation(program, 'u_projection_fallback_matrix'),
+      uTileMercatorCoords: gl.getUniformLocation(program, 'u_projection_tile_mercator_coords'),
+      uClippingPlane: gl.getUniformLocation(program, 'u_projection_clipping_plane'),
+      uTransition: gl.getUniformLocation(program, 'u_projection_transition'),
+    };
+    this.shaderMap.set(shaderDescription.variantName, shader);
+    return shader;
+  },
+
+  render(gl, renderArgs) {
+    const projectionData = renderArgs?.defaultProjectionData;
+    if (!projectionData || !this.typhoon) return;
+
+    // 리빌 진행도(렌더 시점 계산 → 상태 지연으로 완성본이 새어나갈 수 없음)
+    const p = Math.min(1, (performance.now() - this.revealStart) / this.revealMs);
+    const reveal = 1 - (1 - p) * (1 - p); // easeOut
+    this.reveal = reveal;
+
+    const shown = revealTrackPoints(this.typhoon, reveal);
+    if (shown.length === 0) return;
+
+    const shader = this.getShader(gl, renderArgs.shaderData);
+    gl.useProgram(shader.program);
+    gl.uniformMatrix4fv(shader.uProjMatrix, false, projectionData.mainMatrix);
+    gl.uniformMatrix4fv(shader.uFallbackMatrix, false, projectionData.fallbackMatrix);
+    gl.uniform4f(shader.uTileMercatorCoords, ...projectionData.tileMercatorCoords);
+    gl.uniform4f(shader.uClippingPlane, ...projectionData.clippingPlane);
+    gl.uniform1f(shader.uTransition, projectionData.projectionTransition);
+
+    if (this.vao) gl.bindVertexArray(this.vao);
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+    const toMerc = (coords) => {
+      const arr = new Float32Array(coords.length * 2);
+      for (let i = 0; i < coords.length; i += 1) {
+        const m = maplibregl.MercatorCoordinate.fromLngLat({ lng: coords[i][0], lat: coords[i][1] }, 0);
+        arr[i * 2] = m.x;
+        arr[i * 2 + 1] = m.y;
+      }
+      return arr;
+    };
+    const draw = (coords, mode, color, alpha) => {
+      if (!coords || coords.length < 2) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, toMerc(coords), gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(shader.aPos);
+      gl.vertexAttribPointer(shader.aPos, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform4f(shader.uColor, color[0], color[1], color[2], alpha);
+      gl.drawArrays(mode, 0, coords.length);
+    };
+    const drawEnvelope = (points, radii, fill, fillAlpha, line) => {
+      const mesh = sweptEnvelopeMesh(points, radii);
+      if (mesh) {
+        draw(mesh.strip, gl.TRIANGLE_STRIP, fill, fillAlpha);
+        mesh.fans.forEach((fan) => draw(fan, gl.TRIANGLE_FAN, fill, fillAlpha));
+      }
+      if (line) {
+        const poly = sweptEnvelopePolygon(points, radii);
+        if (poly) draw(poly.coordinates[0], gl.LINE_STRIP, line, 0.7);
+      }
+    };
+
+    const { current, analysis } = this.typhoon;
+    const geoPts = shown.map((pt) => ({ lat: pt.lat, lon: pt.lon }));
+
+    // 반경 엔벨로프(선택된 것만) — 큰 것부터 아래에 깔린다
+    TYPHOON_ENVELOPES.forEach((env) => {
+      if (!this.options[env.key]) return;
+      drawEnvelope(geoPts, shown.map((pt) => env.pick(pt, current)), env.fill, env.fillAlpha, env.line);
+    });
+
+    // 진로선 — 화면 두께가 일정하도록 줌·위도로 반경(km)을 환산해 가는 띠로 그린다.
+    const zoom = this.map?.getZoom?.() ?? 4;
+    const metersPerPixel =
+      (156543.03392 * Math.cos((shown[0].lat * Math.PI) / 180)) / 2 ** zoom;
+    const widthKm = (metersPerPixel * 1.6) / 1000;
+    if (analysis && analysis.length > 1) {
+      // 과거 경로(분석): 얇은 회색
+      const pastPts = analysis.map((pt) => ({ lat: pt.lat, lon: pt.lon }));
+      drawEnvelope(pastPts, pastPts.map(() => widthKm * 0.55), [0.886, 0.91, 0.941], 0.65, null);
+    }
+    if (geoPts.length > 1) {
+      drawEnvelope(geoPts, geoPts.map(() => widthKm), [0.937, 0.267, 0.267], 0.95, null);
+    }
+
+    if (this.vao) gl.bindVertexArray(null);
+    if (p < 1) this.map?.triggerRepaint();
+  },
+});
+
 // menuSlot: 편집·녹화 모드의 공통 작업 메뉴를 우하단 설정 그룹 위에 얹는다.
 function SatelliteView({
   menuSlot = null,
@@ -888,6 +1018,7 @@ function SatelliteView({
   const mapReadyRef = useRef(false);
   const typhoonMarkersRef = useRef([]);
   const typhoonPopupRef = useRef(null);
+  const typhoonLayerRef = useRef(null);
   const revealRafRef = useRef(0);
   const typhoonRevealRef = useRef(1);
   typhoonRevealRef.current = typhoonReveal;
@@ -999,42 +1130,12 @@ function SatelliteView({
           'circle-stroke-width': 0.7,
         },
       });
-      // ── 태풍 진로도 소스·레이어 (중심 마크는 DOM 마커로 별도 관리) ──
-      TYPHOON_ENVELOPES.forEach((env) => {
-        map.addSource(env.sourceId, { type: 'geojson', data: emptyFC() });
-        map.addLayer({
-          id: env.fillId,
-          type: 'fill',
-          source: env.sourceId,
-          paint: { 'fill-color': env.color, 'fill-opacity': env.fillOpacity },
-        });
-        map.addLayer({
-          id: env.lineId,
-          type: 'line',
-          source: env.sourceId,
-          paint: { 'line-color': env.lineColor, 'line-width': 1.2, 'line-opacity': 0.7 },
-        });
-      });
-      map.addSource('typhoon-track-past', { type: 'geojson', data: emptyFC() });
-      map.addLayer({
-        id: 'typhoon-track-past-line',
-        type: 'line',
-        source: 'typhoon-track-past',
-        layout: { 'line-cap': 'round' },
-        paint: { 'line-color': '#e2e8f0', 'line-width': 1.4, 'line-opacity': 0.7, 'line-dasharray': [2, 2] },
-      });
-      map.addSource('typhoon-track', { type: 'geojson', data: emptyFC() });
-      map.addLayer({
-        id: 'typhoon-track-line',
-        type: 'line',
-        source: 'typhoon-track',
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: {
-          'line-color': '#ef4444',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.2, 6, 3, 9, 3.6],
-          'line-opacity': 0.95,
-        },
-      });
+      // ── 태풍 진로도: 커스텀 WebGL 레이어 (중심 마크는 DOM 마커로 별도 관리) ──
+      // MapLibre 벡터(fill/line) 레이어를 쓰지 않는다 — 그 레이어가 추가되면 커스텀
+      // 구름 레이어의 FD가 깨졌고, setData 비동기 때문에 완성본이 새어나왔다.
+      const typhoonLayer = createTyphoonLayer();
+      typhoonLayerRef.current = typhoonLayer;
+      map.addLayer(typhoonLayer);
 
       map.on('zoom', () => setMapZoom(map.getZoom()));
 
@@ -1108,52 +1209,42 @@ function SatelliteView({
 
   // ── 태풍: 진로도 리빌(켜거나 태풍 변경 시 현재→미래로 2초 확장) ──
   useEffect(() => {
+    // 리빌 진행도는 커스텀 레이어가 렌더 시점에 직접 계산한다(React 상태 지연으로
+    // 완성본이 새어나갈 수 없음). 여기서는 시작 시점만 알려주고, 마커 불투명도를
+    // 레이어의 진행도에 맞춰 따라가게 한다.
     cancelAnimationFrame(revealRafRef.current);
+    const layer = typhoonLayerRef.current;
+    if (!layer) return undefined;
     if (!typhoonEnabled || !selectedTyphoonId) {
-      // 꺼져 있으면 1(개념상 완성, 어차피 숨김). 켜져 있는데 아직 데이터 대기 중이면
-      // 0으로 '무장'해, 데이터가 도착하는 순간에도 완성된 진로도가 새어나가지 않게 한다.
-      const armed = typhoonEnabled ? 0 : 1;
-      typhoonRevealRef.current = armed;
-      setTyphoonReveal(armed);
+      typhoonRevealRef.current = 0;
+      setTyphoonReveal(0);
       return undefined;
     }
-    const DURATION = 2000;
-    const t0 = performance.now();
-    // ref를 즉시 0으로 낮춰 이 커밋에서 실행될 geojson/마커 효과가 완성 진로도를
-    // 먼저 그리지 않게 한다(첫 프레임 번쩍임 방지).
     typhoonRevealRef.current = 0;
     setTyphoonReveal(0);
     const tick = () => {
-      const p = Math.min(1, (performance.now() - t0) / DURATION);
-      const eased = 1 - (1 - p) * (1 - p); // easeOut
+      const eased = layer.reveal ?? 0;
       typhoonRevealRef.current = eased;
       setTyphoonReveal(eased);
-      if (p < 1) revealRafRef.current = requestAnimationFrame(tick);
+      if (eased < 1) revealRafRef.current = requestAnimationFrame(tick);
     };
     revealRafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(revealRafRef.current);
-  }, [typhoonEnabled, selectedTyphoonId]);
+  }, [typhoonEnabled, selectedTyphoonId, mapReady]);
 
-  // ── 태풍: 엔벨로프·진로선 GeoJSON 갱신 + 레이어 표시/숨김 ──
+  // ── 태풍: 커스텀 레이어에 태풍/반경 옵션 전달 ──
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapReadyRef.current) return;
-    const typhoon = typhoonEnabled ? selectedTyphoon : null;
-    // 리빌 값은 ref로 읽는다. (리빌 시작 시 reveal 효과가 ref를 먼저 0으로 낮추므로,
-    // 태풍이 막 선택된 첫 렌더에서 완성된 진로도가 한 프레임 번쩍이는 것을 막는다.)
-    const geo = buildTyphoonGeoJson(typhoon, typhoonRevealRef.current);
+    const layer = typhoonLayerRef.current;
+    if (!layer || !mapReadyRef.current) return;
+    layer.setOptions({ prob: showProb, wind15: showWind15, wind25: showWind25 });
+  }, [showProb, showWind15, showWind25, mapReady]);
 
-    // 표시/숨김은 visibility가 아니라 '데이터'로만 제어한다. visibility만 끄면 소스에
-    // 완성된 진로도가 그대로 남아, 다시 켤 때 setData(비동기 반영) 전에 옛 완성본이
-    // 한 프레임 그려졌다(리빌 전에 전체가 번쩍이던 원인). 끌 때 소스를 비워두면
-    // 다시 켤 때 새어나올 데이터 자체가 없다.
-    const show = { prob: showProb, wind15: showWind15, wind25: showWind25 };
-    map.getSource('typhoon-prob')?.setData(typhoon && show.prob ? geo.prob : emptyFC());
-    map.getSource('typhoon-wind15')?.setData(typhoon && show.wind15 ? geo.wind15 : emptyFC());
-    map.getSource('typhoon-wind25')?.setData(typhoon && show.wind25 ? geo.wind25 : emptyFC());
-    map.getSource('typhoon-track-past')?.setData(typhoon ? geo.pastLine : emptyFC());
-    map.getSource('typhoon-track')?.setData(typhoon ? geo.trackLine : emptyFC());
-  }, [typhoonEnabled, selectedTyphoon, showProb, showWind15, showWind25, mapReady, typhoonReveal]);
+  useEffect(() => {
+    const layer = typhoonLayerRef.current;
+    if (!layer || !mapReadyRef.current) return;
+    // 태풍이 바뀌거나 켜질 때 리빌을 처음부터 다시 시작한다.
+    layer.setTyphoon(typhoonEnabled ? selectedTyphoon : null, true);
+  }, [typhoonEnabled, selectedTyphoon, mapReady]);
 
   // ── 태풍: 중심 마크(DOM 마커) 재생성 + 클릭 팝업 ──
   useEffect(() => {
@@ -1167,10 +1258,10 @@ function SatelliteView({
     const typhoon = typhoonEnabled ? selectedTyphoon : null;
     if (!typhoon) return undefined;
 
-    const geo = buildTyphoonGeoJson(typhoon);
+    const centers = buildTyphoonCenters(typhoon);
     const scale = typhoonMarkScale(map.getZoom());
     const reveal = typhoonRevealRef.current;
-    geo.centers.features.forEach((f) => {
+    centers.features.forEach((f) => {
       const props = f.properties;
       const el = buildTyphoonMarkerEl(props, scale);
       el.dataset.frac = String(props.frac ?? 0);
