@@ -154,9 +154,13 @@ export const fetchActiveTyphoons = async () => {
   return tracks.filter(Boolean).sort((a, b) => a.number - b.number);
 };
 
-// 밴드 시각 라벨: "8/3 15시 예보"
+// 밴드 시각 라벨(2줄): { day: '8/3', time: '22시 발표' }
+// API 분석시각 + 1시간 = 실제 통보문 발표시각(관측 후 약 1시간 뒤 발표).
 export const formatAnnounceLabel = (date) => {
-  if (!date) return '';
-  const kst = new Date(date.getTime() + KST_OFFSET_MS);
-  return `${kst.getUTCMonth() + 1}/${kst.getUTCDate()} ${kst.getUTCHours()}시 예보`;
+  if (!date) return null;
+  const kst = new Date(date.getTime() + KST_OFFSET_MS + 60 * 60 * 1000);
+  return {
+    day: `${kst.getUTCMonth() + 1}/${kst.getUTCDate()}`,
+    time: `${kst.getUTCHours()}시 발표`,
+  };
 };

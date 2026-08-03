@@ -67,15 +67,12 @@ const TYPHOON_ENVELOPES = [
 // 등급별 중심 마크 색
 const GRADE_COLOR = { 0: '#94a3b8', 1: '#38bdf8', 2: '#22c55e', 3: '#eab308', 4: '#f97316', 5: '#ef4444' };
 
-// 세련된 태풍 심볼(두 팔 나선). 가운데는 비워 등급 숫자가 들어간다. 색·좌우반전은
-// CSS에서 처리한다. 두 팔은 대칭(180° 회전)으로 그린다.
-const TYPHOON_ARM_PATH = 'M50 50 C48 29 61 15 85 19 C67 19 58 31 61 45 C62 53 57 59 50 58 Z';
+// 태풍(허리케인) 심볼 — 굵은 두 팔 나선 + 큰 중앙 구멍. 구멍 자리에 등급 숫자
+// disc가 들어가 팔과 자연스럽게 이어진다. 색은 CSS(currentColor)에서 준다.
+// evenodd로 중앙 원(반지름 96)을 뚫어 구멍을 만든다(원본의 중앙 점은 제거).
 const TYPHOON_SWIRL_SVG =
-  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-  '<g fill="currentColor">' +
-  `<path d="${TYPHOON_ARM_PATH}"/>` +
-  `<path d="${TYPHOON_ARM_PATH}" transform="rotate(180 50 50)"/>` +
-  '</g>' +
+  '<svg viewBox="0 0 384 512" xmlns="http://www.w3.org/2000/svg" fill="currentColor" fill-rule="evenodd" aria-hidden="true">' +
+  '<path d="M0 208C0 104.4 75.7 18.5 174.9 2.6C184 1.2 192 8.6 192 17.9l0 63.3c0 8.4 6.5 15.3 14.7 16.5C307 112.5 384 199 384 303.4c0 103.6-75.7 189.5-174.9 205.4c-9.2 1.5-17.1-5.9-17.1-15.2l0-63.3c0-8.4-6.5-15.3-14.7-16.5C77 398.9 0 312.4 0 208zM288 256A96 96 0 1 0 96 256A96 96 0 1 0 288 256z"/>' +
   '</svg>';
 
 // 중심 마크 DOM 엘리먼트 생성(태풍 심볼 + 등급 숫자). 클릭 팝업용 데이터 포함.
@@ -88,11 +85,20 @@ const buildTyphoonMarkerEl = (props, scale) => {
   el.className = `typhoon-mark${props.isCurrent ? ' typhoon-mark--current' : ''}`;
   el.style.setProperty('--g-color', GRADE_COLOR[props.grade] ?? GRADE_COLOR[0]);
   el.style.setProperty('--mark-scale', String(scale ?? 1));
+  // 지점 라벨: 현재는 '현재', 예측은 해당 예측시각(KST, 정시). 예측 유효시각은
+  // 정확한 값이라 +1h 보정 없이 그대로 쓴다(밴드의 '발표시각'만 +1h).
+  let label = '';
+  if (props.isCurrent) label = '현재';
+  else if (props.validTime) {
+    const k = new Date(new Date(props.validTime).getTime() + 9 * 3600 * 1000);
+    label = `${k.getUTCMonth() + 1}/${k.getUTCDate()} ${k.getUTCHours()}시`;
+  }
   el.innerHTML =
     '<span class="typhoon-mark__inner">' +
     `<span class="typhoon-mark__swirl">${TYPHOON_SWIRL_SVG}</span>` +
     '<span class="typhoon-mark__disc"></span>' +
     `<span class="typhoon-mark__num">${props.gradeText || ''}</span>` +
+    `<span class="typhoon-mark__label">${label}</span>` +
     '</span>';
   return el;
 };
@@ -1552,14 +1558,15 @@ function SatelliteView({
           {typhoonActive ? (
             <div
               className="ml-auto flex shrink-0 items-center whitespace-nowrap"
-              style={{ gap: '0.6vw' }}
+              style={{ gap: '0.5vw' }}
             >
-              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
+              <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
               <span
-                className="font-bold text-[#bdd6fb]"
-                style={{ fontSize: 'clamp(15px, 1.15vw, 24px)' }}
+                className="flex flex-col items-start leading-tight text-[#dbe8fb]"
+                style={{ fontSize: 'clamp(12px, 0.82vw, 17px)' }}
               >
-                {typhoonBandTime}
+                <span className="font-bold">{typhoonBandTime?.day}</span>
+                <span className="font-bold">{typhoonBandTime?.time}</span>
               </span>
             </div>
           ) : bandTime ? (

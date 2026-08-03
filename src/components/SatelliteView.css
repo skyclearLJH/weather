@@ -89,8 +89,7 @@
 .typhoon-mark__swirl {
   position: absolute;
   inset: 0;
-  color: #ef4444;
-  transform: scaleX(-1); /* 좌우 반전 */
+  color: #e01a1a;
   filter: drop-shadow(0 0 1.2px rgba(255, 255, 255, 0.85))
     drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
 }
@@ -99,12 +98,13 @@
   width: 100%;
   height: 100%;
 }
+/* 중앙 구멍(허리케인 눈)에 맞춰 등급 숫자 disc를 얹어 팔과 자연스럽게 잇는다. */
 .typhoon-mark__disc {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 48%;
-  height: 48%;
+  width: 40%;
+  height: 40%;
   transform: translate(-50%, -50%);
   border-radius: 9999px;
   background: var(--g-color, #94a3b8);
@@ -117,9 +117,24 @@
   transform: translate(-50%, -50%);
   color: #fff;
   font-weight: 900;
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+.typhoon-mark__label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translate(-50%, 3px);
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 7px;
+  background: rgba(9, 20, 34, 0.72);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
 }
 .typhoon-mark--current .typhoon-mark__inner::after {
   content: '';
