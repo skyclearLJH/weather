@@ -31,6 +31,8 @@ import {
   resolvePlayRange,
   writePlayRange,
 } from '../utils/broadcastPlayRange.js';
+import { fetchActiveTyphoons, formatAnnounceLabel, GRADE_LABELS } from '../api/typhoonApi';
+import { sweptEnvelopePolygon } from '../lib/typhoonGeometry';
 import './SatelliteView.css';
 
 const PLAY_RANGE_VIEW_ID = 'satellite';
@@ -51,6 +53,124 @@ const PREFETCH_RETRY_MAX_MS = 30000;
 const prefetchRetryDelay = (attempt) =>
   Math.min(PREFETCH_RETRY_MAX_MS, PREFETCH_RETRY_BASE_MS * 2 ** Math.min(attempt, 4));
 const waitFor = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+// ── 태풍 진로도 ──────────────────────────────────────────────────────────────
+const TYPHOON_REFRESH_MS = 10 * 60 * 1000;
+// 반경 엔벨로프(진로를 따라 이은 반투명 띠) 3종. fill 순서상 큰 것부터 아래에 깔아
+// 위의 작은 반경이 보이게 한다. (강풍15 반경 > 폭풍25 반경, 확률원은 별도 원뿔)
+const TYPHOON_ENVELOPES = [
+  { key: 'prob', sourceId: 'typhoon-prob', fillId: 'typhoon-prob-fill', lineId: 'typhoon-prob-line', color: '#e2e8f0', fillOpacity: 0.22, lineColor: '#f8fafc' },
+  { key: 'wind15', sourceId: 'typhoon-wind15', fillId: 'typhoon-wind15-fill', lineId: 'typhoon-wind15-line', color: '#facc15', fillOpacity: 0.22, lineColor: '#fde047' },
+  { key: 'wind25', sourceId: 'typhoon-wind25', fillId: 'typhoon-wind25-fill', lineId: 'typhoon-wind25-line', color: '#ef4444', fillOpacity: 0.3, lineColor: '#f87171' },
+];
+
+// 등급별 중심 마크 색
+const GRADE_COLOR = { 0: '#94a3b8', 1: '#38bdf8', 2: '#22c55e', 3: '#eab308', 4: '#f97316', 5: '#ef4444' };
+
+// 세련된 태풍 심볼(두 팔 나선). 가운데는 비워 등급 숫자가 들어간다.
+const TYPHOON_SWIRL_SVG =
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+  '<g fill="currentColor">' +
+  '<path d="M50 8c14 0 22 9 22 20 0 8-6 15-16 15 6-2 9-7 9-12 0-8-7-13-15-13-2 0-4 .3-6 .8C50 12 50 8 50 8z"/>' +
+  '<path d="M50 92c-14 0-22-9-22-20 0-8 6-15 16-15-6 2-9 7-9 12 0 8 7 13 15 13 2 0 4-.3 6-.8C50 88 50 92 50 92z"/>' +
+  '</g>' +
+  '<circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="3" opacity="0.85"/>' +
+  '</svg>';
+
+// 중심 마크 DOM 엘리먼트 생성(스웰 심볼 + 등급 숫자). 클릭 팝업용 데이터 포함.
+const buildTyphoonMarkerEl = (props) => {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = `typhoon-mark${props.isCurrent ? ' typhoon-mark--current' : ''}`;
+  el.style.setProperty('--g-color', GRADE_COLOR[props.grade] ?? GRADE_COLOR[0]);
+  el.innerHTML =
+    `<span class="typhoon-mark__swirl">${TYPHOON_SWIRL_SVG}</span>` +
+    `<span class="typhoon-mark__disc"></span>` +
+    `<span class="typhoon-mark__num">${props.gradeText || ''}</span>`;
+  return el;
+};
+
+// 줌 레벨 → 중심 마크 배율 (줌인 시 과도하게 커지지 않게 완만히 축소)
+const typhoonMarkScale = (zoom) => {
+  const z = Math.min(9, Math.max(3, zoom));
+  return 1.15 - ((z - 3) / 6) * 0.55; // z3≈1.15, z9≈0.6
+};
+
+const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
+
+// 선택 태풍 + 반경 토글로 각 소스에 넣을 GeoJSON을 만든다.
+const buildTyphoonGeoJson = (typhoon) => {
+  if (!typhoon) {
+    return {
+      prob: emptyFC(),
+      wind15: emptyFC(),
+      wind25: emptyFC(),
+      pastLine: emptyFC(),
+      trackLine: emptyFC(),
+      centers: emptyFC(),
+    };
+  }
+  const { current, forecast, analysis } = typhoon;
+  // 예보 트랙 = 현재 위치 + 예측 지점들
+  const trackPts = [current, ...forecast];
+  const lonLat = (p) => [p.lon, p.lat];
+
+  const envelope = (points, pick) => {
+    const poly = sweptEnvelopePolygon(
+      points.map((p) => ({ lat: p.lat, lon: p.lon })),
+      points.map(pick),
+    );
+    return poly
+      ? { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: poly, properties: {} }] }
+      : emptyFC();
+  };
+
+  // 확률원뿔: 현재(반경0)에서 예측으로 넓어지는 70% 확률반경
+  const prob = envelope(trackPts, (p) => (p === current ? 0 : p.radProb));
+  // 강풍/폭풍 반경: 현재+예측 지점의 반경을 따라 이음
+  const wind15 = envelope(trackPts, (p) => p.rad15);
+  const wind25 = envelope(trackPts, (p) => p.rad25);
+
+  const pastLine =
+    analysis.length > 1
+      ? {
+          type: 'FeatureCollection',
+          features: [
+            { type: 'Feature', geometry: { type: 'LineString', coordinates: analysis.map(lonLat) }, properties: {} },
+          ],
+        }
+      : emptyFC();
+
+  const trackLine = {
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', geometry: { type: 'LineString', coordinates: trackPts.map(lonLat) }, properties: {} },
+    ],
+  };
+
+  // 중심 마크: 현재 + 예측 지점마다. 클릭 팝업용 속성 포함.
+  const centers = {
+    type: 'FeatureCollection',
+    features: trackPts.map((p) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: lonLat(p) },
+      properties: {
+        grade: p.grade ?? 0,
+        gradeText: p.grade ? String(p.grade) : '',
+        gradeLabel: p.grade ? GRADE_LABELS[p.grade] : '열대저압부',
+        isCurrent: p === current ? 1 : 0,
+        pressure: p.pressure ?? -1,
+        wind: p.wind ?? -1,
+        rad15: p.rad15 ?? -1,
+        rad25: p.rad25 ?? -1,
+        validTime: p.validTime ? p.validTime.toISOString() : '',
+        tmd: p.tmd ?? 0,
+      },
+    })),
+  };
+
+  return { prob, wind15, wind25, pastLine, trackLine, centers };
+};
 
 const floorToTenMinutesLocal = (date) => {
   const floored = new Date(date);
@@ -659,6 +779,26 @@ function SatelliteView({
   const exaggerationRef = useRef(6);
   const convHighlightRef = useRef(true);
 
+  // ── 태풍 진로도 상태 ──
+  const [typhoonEnabled, setTyphoonEnabled] = useState(false);
+  const [typhoons, setTyphoons] = useState([]);
+  const [selectedTyphoonId, setSelectedTyphoonId] = useState(null);
+  const [showProb, setShowProb] = useState(false);
+  const [showWind15, setShowWind15] = useState(false);
+  const [showWind25, setShowWind25] = useState(false);
+  const [mapZoom, setMapZoom] = useState(4.35);
+  const [mapReady, setMapReady] = useState(false);
+  const mapReadyRef = useRef(false);
+  const typhoonMarkersRef = useRef([]);
+  const typhoonPopupRef = useRef(null);
+
+  const selectedTyphoon = useMemo(
+    () => typhoons.find((t) => t.id === selectedTyphoonId) ?? null,
+    [typhoons, selectedTyphoonId],
+  );
+  const selectedTyphoonRef = useRef(null);
+  selectedTyphoonRef.current = typhoonEnabled ? selectedTyphoon : null;
+
   const currentDate = timeline[frameIndex] ?? null;
   const convRange = useMemo(
     () => (currentDate ? seasonalConvRange(currentDate) : SEASON_CONV_KM.summer),
@@ -683,6 +823,39 @@ function SatelliteView({
     },
     [markFrameReady],
   );
+
+  // 중심 마크 클릭 시 상세 팝업(중심기압·최대풍속·폭풍/강풍반경). 모든 모드 공통.
+  const openTyphoonPopup = useCallback((map, lngLat, props) => {
+    typhoonPopupRef.current?.remove();
+    const fmt = (v, unit) => (Number(v) >= 0 ? `${v}${unit}` : '-');
+    let timeLabel = '';
+    if (props.validTime) {
+      const kst = new Date(new Date(props.validTime).getTime() + 9 * 3600 * 1000);
+      timeLabel = `${kst.getUTCMonth() + 1}/${kst.getUTCDate()} ${kst.getUTCHours()}시`;
+    }
+    const scale = 0.9 + ((Math.min(9, Math.max(3, mapRef.current?.getZoom() ?? 4)) - 3) / 6) * 0.35;
+    const head = props.isCurrent ? '현재' : `${timeLabel} 예상`;
+    const html =
+      `<div class="typhoon-popup" style="--popup-scale:${scale}">` +
+      `<div class="typhoon-popup__title"><span class="typhoon-popup__dot" style="background:${GRADE_COLOR[props.grade] ?? GRADE_COLOR[0]}"></span>${head} · ${props.gradeLabel}</div>` +
+      '<dl class="typhoon-popup__grid">' +
+      `<div><dt>중심기압</dt><dd>${fmt(props.pressure, ' hPa')}</dd></div>` +
+      `<div><dt>최대풍속</dt><dd>${fmt(props.wind, ' ㎧')}</dd></div>` +
+      `<div><dt>폭풍반경</dt><dd>${fmt(props.rad25, ' km')}</dd></div>` +
+      `<div><dt>강풍반경</dt><dd>${fmt(props.rad15, ' km')}</dd></div>` +
+      '</dl></div>';
+    const popup = new maplibregl.Popup({
+      closeButton: true,
+      closeOnClick: true,
+      offset: 20,
+      maxWidth: 'none',
+      className: 'typhoon-popup-container',
+    })
+      .setLngLat(lngLat)
+      .setHTML(html)
+      .addTo(map);
+    typhoonPopupRef.current = popup;
+  }, []);
 
   // 지도 초기화
   useEffect(() => {
@@ -726,6 +899,47 @@ function SatelliteView({
           'circle-stroke-width': 0.7,
         },
       });
+      // ── 태풍 진로도 소스·레이어 (중심 마크는 DOM 마커로 별도 관리) ──
+      TYPHOON_ENVELOPES.forEach((env) => {
+        map.addSource(env.sourceId, { type: 'geojson', data: emptyFC() });
+        map.addLayer({
+          id: env.fillId,
+          type: 'fill',
+          source: env.sourceId,
+          layout: { visibility: 'none' },
+          paint: { 'fill-color': env.color, 'fill-opacity': env.fillOpacity },
+        });
+        map.addLayer({
+          id: env.lineId,
+          type: 'line',
+          source: env.sourceId,
+          layout: { visibility: 'none' },
+          paint: { 'line-color': env.lineColor, 'line-width': 1.2, 'line-opacity': 0.7 },
+        });
+      });
+      map.addSource('typhoon-track-past', { type: 'geojson', data: emptyFC() });
+      map.addLayer({
+        id: 'typhoon-track-past-line',
+        type: 'line',
+        source: 'typhoon-track-past',
+        layout: { visibility: 'none', 'line-cap': 'round' },
+        paint: { 'line-color': '#e2e8f0', 'line-width': 1.4, 'line-opacity': 0.7, 'line-dasharray': [2, 2] },
+      });
+      map.addSource('typhoon-track', { type: 'geojson', data: emptyFC() });
+      map.addLayer({
+        id: 'typhoon-track-line',
+        type: 'line',
+        source: 'typhoon-track',
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#ef4444',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.2, 6, 3, 9, 3.6],
+          'line-opacity': 0.95,
+        },
+      });
+
+      map.on('zoom', () => setMapZoom(map.getZoom()));
+
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
       layer.setConvRange(...pendingConvRangeRef.current);
       for (const area of ['ko', 'fd']) {
@@ -733,6 +947,9 @@ function SatelliteView({
           layer.setFrame(area, pendingFramesRef.current[area]);
         }
       }
+      mapReadyRef.current = true;
+      setMapReady(true);
+      setMapZoom(map.getZoom());
     });
 
     return () => {
@@ -766,6 +983,113 @@ function SatelliteView({
   useEffect(() => {
     timelineRef.current = timeline;
   }, [timeline]);
+
+  // ── 태풍: 활동 태풍 로드(켜졌을 때 + 10분마다) ──
+  useEffect(() => {
+    if (!typhoonEnabled) return undefined;
+    let active = true;
+    const load = async () => {
+      try {
+        const list = await fetchActiveTyphoons();
+        if (!active) return;
+        setTyphoons(list);
+        setSelectedTyphoonId((prev) =>
+          prev && list.some((t) => t.id === prev) ? prev : list[0]?.id ?? null,
+        );
+      } catch {
+        // 일시 실패는 조용히 넘기고 다음 주기에 재시도
+      }
+    };
+    load();
+    const timer = setInterval(load, TYPHOON_REFRESH_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [typhoonEnabled]);
+
+  // ── 태풍: 엔벨로프·진로선 GeoJSON 갱신 + 레이어 표시/숨김 ──
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return;
+    const typhoon = typhoonEnabled ? selectedTyphoon : null;
+    const geo = buildTyphoonGeoJson(typhoon);
+    const on = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'visible');
+    const off = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'none');
+
+    map.getSource('typhoon-prob')?.setData(geo.prob);
+    map.getSource('typhoon-wind15')?.setData(geo.wind15);
+    map.getSource('typhoon-wind25')?.setData(geo.wind25);
+    map.getSource('typhoon-track-past')?.setData(geo.pastLine);
+    map.getSource('typhoon-track')?.setData(geo.trackLine);
+
+    const show = { prob: showProb, wind15: showWind15, wind25: showWind25 };
+    TYPHOON_ENVELOPES.forEach((env) => {
+      if (typhoon && show[env.key]) {
+        on(env.fillId);
+        on(env.lineId);
+      } else {
+        off(env.fillId);
+        off(env.lineId);
+      }
+    });
+    if (typhoon) {
+      on('typhoon-track-past-line');
+      on('typhoon-track-line');
+    } else {
+      off('typhoon-track-past-line');
+      off('typhoon-track-line');
+    }
+  }, [typhoonEnabled, selectedTyphoon, showProb, showWind15, showWind25, mapReady]);
+
+  // ── 태풍: 중심 마크(DOM 마커) 재생성 + 클릭 팝업 ──
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return undefined;
+    typhoonMarkersRef.current.forEach((m) => m.remove());
+    typhoonMarkersRef.current = [];
+    typhoonPopupRef.current?.remove();
+    typhoonPopupRef.current = null;
+
+    const typhoon = typhoonEnabled ? selectedTyphoon : null;
+    if (!typhoon) return undefined;
+
+    const geo = buildTyphoonGeoJson(typhoon);
+    const scale = typhoonMarkScale(map.getZoom());
+    geo.centers.features.forEach((f) => {
+      const props = f.properties;
+      const el = buildTyphoonMarkerEl(props);
+      el.style.transform = `scale(${scale})`;
+      el.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openTyphoonPopup(map, f.geometry.coordinates, props);
+      });
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(f.geometry.coordinates)
+        .addTo(map);
+      typhoonMarkersRef.current.push(marker);
+    });
+
+    return () => {
+      typhoonMarkersRef.current.forEach((m) => m.remove());
+      typhoonMarkersRef.current = [];
+      typhoonPopupRef.current?.remove();
+      typhoonPopupRef.current = null;
+    };
+  }, [typhoonEnabled, selectedTyphoon, openTyphoonPopup, mapReady]);
+
+  // ── 태풍: 줌에 따라 마크·팝업 크기 조절 ──
+  useEffect(() => {
+    const scale = typhoonMarkScale(mapZoom);
+    typhoonMarkersRef.current.forEach((m) => {
+      m.getElement().style.transform = `scale(${scale})`;
+    });
+    if (typhoonPopupRef.current) {
+      const el = typhoonPopupRef.current.getElement();
+      const box = el?.querySelector('.typhoon-popup');
+      if (box) box.style.setProperty('--popup-scale', String(0.9 + (Math.min(9, Math.max(3, mapZoom)) - 3) / 6 * 0.35));
+    }
+  }, [mapZoom]);
 
   // 최신 시각 탐색 → 12시간 타임라인 구성 (5분마다 갱신)
   useEffect(() => {
@@ -982,6 +1306,13 @@ function SatelliteView({
   // 시각)이 안 채워졌다고 재생 버튼이 죽거나 '위성 재생 준비 중 N/M'이 뜨면 안 되기
   // 때문이다. 아직 안 온 프레임은 직전 프레임을 유지하고, 재생하며 그 자리에서 채워진다.
   const displayStatus = status ?? null;
+
+  // 태풍 진로도 ON + 태풍 선택 시 좌상단 밴드를 태풍 이름/발표시각으로 교체
+  const typhoonActive = typhoonEnabled && !!selectedTyphoon;
+  const typhoonBandTitle = selectedTyphoon
+    ? `제${selectedTyphoon.number}호 태풍${selectedTyphoon.name ? ` ‘${selectedTyphoon.name}’` : ''}`
+    : null;
+  const typhoonBandTime = selectedTyphoon ? formatAnnounceLabel(selectedTyphoon.announceTime) : null;
 
   // 준비된 전 구간만 선택한 재생 길이에 맞춰 진행하고 마지막에서 멈춘다.
   useEffect(() => {
@@ -1210,9 +1541,22 @@ function SatelliteView({
               textShadow: '0 2px 6px rgba(0,0,0,0.35)',
             }}
           >
-            위성 영상
+            {typhoonActive ? typhoonBandTitle : '위성 영상'}
           </span>
-          {bandTime ? (
+          {typhoonActive ? (
+            <div
+              className="ml-auto flex shrink-0 items-center whitespace-nowrap"
+              style={{ gap: '0.6vw' }}
+            >
+              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
+              <span
+                className="font-bold text-[#bdd6fb]"
+                style={{ fontSize: 'clamp(15px, 1.15vw, 24px)' }}
+              >
+                {typhoonBandTime}
+              </span>
+            </div>
+          ) : bandTime ? (
             <div
               className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap"
               style={{ gap: '0.6vw' }}
@@ -1347,6 +1691,58 @@ function SatelliteView({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 태풍 진로도 컨트롤 — 메인 토글은 모든 모드, 세부(태풍 선택·반경)는 편집모드만 */}
+      <div data-video-hide className="absolute right-6 top-[13%] z-20 flex flex-col items-end gap-2">
+        <label className="flex h-10 cursor-pointer items-center gap-2 rounded-full border border-white/25 bg-slate-900/65 px-3.5 text-sm font-black text-white shadow-lg backdrop-blur-sm">
+          <input
+            type="checkbox"
+            checked={typhoonEnabled}
+            onChange={(event) => setTyphoonEnabled(event.target.checked)}
+            className="h-4 w-4 accent-[#f4c542]"
+          />
+          태풍 진로도
+        </label>
+        {typhoonEnabled && workspaceMode === 'edit' ? (
+          <div className="flex w-52 flex-col gap-2 rounded-2xl border border-white/20 bg-slate-900/70 p-3 shadow-xl backdrop-blur-sm">
+            {typhoons.length > 0 ? (
+              <select
+                value={selectedTyphoonId ?? ''}
+                onChange={(event) => setSelectedTyphoonId(event.target.value)}
+                className="h-9 w-full cursor-pointer rounded-lg border border-white/25 bg-slate-900/80 px-2 text-sm font-semibold text-white outline-none"
+                aria-label="표출 태풍 선택"
+              >
+                {typhoons.map((t) => (
+                  <option key={t.id} value={t.id} className="text-slate-900">
+                    {`제${t.number}호${t.name ? ` ${t.name}` : ''}`}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-xs font-semibold text-white/60">활동 중인 태풍 없음</span>
+            )}
+            <div className="flex flex-col gap-1.5 border-t border-white/15 pt-2">
+              {[
+                { label: '확률 반경', value: showProb, setter: setShowProb, color: '#e2e8f0' },
+                { label: '강풍 반경', value: showWind15, setter: setShowWind15, color: '#facc15' },
+                { label: '폭풍 반경', value: showWind25, setter: setShowWind25, color: '#ef4444' },
+              ].map((opt) => (
+                <label key={opt.label} className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-white">
+                  <input
+                    type="checkbox"
+                    checked={opt.value}
+                    onChange={(event) => opt.setter(event.target.checked)}
+                    className="h-4 w-4"
+                    style={{ accentColor: opt.color }}
+                  />
+                  <span className="inline-block h-3 w-3 rounded-full" style={{ background: opt.color, opacity: 0.85 }} />
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* 우하단: (방송모드) 뷰 전환 + 표시 옵션 + 재생 길이 — 레이더와 동일 위치 */}

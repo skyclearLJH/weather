@@ -58,6 +58,11 @@ const getCacheTtl = (pathname, searchParams) => {
     return 180;
   }
 
+  // 태풍정보(typ_data/typ_now)는 발표 주기가 길어 10분 캐시로 충분하다.
+  if (pathname.includes('/typ_data.php') || pathname.includes('/typ_now.php')) {
+    return 600;
+  }
+
   if (pathname.includes('/sfc_aws_day.php')) {
     const requestedDay = searchParams.get('tm2');
     return /^\d{8}$/.test(requestedDay ?? '') && requestedDay < getKstDay()
