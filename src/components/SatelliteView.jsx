@@ -1096,7 +1096,11 @@ function SatelliteView({
   useEffect(() => {
     cancelAnimationFrame(revealRafRef.current);
     if (!typhoonEnabled || !selectedTyphoonId) {
-      setTyphoonReveal(1);
+      // 꺼져 있으면 1(개념상 완성, 어차피 숨김). 켜져 있는데 아직 데이터 대기 중이면
+      // 0으로 '무장'해, 데이터가 도착하는 순간에도 완성된 진로도가 새어나가지 않게 한다.
+      const armed = typhoonEnabled ? 0 : 1;
+      typhoonRevealRef.current = armed;
+      setTyphoonReveal(armed);
       return undefined;
     }
     const DURATION = 2000;
