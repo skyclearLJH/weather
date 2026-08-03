@@ -17,6 +17,13 @@ body.weather-video-capture [data-video-hide] {
   display: none !important;
 }
 
+/* 녹화 중에는 마우스 커서를 숨긴다. 탭 캡처는 페이지 커서를 그대로 찍기 때문에,
+   getDisplayMedia의 cursor:'never'가 늦게 적용돼 첫 2~3초 커서가 남는 걸 막는다. */
+body.weather-video-capture,
+body.weather-video-capture * {
+  cursor: none !important;
+}
+
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }

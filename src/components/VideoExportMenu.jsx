@@ -62,17 +62,18 @@ const drawVideoFrame = (context, video) => {
   if (!sourceWidth || !sourceHeight) return false;
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  context.drawImage(
-    video,
-    0,
-    0,
-    sourceWidth,
-    sourceHeight,
-    0,
-    0,
-    VIDEO_WIDTH,
-    VIDEO_HEIGHT,
-  );
+  // 캡처된 탭 화면의 가로세로 비율을 유지한다(늘여 그리면 배율이 달라 보임).
+  // 브라우저 콘텐츠 영역은 툴바·탭 때문에 정확히 16:9가 아니어서, 비율을 맞춰
+  // 축소·중앙배치하고 남는 여백은 배경색으로 채운다(레터박스). 원본 폭이 1920면
+  // 세로 업스케일이 없어 선명도도 유지된다.
+  const scale = Math.min(VIDEO_WIDTH / sourceWidth, VIDEO_HEIGHT / sourceHeight);
+  const drawW = Math.round(sourceWidth * scale);
+  const drawH = Math.round(sourceHeight * scale);
+  const dx = Math.round((VIDEO_WIDTH - drawW) / 2);
+  const dy = Math.round((VIDEO_HEIGHT - drawH) / 2);
+  context.fillStyle = '#0a1522';
+  context.fillRect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+  context.drawImage(video, 0, 0, sourceWidth, sourceHeight, dx, dy, drawW, drawH);
   return true;
 };
 
