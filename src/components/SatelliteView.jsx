@@ -112,7 +112,7 @@ const typhoonMarkScale = (zoom) => {
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 
 // 선택 태풍 + 반경 토글로 각 소스에 넣을 GeoJSON을 만든다.
-const buildTyphoonGeoJson = (typhoon) => {
+const buildTyphoonGeoJson = (typhoon, reveal = 1) => {
   if (!typhoon) {
     return {
       prob: emptyFC(),
@@ -127,6 +127,43 @@ const buildTyphoonGeoJson = (typhoon) => {
   // 예보 트랙 = 현재 위치 + 예측 지점들
   const trackPts = [current, ...forecast];
   const lonLat = (p) => [p.lon, p.lat];
+  const maxTmd = trackPts[trackPts.length - 1]?.tmd || 1;
+
+  // 리빌: 현재(가까운 시점)에서 미래로 reveal(0~1)만큼만 이어 그린다. 마지막
+  // 부분 구간은 위치·반경을 보간해 부드럽게 확장시킨다.
+  const lerp = (a, b, f) => {
+    const av = Number.isFinite(a) && a > 0 ? a : 0;
+    const bv = Number.isFinite(b) && b > 0 ? b : 0;
+    return av + (bv - av) * f;
+  };
+  const revealedTrack = (reveal) => {
+    if (reveal >= 1) return trackPts;
+    const rt = reveal * maxTmd;
+    const out = [];
+    for (let i = 0; i < trackPts.length; i += 1) {
+      const p = trackPts[i];
+      if (p.tmd <= rt + 1e-6) {
+        out.push(p);
+        continue;
+      }
+      const prev = trackPts[i - 1];
+      const span = p.tmd - (prev?.tmd ?? 0);
+      const f = span > 0 ? (rt - prev.tmd) / span : 0;
+      if (prev && f > 0.02) {
+        out.push({
+          lat: prev.lat + (p.lat - prev.lat) * f,
+          lon: prev.lon + (p.lon - prev.lon) * f,
+          tmd: rt,
+          radProb: lerp(prev === current ? 0 : prev.radProb, p.radProb, f),
+          rad15: lerp(prev.rad15, p.rad15, f),
+          rad25: lerp(prev.rad25, p.rad25, f),
+        });
+      }
+      break;
+    }
+    return out.length >= 1 ? out : [trackPts[0]];
+  };
+  const shown = revealedTrack(reveal);
 
   const envelope = (points, pick) => {
     const poly = sweptEnvelopePolygon(
@@ -139,10 +176,10 @@ const buildTyphoonGeoJson = (typhoon) => {
   };
 
   // 확률원뿔: 현재(반경0)에서 예측으로 넓어지는 70% 확률반경
-  const prob = envelope(trackPts, (p) => (p === current ? 0 : p.radProb));
+  const prob = envelope(shown, (p) => (p === current ? 0 : p.radProb));
   // 강풍/폭풍 반경: 현재+예측 지점의 반경을 따라 이음
-  const wind15 = envelope(trackPts, (p) => p.rad15);
-  const wind25 = envelope(trackPts, (p) => p.rad25);
+  const wind15 = envelope(shown, (p) => p.rad15);
+  const wind25 = envelope(shown, (p) => p.rad25);
 
   const pastLine =
     analysis.length > 1
@@ -154,14 +191,18 @@ const buildTyphoonGeoJson = (typhoon) => {
         }
       : emptyFC();
 
-  const trackLine = {
-    type: 'FeatureCollection',
-    features: [
-      { type: 'Feature', geometry: { type: 'LineString', coordinates: trackPts.map(lonLat) }, properties: {} },
-    ],
-  };
+  const trackLine =
+    shown.length > 1
+      ? {
+          type: 'FeatureCollection',
+          features: [
+            { type: 'Feature', geometry: { type: 'LineString', coordinates: shown.map(lonLat) }, properties: {} },
+          ],
+        }
+      : emptyFC();
 
-  // 중심 마크: 현재 + 예측 지점마다. 클릭 팝업용 속성 포함.
+  // 중심 마크: 현재 + 예측 지점마다(항상 전체 생성, 리빌은 마커 불투명도로 처리).
+  // frac = 지점의 진행 비율(현재 0 → 마지막 예측 1) → 리빌 임계값으로 사용.
   const centers = {
     type: 'FeatureCollection',
     features: trackPts.map((p) => ({
@@ -178,6 +219,7 @@ const buildTyphoonGeoJson = (typhoon) => {
         rad25: p.rad25 ?? -1,
         validTime: p.validTime ? p.validTime.toISOString() : '',
         tmd: p.tmd ?? 0,
+        frac: (p.tmd ?? 0) / maxTmd,
       },
     })),
   };
@@ -331,6 +373,9 @@ const createCloudLayer = () => {
     convStartKm: SEASON_CONV_KM.summer[0],
     convFullKm: SEASON_CONV_KM.summer[1],
     shaderMap: new Map(),
+    crossfade: true, // 프레임 전환 시 디졸브
+    mixStart: 0,
+    mixDurationMs: 260,
 
     // 구면(globe)/메르카토르 투영별 셰이더 — MapLibre가 주입하는 projectTile* 프렐류드 사용.
     // globe 변형은 elevation을 미터로 받고(GLOBE_RADIUS로 나눔), 메르카토르 변형은
@@ -375,6 +420,7 @@ const createCloudLayer = () => {
         in vec2 vTexCoord;
         uniform float uConvOn;
         uniform float uUseTexture;
+        uniform float uAlpha; // 프레임 전환(디졸브) 시 전체 불투명도
         uniform highp usampler2D uEaTex; // 풀해상도 DN (R16UI)
         uniform sampler2D uLut;          // DN→강도 LUT (8192x1, R8)
         out vec4 fragColor;
@@ -412,7 +458,7 @@ const createCloudLayer = () => {
           color = mix(color, warm, convMixT);
           alpha = max(alpha, smoothstep(0.06, 0.6, conv) * 0.9);
           float shade = mix(vShade, 1.0, convMixT);
-          fragColor = vec4(color * shade * alpha, alpha);
+          fragColor = vec4(color * shade * alpha, alpha) * uAlpha;
         }`;
       const compile = (type, source) => {
         const shader = gl.createShader(type);
@@ -439,6 +485,7 @@ const createCloudLayer = () => {
         uExag: gl.getUniformLocation(program, 'uExag'),
         uConvOn: gl.getUniformLocation(program, 'uConvOn'),
         uUseTexture: gl.getUniformLocation(program, 'uUseTexture'),
+        uAlpha: gl.getUniformLocation(program, 'uAlpha'),
         uEaTex: gl.getUniformLocation(program, 'uEaTex'),
         uLut: gl.getUniformLocation(program, 'uLut'),
         uProjMatrix: gl.getUniformLocation(program, 'u_projection_matrix'),
@@ -529,11 +576,26 @@ const createCloudLayer = () => {
           zScaleBuffer: makeBuffer(gl.ARRAY_BUFFER, zScales, gl.STATIC_DRAW),
           texCoordBuffer: makeBuffer(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW),
           cloudBuffer: makeBuffer(gl.ARRAY_BUFFER, new Float32Array(w * h * 4), gl.DYNAMIC_DRAW),
+          // 프레임 디졸브용 이전 프레임 버퍼(구름 값). 텍스처 메쉬는 prevDataTex도 둔다.
+          prevCloudBuffer: makeBuffer(gl.ARRAY_BUFFER, new Float32Array(w * h * 4), gl.DYNAMIC_DRAW),
+          prevDataTex: null,
+          hasPrev: false,
           indexBuffer: makeBuffer(gl.ELEMENT_ARRAY_BUFFER, indexArray, gl.STATIC_DRAW),
           indexCount: indexArray.length,
           buildIndices,
           makeBuffer,
         };
+      };
+
+      // 텍스처 파라미터를 동일하게 준 DN 텍스처 생성 헬퍼(현재/이전 공용)
+      const makeDataTex = () => {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return tex;
       };
 
       // KO: 동아시아 정밀. 데이터는 1809x1066(4km)이지만 높이 메쉬는 STEP=4로 성기게.
@@ -555,12 +617,8 @@ const createCloudLayer = () => {
       koMesh.textured = true;
       koMesh.dataW = KW;
       koMesh.dataH = KH;
-      koMesh.dataTex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, koMesh.dataTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      koMesh.dataTex = makeDataTex();
+      koMesh.prevDataTex = makeDataTex();
 
       // LA: NOAA 한반도 국지 관측. 작은 원본으로 첫 화면을 먼저 채우고 FD/KO가
       // 준비되면 제거한다. 격자 수를 줄여 초기 WebGL 메쉬 생성 부담도 낮춘다.
@@ -581,12 +639,8 @@ const createCloudLayer = () => {
       laMesh.textured = true;
       laMesh.dataW = LW;
       laMesh.dataH = LH;
-      laMesh.dataTex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, laMesh.dataTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      laMesh.dataTex = makeDataTex();
+      laMesh.prevDataTex = makeDataTex();
 
       // FD: 디스크 밖 정점 무효화 + KO 크롭 안쪽은 KO 메쉬에 맡긴다.
       // 둘 다 FD 픽셀 좌표계라 사각형 비교면 충분 (여유 22px ≈ 44km 겹침).
@@ -623,6 +677,20 @@ const createCloudLayer = () => {
     setFrame(area, data) {
       const mesh = this.meshByArea?.[area];
       if (!mesh) return;
+      // 프레임이 바뀔 때 이전 프레임을 prev 버퍼로 밀고 새 프레임을 현재에 그려
+      // 짧게 크로스페이드(디졸브)한다. 첫 프레임(아직 그린 적 없음)은 전환 없음.
+      if (this.crossfade && data && mesh.frameData && mesh.converted) {
+        const tmpBuf = mesh.cloudBuffer;
+        mesh.cloudBuffer = mesh.prevCloudBuffer;
+        mesh.prevCloudBuffer = tmpBuf;
+        if (mesh.textured) {
+          const tmpTex = mesh.dataTex;
+          mesh.dataTex = mesh.prevDataTex;
+          mesh.prevDataTex = tmpTex;
+        }
+        mesh.hasPrev = true;
+        this.mixStart = performance.now();
+      }
       mesh.frameData = data;
       mesh.dirty = Boolean(data);
       this.map?.triggerRepaint();
@@ -698,6 +766,7 @@ const createCloudLayer = () => {
       gl.bindBuffer(gl.ARRAY_BUFFER, mesh.cloudBuffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, cloud);
       mesh.dirty = false;
+      mesh.converted = true;
     },
 
     render(gl, renderArgs) {
@@ -727,14 +796,22 @@ const createCloudLayer = () => {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
+      // 프레임 전환 진행도(0→1). 전환 중이면 이전 프레임을 먼저 그리고 그 위에
+      // 새 프레임을 알파를 키우며 덧그려 디졸브한다.
+      const mixT =
+        this.crossfade && this.mixStart
+          ? Math.min(1, (performance.now() - this.mixStart) / this.mixDurationMs)
+          : 1;
+
       const koHasData = !!this.meshByArea.ko.frameData;
-      for (const mesh of this.meshes) {
-        if (!mesh.frameData) continue;
+      // 한 메쉬를 지정한 구름버퍼/텍스처/알파로 그린다.
+      const drawMesh = (mesh, cloudBuffer, dataTex, alpha, useFull) => {
         if (mesh.textured) {
           gl.activeTexture(gl.TEXTURE0);
-          gl.bindTexture(gl.TEXTURE_2D, mesh.dataTex);
+          gl.bindTexture(gl.TEXTURE_2D, dataTex);
         }
         gl.uniform1f(shader.uUseTexture, mesh.textured ? 1 : 0);
+        gl.uniform1f(shader.uAlpha, alpha);
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuffer);
         gl.enableVertexAttribArray(shader.aPos);
         gl.vertexAttribPointer(shader.aPos, 2, gl.FLOAT, false, 0, 0);
@@ -743,7 +820,7 @@ const createCloudLayer = () => {
           gl.enableVertexAttribArray(shader.aZScale);
           gl.vertexAttribPointer(shader.aZScale, 1, gl.FLOAT, false, 0, 0);
         }
-        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.cloudBuffer);
+        gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
         gl.enableVertexAttribArray(shader.aCloud);
         gl.vertexAttribPointer(shader.aCloud, 4, gl.FLOAT, false, 0, 0);
         if (shader.aTexCoord >= 0) {
@@ -751,11 +828,23 @@ const createCloudLayer = () => {
           gl.enableVertexAttribArray(shader.aTexCoord);
           gl.vertexAttribPointer(shader.aTexCoord, 2, gl.FLOAT, false, 0, 0);
         }
-        // KO 데이터가 없으면 FD가 크롭 영역까지 전체를 그린다
-        const useFull = mesh.indexBufferFull && !koHasData;
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, useFull ? mesh.indexBufferFull : mesh.indexBuffer);
         gl.drawElements(gl.TRIANGLES, useFull ? mesh.indexCountFull : mesh.indexCount, gl.UNSIGNED_INT, 0);
+      };
+
+      for (const mesh of this.meshes) {
+        if (!mesh.frameData) continue;
+        const useFull = mesh.indexBufferFull && !koHasData;
+        if (mixT < 1 && mesh.hasPrev) {
+          // 이전 프레임(전체 불투명) → 새 프레임(알파 상승)로 덧그려 디졸브
+          drawMesh(mesh, mesh.prevCloudBuffer, mesh.prevDataTex, 1, useFull);
+          drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, mixT, useFull);
+        } else {
+          drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, 1, useFull);
+        }
       }
+
+      if (mixT < 1) this.map?.triggerRepaint();
     },
   };
   return layer;
@@ -801,9 +890,13 @@ function SatelliteView({
   const [showWind25, setShowWind25] = useState(false);
   const [mapZoom, setMapZoom] = useState(4.35);
   const [mapReady, setMapReady] = useState(false);
+  const [typhoonReveal, setTyphoonReveal] = useState(1); // 진로도 확장 애니메이션 0→1
   const mapReadyRef = useRef(false);
   const typhoonMarkersRef = useRef([]);
   const typhoonPopupRef = useRef(null);
+  const revealRafRef = useRef(0);
+  const typhoonRevealRef = useRef(1);
+  typhoonRevealRef.current = typhoonReveal;
 
   const selectedTyphoon = useMemo(
     () => typhoons.find((t) => t.id === selectedTyphoonId) ?? null,
@@ -1021,12 +1114,31 @@ function SatelliteView({
     };
   }, [typhoonEnabled]);
 
+  // ── 태풍: 진로도 리빌(켜거나 태풍 변경 시 현재→미래로 2초 확장) ──
+  useEffect(() => {
+    cancelAnimationFrame(revealRafRef.current);
+    if (!typhoonEnabled || !selectedTyphoonId) {
+      setTyphoonReveal(1);
+      return undefined;
+    }
+    const DURATION = 2000;
+    const t0 = performance.now();
+    setTyphoonReveal(0);
+    const tick = () => {
+      const p = Math.min(1, (performance.now() - t0) / DURATION);
+      setTyphoonReveal(1 - (1 - p) * (1 - p)); // easeOut
+      if (p < 1) revealRafRef.current = requestAnimationFrame(tick);
+    };
+    revealRafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(revealRafRef.current);
+  }, [typhoonEnabled, selectedTyphoonId]);
+
   // ── 태풍: 엔벨로프·진로선 GeoJSON 갱신 + 레이어 표시/숨김 ──
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReadyRef.current) return;
     const typhoon = typhoonEnabled ? selectedTyphoon : null;
-    const geo = buildTyphoonGeoJson(typhoon);
+    const geo = buildTyphoonGeoJson(typhoon, typhoonReveal);
     const on = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'visible');
     const off = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'none');
 
@@ -1053,7 +1165,7 @@ function SatelliteView({
       off('typhoon-track-past-line');
       off('typhoon-track-line');
     }
-  }, [typhoonEnabled, selectedTyphoon, showProb, showWind15, showWind25, mapReady]);
+  }, [typhoonEnabled, selectedTyphoon, showProb, showWind15, showWind25, mapReady, typhoonReveal]);
 
   // ── 태풍: 중심 마크(DOM 마커) 재생성 + 클릭 팝업 ──
   useEffect(() => {
@@ -1069,9 +1181,13 @@ function SatelliteView({
 
     const geo = buildTyphoonGeoJson(typhoon);
     const scale = typhoonMarkScale(map.getZoom());
+    const reveal = typhoonRevealRef.current;
     geo.centers.features.forEach((f) => {
       const props = f.properties;
       const el = buildTyphoonMarkerEl(props, scale);
+      el.dataset.frac = String(props.frac ?? 0);
+      // 리빌 중이면 아직 도달하지 않은 지점은 숨겼다가(불투명도 0) 순차로 나타난다.
+      el.style.opacity = (props.frac ?? 0) <= reveal + 0.001 ? '1' : '0';
       el.addEventListener('click', (event) => {
         event.stopPropagation();
         openTyphoonPopup(map, f.geometry.coordinates, props);
@@ -1089,6 +1205,15 @@ function SatelliteView({
       typhoonPopupRef.current = null;
     };
   }, [typhoonEnabled, selectedTyphoon, openTyphoonPopup, mapReady]);
+
+  // ── 태풍: 리빌 진행에 따라 마크를 순차로 나타냄 ──
+  useEffect(() => {
+    typhoonMarkersRef.current.forEach((m) => {
+      const el = m.getElement();
+      const frac = Number(el.dataset.frac ?? 0);
+      el.style.opacity = frac <= typhoonReveal + 0.001 ? '1' : '0';
+    });
+  }, [typhoonReveal]);
 
   // ── 태풍: 줌에 따라 마크·팝업 크기 조절 ──
   useEffect(() => {
@@ -1546,52 +1671,50 @@ function SatelliteView({
               <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
             </svg>
           </div>
+          {/* 타이틀: '위성 영상' ↔ 태풍 이름 크로스페이드(디졸브). 두 span을 같은
+              그리드 셀에 겹쳐 두고 불투명도로 전환한다(레이아웃 폭은 둘 중 큰 쪽 유지). */}
           <span
-            className="whitespace-nowrap font-black tracking-tight text-white"
-            style={{
-              fontSize: 'clamp(26px, 2.1vw, 46px)',
-              textShadow: '0 2px 6px rgba(0,0,0,0.35)',
-            }}
+            className="grid whitespace-nowrap font-black tracking-tight text-white"
+            style={{ fontSize: 'clamp(26px, 2.1vw, 46px)', textShadow: '0 2px 6px rgba(0,0,0,0.35)' }}
           >
-            {typhoonActive ? typhoonBandTitle : '위성 영상'}
+            <span style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 0 : 1 }}>
+              위성 영상
+            </span>
+            <span style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 1 : 0 }}>
+              {typhoonBandTitle ?? ''}
+            </span>
           </span>
-          {typhoonActive ? (
+          {/* 시각: 시계/날짜 ↔ 발표시각(2줄) 크로스페이드. 오른쪽 정렬 + 2줄 중앙정렬. */}
+          <div className="ml-auto grid shrink-0" style={{ justifyItems: 'end' }}>
             <div
-              className="ml-auto flex shrink-0 items-center whitespace-nowrap"
-              style={{ gap: '0.5vw' }}
+              className="flex items-center whitespace-nowrap"
+              style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 0 : 1, gap: '0.6vw' }}
+            >
+              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
+              <span
+                className="font-black leading-none tabular-nums text-white"
+                style={{ fontSize: 'clamp(22px, 1.7vw, 38px)', textShadow: '0 2px 5px rgba(0,0,0,0.3)' }}
+              >
+                {bandTime?.clock}
+              </span>
+              <span className="font-semibold text-[#bdd6fb]" style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}>
+                {bandTime?.date}
+              </span>
+            </div>
+            <div
+              className="flex items-center whitespace-nowrap"
+              style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 1 : 0, gap: '0.5vw' }}
             >
               <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
               <span
-                className="flex flex-col items-start leading-tight text-[#dbe8fb]"
+                className="flex flex-col items-center leading-tight text-[#dbe8fb]"
                 style={{ fontSize: 'clamp(12px, 0.82vw, 17px)' }}
               >
                 <span className="font-bold">{typhoonBandTime?.day}</span>
                 <span className="font-bold">{typhoonBandTime?.time}</span>
               </span>
             </div>
-          ) : bandTime ? (
-            <div
-              className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap"
-              style={{ gap: '0.6vw' }}
-            >
-              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
-              <span
-                className="font-black leading-none tabular-nums text-white"
-                style={{
-                  fontSize: 'clamp(22px, 1.7vw, 38px)',
-                  textShadow: '0 2px 5px rgba(0,0,0,0.3)',
-                }}
-              >
-                {bandTime.clock}
-              </span>
-              <span
-                className="font-semibold text-[#bdd6fb]"
-                style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
-              >
-                {bandTime.date}
-              </span>
-            </div>
-          ) : null}
+          </div>
           <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
         </div>
       </div>

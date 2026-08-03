@@ -78,6 +78,7 @@
   border: 0;
   background: none;
   cursor: pointer;
+  transition: opacity 0.35s ease;
 }
 .typhoon-mark__inner {
   position: absolute;
