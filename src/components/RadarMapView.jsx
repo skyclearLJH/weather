@@ -2142,10 +2142,14 @@ const RadarMapView = ({
     const activeView = broadcastView;
     videoCaptureTransitionRef.current = true;
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen().catch(() => {});
+      // 녹화를 방송모드와 같은 크기·해상도로 만들려면 네이티브 전체화면(1920x1080,
+      // 16:9)을 그대로 유지해야 한다. 예전엔 여기서 전체화면을 빠져나와 CSS 전체화면
+      // (브라우저 툴바만큼 세로가 줄어 16:9가 아님)으로 낮췄기 때문에, 녹화 영상이
+      // 방송화면보다 작아지고 위아래 검은 여백이 생겼다. 전체화면이 아닐 때만 CSS
+      // 전체화면으로 채운다.
+      if (!document.fullscreenElement) {
+        setFullscreenMode('css');
       }
-      setFullscreenMode('css');
       setIsBroadcast(true);
       setBroadcastView(activeView);
       await new Promise((resolve) => {

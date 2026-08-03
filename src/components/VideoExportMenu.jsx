@@ -62,18 +62,19 @@ const drawVideoFrame = (context, video) => {
   if (!sourceWidth || !sourceHeight) return false;
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  // 캡처된 탭 화면의 가로세로 비율을 유지한다(늘여 그리면 배율이 달라 보임).
-  // 브라우저 콘텐츠 영역은 툴바·탭 때문에 정확히 16:9가 아니어서, 비율을 맞춰
-  // 축소·중앙배치하고 남는 여백은 배경색으로 채운다(레터박스). 원본 폭이 1920면
-  // 세로 업스케일이 없어 선명도도 유지된다.
-  const scale = Math.min(VIDEO_WIDTH / sourceWidth, VIDEO_HEIGHT / sourceHeight);
-  const drawW = Math.round(sourceWidth * scale);
-  const drawH = Math.round(sourceHeight * scale);
-  const dx = Math.round((VIDEO_WIDTH - drawW) / 2);
-  const dy = Math.round((VIDEO_HEIGHT - drawH) / 2);
-  context.fillStyle = '#0a1522';
-  context.fillRect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
-  context.drawImage(video, 0, 0, sourceWidth, sourceHeight, dx, dy, drawW, drawH);
+  // 캡처된 방송 화면을 출력 캔버스에 1:1로 그린다. 출력 캔버스 크기를 캡처 원본과
+  // 같게 잡으므로(아래 참조) 레터박스·왜곡·업스케일이 없어 방송모드와 화질이 같다.
+  context.drawImage(
+    video,
+    0,
+    0,
+    sourceWidth,
+    sourceHeight,
+    0,
+    0,
+    context.canvas.width,
+    context.canvas.height,
+  );
   return true;
 };
 
@@ -166,16 +167,24 @@ function VideoExportMenu({
         window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
       });
       await wait(120);
+      // 출력 해상도를 캡처된 방송 화면(원본)과 동일하게 잡는다. 1920x1080에 억지로
+      // 맞추면 레터박스·업스케일로 배율이 달라 보이고 화질이 떨어진다. 네이티브
+      // 전체화면(1920x1080)에서 녹화하면 방송모드와 완전히 같은 크기·해상도가 된다.
+      // (H.264는 짝수 크기를 요구하므로 짝수로 내림.)
+      const captureWidth = sourceVideo.videoWidth || VIDEO_WIDTH;
+      const captureHeight = sourceVideo.videoHeight || VIDEO_HEIGHT;
+      const outputWidth = Math.max(2, captureWidth - (captureWidth % 2));
+      const outputHeight = Math.max(2, captureHeight - (captureHeight % 2));
       const canvas = document.createElement('canvas');
-      canvas.width = VIDEO_WIDTH;
-      canvas.height = VIDEO_HEIGHT;
+      canvas.width = outputWidth;
+      canvas.height = outputHeight;
       const context = canvas.getContext('2d', { alpha: false });
       if (!context) throw new Error('영상 합성 화면을 만들 수 없습니다.');
 
       const format = new Mp4OutputFormat();
       const codec = await getFirstEncodableVideoCodec(
         format.getSupportedVideoCodecs().filter((candidate) => candidate === 'avc'),
-        { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+        { width: outputWidth, height: outputHeight },
       );
       if (codec !== 'avc') {
         throw new Error('이 기기에서 H.264 MP4 인코더를 사용할 수 없습니다.');
