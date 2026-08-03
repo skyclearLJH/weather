@@ -1419,10 +1419,13 @@ function SatelliteView({
   // 때문이다. 아직 안 온 프레임은 직전 프레임을 유지하고, 재생하며 그 자리에서 채워진다.
   const displayStatus = status ?? null;
 
-  // 태풍 진로도 ON + 태풍 선택 시 좌상단 밴드를 태풍 이름/발표시각으로 교체
+  // 태풍 진로도 ON + 태풍 선택 시 좌상단 밴드를 태풍 이름/발표시각으로 교체.
+  // 이름이 3글자 이상이면 밴드가 좁아 '제N호'를 빼고 "태풍 '이름'"만 표시한다.
   const typhoonActive = typhoonEnabled && !!selectedTyphoon;
   const typhoonBandTitle = selectedTyphoon
-    ? `제${selectedTyphoon.number}호 태풍${selectedTyphoon.name ? ` ‘${selectedTyphoon.name}’` : ''}`
+    ? selectedTyphoon.name && selectedTyphoon.name.length >= 3
+      ? `태풍 ‘${selectedTyphoon.name}’`
+      : `제${selectedTyphoon.number}호 태풍${selectedTyphoon.name ? ` ‘${selectedTyphoon.name}’` : ''}`
     : null;
   const typhoonBandTime = selectedTyphoon ? formatAnnounceLabel(selectedTyphoon.announceTime) : null;
 
@@ -1656,7 +1659,7 @@ function SatelliteView({
             {typhoonActive ? typhoonBandTitle : '위성 영상'}
           </span>
           {typhoonActive ? (
-            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw' }}>
+            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '0.9vw' }}>
               <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
               <span
                 className="flex flex-col items-center leading-tight text-[#dbe8fb]"
