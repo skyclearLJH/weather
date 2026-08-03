@@ -776,10 +776,14 @@ const createCloudLayer = () => {
       gl.uniform1i(shader.uLut, 1);
       gl.uniform1i(shader.uEaTex, 0);
 
-      // GL 상태 위생: 태풍 진로도의 fill/line 레이어를 얹으면 MapLibre가 타일
-      // 클리핑용으로 STENCIL_TEST를 켜두는데, 커스텀 레이어가 그 스텐실을 물려받아
-      // FD(전구) 구름이 통째로 잘려 사라지거나 프레임마다 깜빡였다. 여기서 필요한
-      // 상태를 명시적으로 지정해 다른 레이어의 잔여 GL 상태와 분리한다.
+      // GL 상태 위생: 태풍 진로도의 fill/line 레이어(예전 지명 라벨과 동일)를 얹으면
+      // MapLibre가 레이어마다 서로 다른 gl.depthRange 슬라이스를 배정하고 STENCIL로
+      // 타일을 클리핑하는데, 커스텀 구름 레이어가 그 depth/스텐실 상태를 물려받아
+      // FD(전구) 구름이 depth·스텐실에 잘려 사라지거나 간헐적으로만 보였다.
+      // 구름은 지구 뒷면을 셰이더 클립(projectTileWithElevation)으로 숨기므로 depth
+      // 테스트가 필요 없다 → depth·스텐실을 꺼서 다른 레이어의 잔여 상태와 분리한다.
+      gl.disable(gl.DEPTH_TEST);
+      gl.depthMask(false);
       gl.disable(gl.STENCIL_TEST);
       gl.disable(gl.CULL_FACE);
       gl.enable(gl.BLEND);
