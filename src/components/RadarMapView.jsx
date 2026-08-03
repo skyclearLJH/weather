@@ -4107,13 +4107,11 @@ const RadarMapView = ({
               </div>
             ) : null}
 
-            {/* 좌측 세로 스케일: 레이더(mm/h) 또는 누적 강수량(mm) */}
-            {workspaceMode !== 'broadcast' ? (
-              <div
-                data-video-hide
-                className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
-                style={{ top: 'calc(50% - max(23vh, 140px) - 18.5px)' }}
-              >
+            {/* 좌측 세로 스케일: 레이더(mm/h) 또는 누적 강수량(mm). 방송·녹화에서도 표시한다. */}
+            <div
+              className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
+              style={{ top: 'calc(50% - max(23vh, 140px) - 18.5px)' }}
+            >
               {isAccumView ? (
                 <>
                   <div className="flex h-[46vh] min-h-[280px]">
@@ -4199,8 +4197,7 @@ const RadarMapView = ({
                   </div>
                 </>
               )}
-              </div>
-            ) : null}
+            </div>
 
             {/* 하단 반투명 컨트롤바 */}
             <div data-video-hide className="absolute bottom-0 left-1/2 right-0 z-10 bg-gradient-to-t from-slate-900/65 via-slate-900/35 to-transparent pb-4 pl-0 pr-6 pt-10">

@@ -729,10 +729,6 @@ function SatelliteView({
   const convHighlightRef = useRef(true);
 
   const currentDate = timeline[frameIndex] ?? null;
-  const convRange = useMemo(
-    () => (currentDate ? seasonalConvRange(currentDate) : SEASON_CONV_KM.summer),
-    [currentDate],
-  );
   const bandTime = useMemo(
     () => (currentDate ? formatKstLabel(currentDate) : null),
     [currentDate],
@@ -1516,16 +1512,6 @@ function SatelliteView({
       </div>
       ) : null}
 
-      {workspaceMode === 'edit' && convHighlight ? (
-        <div data-video-hide className="sat-conv-legend">
-          <span className="sat-conv-legend-title">강한 대류운 (운정고도)</span>
-          <span className="sat-conv-legend-bar" />
-          <span className="sat-conv-legend-labels">
-            <span>{convRange[0]}km</span>
-            <span>{convRange[1]}km</span>
-          </span>
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -623,7 +623,6 @@ const ScaleBar = ({ mode }) => {
   const max = palette.at(-1).value;
   return (
     <div
-      data-video-hide
       className="pointer-events-none absolute left-5 z-20 rounded-lg bg-slate-900/50 px-2 py-2.5 shadow-lg backdrop-blur-sm"
       style={{ top: 'calc(50% - max(23vh, 140px) - 18.5px)' }}
     >
@@ -1429,7 +1428,7 @@ const HeatwaveBroadcastView = () => {
         </div>
       ) : null}
 
-      {workspaceMode !== 'broadcast' ? <ScaleBar mode={mode} /> : null}
+      <ScaleBar mode={mode} />
 
       {mode === 'change' ? (
         <div data-video-hide className="absolute bottom-0 left-[43%] right-0 z-20 bg-gradient-to-t from-slate-950/75 via-slate-950/35 to-transparent pb-3 pl-6 pr-6 pt-10">
