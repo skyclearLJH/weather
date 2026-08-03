@@ -67,22 +67,32 @@
   z-index: 30;
 }
 
-/* ── 태풍 진로도 중심 마크 ── */
+/* ── 태풍 진로도 중심 마크 ──
+   주의: .typhoon-mark(=MapLibre 마커 엘리먼트)의 transform은 MapLibre가 위치
+   지정에 쓰므로 절대 건드리지 않는다. 크기 조절은 내부 .typhoon-mark__inner에만
+   scale(var(--mark-scale))로 적용한다. */
 .typhoon-mark {
-  width: 46px;
-  height: 46px;
-  position: relative;
+  width: 48px;
+  height: 48px;
   padding: 0;
   border: 0;
   background: none;
   cursor: pointer;
-  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
-  transition: transform 0.12s ease-out;
+}
+.typhoon-mark__inner {
+  position: absolute;
+  inset: 0;
+  transform: scale(var(--mark-scale, 1));
+  transform-origin: center center;
+  transition: transform 0.08s linear;
 }
 .typhoon-mark__swirl {
   position: absolute;
   inset: 0;
-  color: #f8fafc;
+  color: #ef4444;
+  transform: scaleX(-1); /* 좌우 반전 */
+  filter: drop-shadow(0 0 1.2px rgba(255, 255, 255, 0.85))
+    drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
 }
 .typhoon-mark__swirl svg {
   display: block;
@@ -93,12 +103,12 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 54%;
-  height: 54%;
+  width: 48%;
+  height: 48%;
   transform: translate(-50%, -50%);
   border-radius: 9999px;
   background: var(--g-color, #94a3b8);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9), 0 1px 4px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95), 0 1px 4px rgba(0, 0, 0, 0.55);
 }
 .typhoon-mark__num {
   position: absolute;
@@ -107,11 +117,11 @@
   transform: translate(-50%, -50%);
   color: #fff;
   font-weight: 900;
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
-.typhoon-mark--current::after {
+.typhoon-mark--current .typhoon-mark__inner::after {
   content: '';
   position: absolute;
   left: 50%;
@@ -125,7 +135,7 @@
 }
 @keyframes typhoon-pulse {
   0% { opacity: 0.9; width: 100%; height: 100%; }
-  100% { opacity: 0; width: 200%; height: 200%; }
+  100% { opacity: 0; width: 210%; height: 210%; }
 }
 
 /* ── 태풍 상세 팝업 ── */

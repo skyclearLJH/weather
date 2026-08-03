@@ -67,26 +67,33 @@ const TYPHOON_ENVELOPES = [
 // 등급별 중심 마크 색
 const GRADE_COLOR = { 0: '#94a3b8', 1: '#38bdf8', 2: '#22c55e', 3: '#eab308', 4: '#f97316', 5: '#ef4444' };
 
-// 세련된 태풍 심볼(두 팔 나선). 가운데는 비워 등급 숫자가 들어간다.
+// 세련된 태풍 심볼(두 팔 나선). 가운데는 비워 등급 숫자가 들어간다. 색·좌우반전은
+// CSS에서 처리한다. 두 팔은 대칭(180° 회전)으로 그린다.
+const TYPHOON_ARM_PATH = 'M50 50 C48 29 61 15 85 19 C67 19 58 31 61 45 C62 53 57 59 50 58 Z';
 const TYPHOON_SWIRL_SVG =
   '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
   '<g fill="currentColor">' +
-  '<path d="M50 8c14 0 22 9 22 20 0 8-6 15-16 15 6-2 9-7 9-12 0-8-7-13-15-13-2 0-4 .3-6 .8C50 12 50 8 50 8z"/>' +
-  '<path d="M50 92c-14 0-22-9-22-20 0-8 6-15 16-15-6 2-9 7-9 12 0 8 7 13 15 13 2 0 4-.3 6-.8C50 88 50 92 50 92z"/>' +
+  `<path d="${TYPHOON_ARM_PATH}"/>` +
+  `<path d="${TYPHOON_ARM_PATH}" transform="rotate(180 50 50)"/>` +
   '</g>' +
-  '<circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="3" opacity="0.85"/>' +
   '</svg>';
 
-// 중심 마크 DOM 엘리먼트 생성(스웰 심볼 + 등급 숫자). 클릭 팝업용 데이터 포함.
-const buildTyphoonMarkerEl = (props) => {
+// 중심 마크 DOM 엘리먼트 생성(태풍 심볼 + 등급 숫자). 클릭 팝업용 데이터 포함.
+// 크기 조절은 el.transform이 아니라 --mark-scale CSS 변수로 넘긴다. (el.transform은
+// MapLibre가 마커 위치 지정에 쓰므로 절대 덮어쓰면 안 됨 — 덮어쓰면 줌 시 위치가
+// 틀어지거나 좌상단으로 튄다.) 실제 축소는 내부 래퍼(.typhoon-mark__inner)에 적용.
+const buildTyphoonMarkerEl = (props, scale) => {
   const el = document.createElement('button');
   el.type = 'button';
   el.className = `typhoon-mark${props.isCurrent ? ' typhoon-mark--current' : ''}`;
   el.style.setProperty('--g-color', GRADE_COLOR[props.grade] ?? GRADE_COLOR[0]);
+  el.style.setProperty('--mark-scale', String(scale ?? 1));
   el.innerHTML =
+    '<span class="typhoon-mark__inner">' +
     `<span class="typhoon-mark__swirl">${TYPHOON_SWIRL_SVG}</span>` +
-    `<span class="typhoon-mark__disc"></span>` +
-    `<span class="typhoon-mark__num">${props.gradeText || ''}</span>`;
+    '<span class="typhoon-mark__disc"></span>' +
+    `<span class="typhoon-mark__num">${props.gradeText || ''}</span>` +
+    '</span>';
   return el;
 };
 
@@ -1058,8 +1065,7 @@ function SatelliteView({
     const scale = typhoonMarkScale(map.getZoom());
     geo.centers.features.forEach((f) => {
       const props = f.properties;
-      const el = buildTyphoonMarkerEl(props);
-      el.style.transform = `scale(${scale})`;
+      const el = buildTyphoonMarkerEl(props, scale);
       el.addEventListener('click', (event) => {
         event.stopPropagation();
         openTyphoonPopup(map, f.geometry.coordinates, props);
@@ -1082,7 +1088,7 @@ function SatelliteView({
   useEffect(() => {
     const scale = typhoonMarkScale(mapZoom);
     typhoonMarkersRef.current.forEach((m) => {
-      m.getElement().style.transform = `scale(${scale})`;
+      m.getElement().style.setProperty('--mark-scale', String(scale));
     });
     if (typhoonPopupRef.current) {
       const el = typhoonPopupRef.current.getElement();
