@@ -4,7 +4,9 @@
 // 응답은 EUC-KR(CP949)이지만 우리가 쓰는 숫자 필드(LAT~RAD)는 LOC(위치 한글) 앞이라
 // 콤마 분해만으로 안전하게 읽힌다. disp=1은 콤마 구분(CSV) 형식.
 
-const KMA_BASE = '/api/kma/typ01/url';
+// 프록시(/api/kma/)는 뒤 경로를 apihub.kma.go.kr/ 뒤에 그대로 붙이므로
+// apihub 실제 경로인 'api/typ01/url/...'을 포함해야 한다.
+const KMA_BASE = '/api/kma/api/typ01/url';
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 // 번호→이름 표(직접 관리). 미등록 태풍은 "제N호 태풍"으로 폴백한다.
