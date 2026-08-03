@@ -373,9 +373,6 @@ const createCloudLayer = () => {
     convStartKm: SEASON_CONV_KM.summer[0],
     convFullKm: SEASON_CONV_KM.summer[1],
     shaderMap: new Map(),
-    crossfade: true, // 프레임 전환 시 디졸브
-    mixStart: 0,
-    mixDurationMs: 260,
 
     // 구면(globe)/메르카토르 투영별 셰이더 — MapLibre가 주입하는 projectTile* 프렐류드 사용.
     // globe 변형은 elevation을 미터로 받고(GLOBE_RADIUS로 나눔), 메르카토르 변형은
@@ -677,20 +674,6 @@ const createCloudLayer = () => {
     setFrame(area, data) {
       const mesh = this.meshByArea?.[area];
       if (!mesh) return;
-      // 프레임이 바뀔 때 이전 프레임을 prev 버퍼로 밀고 새 프레임을 현재에 그려
-      // 짧게 크로스페이드(디졸브)한다. 첫 프레임(아직 그린 적 없음)은 전환 없음.
-      if (this.crossfade && data && mesh.frameData && mesh.converted) {
-        const tmpBuf = mesh.cloudBuffer;
-        mesh.cloudBuffer = mesh.prevCloudBuffer;
-        mesh.prevCloudBuffer = tmpBuf;
-        if (mesh.textured) {
-          const tmpTex = mesh.dataTex;
-          mesh.dataTex = mesh.prevDataTex;
-          mesh.prevDataTex = tmpTex;
-        }
-        mesh.hasPrev = true;
-        this.mixStart = performance.now();
-      }
       mesh.frameData = data;
       mesh.dirty = Boolean(data);
       this.map?.triggerRepaint();
@@ -796,13 +779,6 @@ const createCloudLayer = () => {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-      // 프레임 전환 진행도(0→1). 전환 중이면 이전 프레임을 먼저 그리고 그 위에
-      // 새 프레임을 알파를 키우며 덧그려 디졸브한다.
-      const mixT =
-        this.crossfade && this.mixStart
-          ? Math.min(1, (performance.now() - this.mixStart) / this.mixDurationMs)
-          : 1;
-
       const koHasData = !!this.meshByArea.ko.frameData;
       // 한 메쉬를 지정한 구름버퍼/텍스처/알파로 그린다.
       const drawMesh = (mesh, cloudBuffer, dataTex, alpha, useFull) => {
@@ -835,18 +811,8 @@ const createCloudLayer = () => {
       for (const mesh of this.meshes) {
         if (!mesh.frameData) continue;
         const useFull = mesh.indexBufferFull && !koHasData;
-        if (mixT < 1 && mesh.hasPrev) {
-          // 진짜 크로스페이드: 이전(1−t) 위에 새 프레임(t)을 겹쳐 그린다. 전환이
-          // 끝나는 순간(t=1) 이전 기여가 0이 되어 '현재만 그리기'와 매끄럽게 이어져
-          // 밀도가 튀지 않는다(예전엔 이전을 1로 고정해 끝에서 번쩍임 발생).
-          drawMesh(mesh, mesh.prevCloudBuffer, mesh.prevDataTex, 1 - mixT, useFull);
-          drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, mixT, useFull);
-        } else {
-          drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, 1, useFull);
-        }
+        drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, 1, useFull);
       }
-
-      if (mixT < 1) this.map?.triggerRepaint();
     },
   };
   return layer;
@@ -1125,10 +1091,15 @@ function SatelliteView({
     }
     const DURATION = 2000;
     const t0 = performance.now();
+    // ref를 즉시 0으로 낮춰 이 커밋에서 실행될 geojson/마커 효과가 완성 진로도를
+    // 먼저 그리지 않게 한다(첫 프레임 번쩍임 방지).
+    typhoonRevealRef.current = 0;
     setTyphoonReveal(0);
     const tick = () => {
       const p = Math.min(1, (performance.now() - t0) / DURATION);
-      setTyphoonReveal(1 - (1 - p) * (1 - p)); // easeOut
+      const eased = 1 - (1 - p) * (1 - p); // easeOut
+      typhoonRevealRef.current = eased;
+      setTyphoonReveal(eased);
       if (p < 1) revealRafRef.current = requestAnimationFrame(tick);
     };
     revealRafRef.current = requestAnimationFrame(tick);
@@ -1140,7 +1111,9 @@ function SatelliteView({
     const map = mapRef.current;
     if (!map || !mapReadyRef.current) return;
     const typhoon = typhoonEnabled ? selectedTyphoon : null;
-    const geo = buildTyphoonGeoJson(typhoon, typhoonReveal);
+    // 리빌 값은 ref로 읽는다. (리빌 시작 시 reveal 효과가 ref를 먼저 0으로 낮추므로,
+    // 태풍이 막 선택된 첫 렌더에서 완성된 진로도가 한 프레임 번쩍이는 것을 막는다.)
+    const geo = buildTyphoonGeoJson(typhoon, typhoonRevealRef.current);
     const on = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'visible');
     const off = (id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'none');
 
@@ -1673,51 +1646,17 @@ function SatelliteView({
               <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
             </svg>
           </div>
-          {/* 타이틀: '위성 영상' ↔ 태풍 이름 크로스페이드(디졸브). 폭은 '현재 표시
-              중인' 타이틀만큼만 차지하도록 보이지 않는 스페이서로 잡는다(진로도를 끄면
-              '위성 영상' 폭으로 돌아와, 넓은 태풍 이름 폭이 남아 시간이 밴드 밖으로
-              밀리는 문제를 막는다). 두 텍스트 레이어는 그 위에 겹쳐 불투명도만 전환. */}
+          {/* 타이틀·시각은 현재 상태의 내용만 조건부로 렌더한다(디졸브로 두 내용을
+              겹치면 전환 중 잘못된 시각이 번쩍이고, 폭이 남아 시간이 밴드 밖으로
+              밀리는 문제가 있어 즉시 전환으로 되돌림). */}
           <span
-            className="relative whitespace-nowrap font-black tracking-tight text-white"
+            className="whitespace-nowrap font-black tracking-tight text-white"
             style={{ fontSize: 'clamp(26px, 2.1vw, 46px)', textShadow: '0 2px 6px rgba(0,0,0,0.35)' }}
           >
-            <span className="invisible" aria-hidden="true">
-              {typhoonActive ? typhoonBandTitle ?? '' : '위성 영상'}
-            </span>
-            <span
-              className="absolute left-0 top-0"
-              style={{ transition: 'opacity 0.5s ease', opacity: typhoonActive ? 0 : 1 }}
-            >
-              위성 영상
-            </span>
-            <span
-              className="absolute left-0 top-0"
-              style={{ transition: 'opacity 0.5s ease', opacity: typhoonActive ? 1 : 0 }}
-            >
-              {typhoonBandTitle ?? ''}
-            </span>
+            {typhoonActive ? typhoonBandTitle : '위성 영상'}
           </span>
-          {/* 시각: 시계/날짜 ↔ 발표시각(2줄) 크로스페이드. 오른쪽 정렬 + 2줄 중앙정렬. */}
-          <div className="ml-auto grid shrink-0" style={{ justifyItems: 'end' }}>
-            <div
-              className="flex items-center whitespace-nowrap"
-              style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 0 : 1, gap: '0.6vw' }}
-            >
-              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
-              <span
-                className="font-black leading-none tabular-nums text-white"
-                style={{ fontSize: 'clamp(22px, 1.7vw, 38px)', textShadow: '0 2px 5px rgba(0,0,0,0.3)' }}
-              >
-                {bandTime?.clock}
-              </span>
-              <span className="font-semibold text-[#bdd6fb]" style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}>
-                {bandTime?.date}
-              </span>
-            </div>
-            <div
-              className="flex items-center whitespace-nowrap"
-              style={{ gridArea: '1 / 1', transition: 'opacity 0.5s ease', opacity: typhoonActive ? 1 : 0, gap: '0.5vw' }}
-            >
+          {typhoonActive ? (
+            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw' }}>
               <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
               <span
                 className="flex flex-col items-center leading-tight text-[#dbe8fb]"
@@ -1727,7 +1666,20 @@ function SatelliteView({
                 <span className="font-bold">{typhoonBandTime?.time}</span>
               </span>
             </div>
-          </div>
+          ) : bandTime ? (
+            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.6vw' }}>
+              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
+              <span
+                className="font-black leading-none tabular-nums text-white"
+                style={{ fontSize: 'clamp(22px, 1.7vw, 38px)', textShadow: '0 2px 5px rgba(0,0,0,0.3)' }}
+              >
+                {bandTime.clock}
+              </span>
+              <span className="font-semibold text-[#bdd6fb]" style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}>
+                {bandTime.date}
+              </span>
+            </div>
+          ) : null}
           <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
         </div>
       </div>
