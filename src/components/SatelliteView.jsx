@@ -776,6 +776,12 @@ const createCloudLayer = () => {
       gl.uniform1i(shader.uLut, 1);
       gl.uniform1i(shader.uEaTex, 0);
 
+      // GL 상태 위생: 태풍 진로도의 fill/line 레이어를 얹으면 MapLibre가 타일
+      // 클리핑용으로 STENCIL_TEST를 켜두는데, 커스텀 레이어가 그 스텐실을 물려받아
+      // FD(전구) 구름이 통째로 잘려 사라지거나 프레임마다 깜빡였다. 여기서 필요한
+      // 상태를 명시적으로 지정해 다른 레이어의 잔여 GL 상태와 분리한다.
+      gl.disable(gl.STENCIL_TEST);
+      gl.disable(gl.CULL_FACE);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
