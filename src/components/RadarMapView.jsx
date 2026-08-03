@@ -4024,10 +4024,12 @@ const RadarMapView = ({
             </div>
 
             {/* 누적 강수량: 기간 최다 강수 5개 지점 */}
-            {isAccumView && showAccumTop5 && accumTop5.length > 0 ? (
+            {isAccumView ? (
               <div
                 data-video-hide
-                className="pointer-events-none absolute z-20 flex justify-center"
+                className={`pointer-events-none absolute z-20 flex justify-center transition-opacity duration-500 ease-in-out ${
+                  showAccumTop5 && accumTop5.length > 0 ? 'opacity-100' : 'opacity-0'
+                }`}
                 style={{
                   left: '4.4%',
                   top: 'calc(50% - max(23vh, 140px) - 18.5px)',
@@ -4063,10 +4065,12 @@ const RadarMapView = ({
             ) : null}
 
             {/* 레이더: 시간당 강수량 최다 5지점 (체크박스로 표시) — 누적 표와 같은 위치·형태 */}
-            {isRadarView && showHourlyTop5 && hourlyTop5.length > 0 ? (
+            {isRadarView ? (
               <div
                 data-video-hide
-                className="pointer-events-none absolute z-20 flex justify-center"
+                className={`pointer-events-none absolute z-20 flex justify-center transition-opacity duration-500 ease-in-out ${
+                  showHourlyTop5 && hourlyTop5.length > 0 ? 'opacity-100' : 'opacity-0'
+                }`}
                 style={{
                   left: '4.4%',
                   top: 'calc(50% - max(23vh, 140px) - 18.5px)',

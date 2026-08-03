@@ -1398,10 +1398,12 @@ const HeatwaveBroadcastView = () => {
         </div>
       </div>
 
-      {top5.length > 0 && showTimelineTop5 ? (
+      {top5.length > 0 ? (
         <div
           data-video-hide
-          className="pointer-events-none absolute z-20 flex justify-center"
+          className={`pointer-events-none absolute z-20 flex justify-center transition-opacity duration-500 ease-in-out ${
+            showTimelineTop5 ? 'opacity-100' : 'opacity-0'
+          }`}
           style={{
             left: '4.4%',
             top: 'calc(50% - max(23vh, 140px) - 18.5px)',
