@@ -148,9 +148,13 @@ function VideoExportMenu({
           width: { ideal: VIDEO_WIDTH },
           height: { ideal: VIDEO_HEIGHT },
           frameRate: { ideal: VIDEO_FRAME_RATE, max: VIDEO_FRAME_RATE },
+          // 녹화 영상에 마우스 커서가 찍히지 않게 캡처에서 커서를 제외한다.
+          cursor: 'never',
         },
         audio: false,
         preferCurrentTab: true,
+        // 일부 브라우저는 최상위 constraints의 cursor를 참조하므로 함께 지정한다.
+        cursor: 'never',
       });
 
       sourceVideo = document.createElement('video');
