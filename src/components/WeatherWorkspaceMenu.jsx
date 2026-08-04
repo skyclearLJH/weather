@@ -104,23 +104,21 @@ function WeatherWorkspaceMenu({
           activeClassName={section === 'rain' ? 'bg-blue-500 text-white shadow-sm' : 'bg-rose-500 text-white shadow-sm'}
         />
         {/* 지명 표시 토글: 편집모드뿐 아니라 녹화모드에서도 켜고 끌 수 있게 남긴다.
-            (방송모드에서는 이 메뉴 자체가 숨겨진다.)
-            단, 위성 화면은 지명 라벨을 아예 두지 않으므로 이 버튼도 숨긴다. */}
-        {activeView !== 'satellite' ? (
-          <button
-            type="button"
-            onClick={() => onShowPlaceLabelsChange(!showPlaceLabels)}
-            aria-pressed={showPlaceLabels}
-            className={`flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black shadow-xl backdrop-blur-md transition ${
-              showPlaceLabels
-                ? 'border-emerald-300/60 bg-emerald-400 text-slate-950'
-                : 'border-white/20 bg-slate-950/85 text-white/65 hover:bg-slate-800 hover:text-white'
-            }`}
-          >
-            <MapPinned className="h-4 w-4" aria-hidden="true" />
-            지명 표시
-          </button>
-        ) : null}
+            (방송모드에서는 이 메뉴 자체가 숨겨진다.) 위성 화면도 동일하게 지원하며,
+            위성은 별도 상태로 기본 꺼짐이다. */}
+        <button
+          type="button"
+          onClick={() => onShowPlaceLabelsChange(!showPlaceLabels)}
+          aria-pressed={showPlaceLabels}
+          className={`flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black shadow-xl backdrop-blur-md transition ${
+            showPlaceLabels
+              ? 'border-emerald-300/60 bg-emerald-400 text-slate-950'
+              : 'border-white/20 bg-slate-950/85 text-white/65 hover:bg-slate-800 hover:text-white'
+          }`}
+        >
+          <MapPinned className="h-4 w-4" aria-hidden="true" />
+          지명 표시
+        </button>
       </div>
     </div>
   );

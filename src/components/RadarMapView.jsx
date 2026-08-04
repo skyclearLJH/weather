@@ -979,6 +979,8 @@ const RadarMapView = ({
   const [isBroadcastMapReady, setIsBroadcastMapReady] = useState(initialBroadcast);
   const [workspaceMode, setWorkspaceMode] = useState(initialWorkspaceMode);
   const [showPlaceLabels, setShowPlaceLabels] = useState(true);
+  // 위성 화면의 지명 표시는 레이더와 별개로 관리하고 기본값은 꺼짐이다.
+  const [satelliteShowPlaceLabels, setSatelliteShowPlaceLabels] = useState(false);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
@@ -3824,8 +3826,8 @@ const RadarMapView = ({
       onSectionChange={handleWorkspaceSectionChange}
       activeView={broadcastView}
       onViewChange={handleWorkspaceViewChange}
-      showPlaceLabels={showPlaceLabels}
-      onShowPlaceLabelsChange={setShowPlaceLabels}
+      showPlaceLabels={isSatelliteView ? satelliteShowPlaceLabels : showPlaceLabels}
+      onShowPlaceLabelsChange={isSatelliteView ? setSatelliteShowPlaceLabels : setShowPlaceLabels}
       onExit={exitBroadcastMode}
     />
   );
@@ -3925,6 +3927,7 @@ const RadarMapView = ({
           <SatelliteView
             menuSlot={workspaceMenu}
             workspaceMode={workspaceMode}
+            showPlaceLabels={satelliteShowPlaceLabels}
             onBeforeScreenShare={handleBeforeVideoScreenShare}
           />
         ) : null}
