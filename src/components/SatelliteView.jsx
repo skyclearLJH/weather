@@ -32,7 +32,7 @@ import {
   writePlayRange,
 } from '../utils/broadcastPlayRange.js';
 import { fetchActiveTyphoons, formatAnnounceLabel, GRADE_LABELS } from '../api/typhoonApi';
-import { sweptEnvelopeMesh, sweptEnvelopePolygon } from '../lib/typhoonGeometry';
+import { smoothEnvelopeInput, sweptEnvelopeMesh, sweptEnvelopePolygon } from '../lib/typhoonGeometry';
 import './SatelliteView.css';
 
 const PLAY_RANGE_VIEW_ID = 'satellite';
@@ -1037,13 +1037,15 @@ const createTyphoonLayer = () => ({
       gl.drawArrays(mode, 0, coords.length);
     };
     const drawEnvelope = (points, radii, fill, fillAlpha, line) => {
-      const mesh = sweptEnvelopeMesh(points, radii);
+      // 중심선·반경을 스플라인으로 촘촘히 리샘플해 오프셋 경계가 부드러운 곡선이 되게 한다.
+      const sm = smoothEnvelopeInput(points, radii);
+      const mesh = sweptEnvelopeMesh(sm.points, sm.radii);
       if (mesh) {
         draw(mesh.strip, gl.TRIANGLE_STRIP, fill, fillAlpha);
         mesh.fans.forEach((fan) => draw(fan, gl.TRIANGLE_FAN, fill, fillAlpha));
       }
       if (line) {
-        const poly = sweptEnvelopePolygon(points, radii);
+        const poly = sweptEnvelopePolygon(sm.points, sm.radii);
         if (poly) draw(poly.coordinates[0], gl.LINE_STRIP, line, 0.7);
       }
     };

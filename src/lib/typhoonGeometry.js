@@ -65,6 +65,44 @@ const arc = (lat, lon, fromBearing, toBearing, r, steps = 12) => {
   return out;
 };
 
+// 진로(중심선)와 반경을 Catmull-Rom 스플라인으로 촘촘히 리샘플해 부드러운 곡선으로
+// 만든다. 예측 지점이 몇 개 안 돼 오프셋 경계가 꺾이던 문제(특히 확률반경처럼 크게
+// 벌어지는 띠)를 없앤다. 반환: { points:[{lat,lon}], radii:[km] }.
+export const smoothEnvelopeInput = (points, radii, perSeg = 10) => {
+  const n = points.length;
+  if (n < 3) return { points: points.map((p) => ({ lat: p.lat, lon: p.lon })), radii: [...radii] };
+  const cr = (a, b, c, d, t) => {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return 0.5 * ((2 * b) + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+  };
+  const at = (i) => points[Math.min(n - 1, Math.max(0, i))];
+  const rat = (i) => radii[Math.min(n - 1, Math.max(0, i))] ?? 0;
+  const outPoints = [];
+  const outRadii = [];
+  for (let i = 0; i < n - 1; i += 1) {
+    const p0 = at(i - 1);
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    const r0 = rat(i - 1);
+    const r1 = rat(i);
+    const r2 = rat(i + 1);
+    const r3 = rat(i + 2);
+    const isLast = i === n - 2;
+    const steps = perSeg + (isLast ? 1 : 0); // 마지막 세그먼트만 끝점 포함
+    for (let s = 0; s < steps; s += 1) {
+      const t = s / perSeg;
+      outPoints.push({
+        lat: cr(p0.lat, p1.lat, p2.lat, p3.lat, t),
+        lon: cr(p0.lon, p1.lon, p2.lon, p3.lon, t),
+      });
+      outRadii.push(Math.max(0, cr(r0, r1, r2, r3, t)));
+    }
+  }
+  return { points: outPoints, radii: outRadii };
+};
+
 // 커스텀 WebGL 레이어용 삼각형 메쉬. 폴리곤 삼각분할(earcut) 없이, 진로 좌/우
 // 오프셋 점을 번갈아 잇는 TRIANGLE_STRIP + 양 끝 반원 팬으로 채운다. 삼각형이
 // 서로 겹치지 않아 반투명으로 그려도 겹침 부위가 진해지지 않는다.
