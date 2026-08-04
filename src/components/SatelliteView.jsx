@@ -1849,7 +1849,7 @@ function SatelliteView({
             {typhoonActive ? typhoonBandTitle : '위성 영상'}
           </span>
           {typhoonActive ? (
-            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '0.9vw' }}>
+            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '2.1vw' }}>
               <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
               <span
                 className="flex flex-col items-center leading-tight text-[#dbe8fb]"
