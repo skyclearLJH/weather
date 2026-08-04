@@ -904,7 +904,10 @@ const createTyphoonLayer = () => ({
   // typhoon=null이면 아무것도 그리지 않는다. restart=true면 리빌을 처음부터.
   setTyphoon(typhoon, restart) {
     this.typhoon = typhoon ?? null;
-    if (restart) this.revealStart = performance.now();
+    if (restart) {
+      this.revealStart = performance.now();
+      this.reveal = 0; // 다음 렌더 전에 읽혀도 완성본이 새어나가지 않게 즉시 0
+    }
     this.map?.triggerRepaint();
   },
 
@@ -1089,14 +1092,12 @@ function SatelliteView({
   const [showWind25, setShowWind25] = useState(false);
   const [mapZoom, setMapZoom] = useState(4.35);
   const [mapReady, setMapReady] = useState(false);
-  const [typhoonReveal, setTyphoonReveal] = useState(1); // 진로도 확장 애니메이션 0→1
   const mapReadyRef = useRef(false);
   const typhoonMarkersRef = useRef([]);
   const typhoonPopupRef = useRef(null);
   const typhoonLayerRef = useRef(null);
   const revealRafRef = useRef(0);
-  const typhoonRevealRef = useRef(1);
-  typhoonRevealRef.current = typhoonReveal;
+  const lastRevealIdRef = useRef(null);
 
   const selectedTyphoon = useMemo(
     () => typhoons.find((t) => t.id === selectedTyphoonId) ?? null,
@@ -1293,92 +1294,73 @@ function SatelliteView({
     };
   }, [typhoonEnabled]);
 
-  // ── 태풍: 진로도 리빌(켜거나 태풍 변경 시 현재→미래로 2초 확장) ──
-  useEffect(() => {
-    // 리빌 진행도는 커스텀 레이어가 렌더 시점에 직접 계산한다(React 상태 지연으로
-    // 완성본이 새어나갈 수 없음). 여기서는 시작 시점만 알려주고, 마커 불투명도를
-    // 레이어의 진행도에 맞춰 따라가게 한다.
-    cancelAnimationFrame(revealRafRef.current);
-    const layer = typhoonLayerRef.current;
-    if (!layer) return undefined;
-    if (!typhoonEnabled || !selectedTyphoonId) {
-      typhoonRevealRef.current = 0;
-      setTyphoonReveal(0);
-      return undefined;
-    }
-    typhoonRevealRef.current = 0;
-    setTyphoonReveal(0);
-    const tick = () => {
-      const eased = layer.reveal ?? 0;
-      typhoonRevealRef.current = eased;
-      setTyphoonReveal(eased);
-      if (eased < 1) revealRafRef.current = requestAnimationFrame(tick);
-    };
-    revealRafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(revealRafRef.current);
-  }, [typhoonEnabled, selectedTyphoonId, mapReady]);
-
-  // ── 태풍: 커스텀 레이어에 태풍/반경 옵션 전달 ──
+  // ── 태풍: 반경 옵션(확률·강풍·폭풍)을 커스텀 레이어에 전달 ──
   useEffect(() => {
     const layer = typhoonLayerRef.current;
     if (!layer || !mapReadyRef.current) return;
     layer.setOptions({ prob: showProb, wind15: showWind15, wind25: showWind25 });
   }, [showProb, showWind15, showWind25, mapReady]);
 
-  useEffect(() => {
-    const layer = typhoonLayerRef.current;
-    if (!layer || !mapReadyRef.current) return;
-    // 태풍이 바뀌거나 켜질 때 리빌을 처음부터 다시 시작한다.
-    layer.setTyphoon(typhoonEnabled ? selectedTyphoon : null, true);
-  }, [typhoonEnabled, selectedTyphoon, mapReady]);
-
-  // ── 태풍: 중심 마크(DOM 마커) 재생성 + 클릭 팝업 ──
+  // ── 태풍: 레이어 데이터 + 중심 마커 + 리빌을 '하나의 시계(layer.reveal)'로 통일 ──
+  // 진로·반경(커스텀 레이어)과 마커(DOM)를 같은 layer.reveal로 움직인다. 예전엔 둘이
+  // 서로 다른 리빌 시계로 돌아 실행 순서에 따라 무작위로 엇갈렸다(마커만 먼저 뜨거나,
+  // 완성본이 중간에 번쩍). 이제 한 효과에서 레이어 세팅→마커 생성→마커 불투명도
+  // 갱신을 모두 layer.reveal 기준으로 처리한다.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReadyRef.current) return undefined;
+    const layer = typhoonLayerRef.current;
+    if (!map || !layer || !mapReadyRef.current) return undefined;
+    cancelAnimationFrame(revealRafRef.current);
     typhoonMarkersRef.current.forEach((m) => m.remove());
     typhoonMarkersRef.current = [];
     typhoonPopupRef.current?.remove();
     typhoonPopupRef.current = null;
 
     const typhoon = typhoonEnabled ? selectedTyphoon : null;
+    const id = typhoon ? selectedTyphoonId : null;
+    // 새 태풍이거나 방금 켰으면 리빌 처음부터, 같은 태풍의 자료 갱신이면 유지.
+    const restart = id !== lastRevealIdRef.current;
+    lastRevealIdRef.current = id;
+    layer.setTyphoon(typhoon, restart);
+
     if (!typhoon) return undefined;
 
-    const centers = buildTyphoonCenters(typhoon);
     const scale = typhoonMarkScale(map.getZoom());
-    const reveal = typhoonRevealRef.current;
-    centers.features.forEach((f) => {
+    buildTyphoonCenters(typhoon).features.forEach((f) => {
       const props = f.properties;
       const el = buildTyphoonMarkerEl(props, scale);
       el.dataset.frac = String(props.frac ?? 0);
-      // 리빌 중이면 아직 도달하지 않은 지점은 숨겼다가(불투명도 0) 순차로 나타난다.
-      el.style.opacity = (props.frac ?? 0) <= reveal + 0.001 ? '1' : '0';
+      el.style.opacity = (props.frac ?? 0) <= (layer.reveal ?? 0) + 0.001 ? '1' : '0';
       el.addEventListener('click', (event) => {
         event.stopPropagation();
         openTyphoonPopup(map, f.geometry.coordinates, props);
       });
-      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
-        .setLngLat(f.geometry.coordinates)
-        .addTo(map);
-      typhoonMarkersRef.current.push(marker);
+      typhoonMarkersRef.current.push(
+        new maplibregl.Marker({ element: el, anchor: 'center' })
+          .setLngLat(f.geometry.coordinates)
+          .addTo(map),
+      );
     });
 
+    // 진로·반경과 동일한 layer.reveal을 따라 마커 불투명도를 갱신한다.
+    const tick = () => {
+      const reveal = layer.reveal ?? 0;
+      typhoonMarkersRef.current.forEach((m) => {
+        const el = m.getElement();
+        el.style.opacity = Number(el.dataset.frac ?? 0) <= reveal + 0.001 ? '1' : '0';
+      });
+      if (reveal < 1) revealRafRef.current = requestAnimationFrame(tick);
+    };
+    revealRafRef.current = requestAnimationFrame(tick);
+
     return () => {
+      cancelAnimationFrame(revealRafRef.current);
       typhoonMarkersRef.current.forEach((m) => m.remove());
       typhoonMarkersRef.current = [];
       typhoonPopupRef.current?.remove();
       typhoonPopupRef.current = null;
     };
-  }, [typhoonEnabled, selectedTyphoon, openTyphoonPopup, mapReady]);
-
-  // ── 태풍: 리빌 진행에 따라 마크를 순차로 나타냄 ──
-  useEffect(() => {
-    typhoonMarkersRef.current.forEach((m) => {
-      const el = m.getElement();
-      const frac = Number(el.dataset.frac ?? 0);
-      el.style.opacity = frac <= typhoonReveal + 0.001 ? '1' : '0';
-    });
-  }, [typhoonReveal]);
+  }, [typhoonEnabled, selectedTyphoon, selectedTyphoonId, openTyphoonPopup, mapReady]);
 
   // ── 태풍: 줌에 따라 마크·팝업 크기 조절 ──
   useEffect(() => {
@@ -1849,7 +1831,7 @@ function SatelliteView({
             {typhoonActive ? typhoonBandTitle : '위성 영상'}
           </span>
           {typhoonActive ? (
-            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '2.1vw' }}>
+            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '2.8vw' }}>
               <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
               <span
                 className="flex flex-col items-center leading-tight text-[#dbe8fb]"
