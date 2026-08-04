@@ -113,6 +113,29 @@ const typhoonMarkScale = (zoom) => {
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 
+// 현재 위치를 '실제 현재 시각'으로 내삽한다. 발표 시점의 분석 위치(current)와 그
+// 다음 첫 예측 위치(forecast[0]) 사이를 시간 비율로 선형 보간해, 발표 후 흐른 시간
+// 만큼 태풍이 이동한 위치를 표기한다. (정확한 실시간 위치는 알 수 없으므로 근사)
+const interpolatedCurrent = (typhoon, nowMs = Date.now()) => {
+  const c = typhoon?.current;
+  const f0 = typhoon?.forecast?.[0];
+  if (!c || !f0 || !c.validTime || !f0.validTime) return c;
+  const t0 = c.validTime.getTime();
+  const t1 = f0.validTime.getTime();
+  if (!(t1 > t0)) return c;
+  const f = Math.min(1, Math.max(0, (nowMs - t0) / (t1 - t0)));
+  if (f <= 0) return c;
+  // 위치만 이동하고 강도·기압·반경 등 나머지 속성은 발표 시점 값을 유지한다.
+  return { ...c, lat: c.lat + (f0.lat - c.lat) * f, lon: c.lon + (f0.lon - c.lon) * f };
+};
+
+// current를 내삽 위치로 교체한 태풍 객체(진로선·반경·마커 모두 이 current를 쓴다).
+const withInterpolatedCurrent = (typhoon, nowMs) => {
+  if (!typhoon) return typhoon;
+  const current = interpolatedCurrent(typhoon, nowMs);
+  return current === typhoon.current ? typhoon : { ...typhoon, current };
+};
+
 // 선택 태풍 + 반경 토글로 각 소스에 넣을 GeoJSON을 만든다.
 // 리빌: 현재(가까운 시점)에서 미래로 reveal(0~1)만큼만 이어지는 트랙 지점 배열.
 // 마지막 부분 구간은 위치·반경을 보간해 부드럽게 확장시킨다.
@@ -974,7 +997,9 @@ const createTyphoonLayer = () => ({
     const reveal = 1 - (1 - p) * (1 - p); // easeOut
     this.reveal = reveal;
 
-    const shown = revealTrackPoints(this.typhoon, reveal);
+    // 현재 위치를 실제 현재 시각으로 내삽한 트랙(진로선·반경 시작점이 실시간 이동)
+    const typhoon = withInterpolatedCurrent(this.typhoon);
+    const shown = revealTrackPoints(typhoon, reveal);
     if (shown.length === 0) return;
 
     const shader = this.getShader(gl, renderArgs.shaderData);
@@ -1023,7 +1048,7 @@ const createTyphoonLayer = () => ({
       }
     };
 
-    const { current, analysis } = this.typhoon;
+    const { current, analysis } = typhoon;
     const geoPts = shown.map((pt) => ({ lat: pt.lat, lon: pt.lon }));
 
     // 반경 엔벨로프(선택된 것만) — 큰 것부터 아래에 깔린다
@@ -1144,7 +1169,7 @@ function SatelliteView({
     const head = props.isCurrent ? '현재' : `${timeLabel} 예상`;
     const html =
       `<div class="typhoon-popup" style="--popup-scale:${scale}">` +
-      `<div class="typhoon-popup__title"><span class="typhoon-popup__dot" style="background:${GRADE_COLOR[props.grade] ?? GRADE_COLOR[0]}"></span>${head} · ${props.gradeLabel}</div>` +
+      `<div class="typhoon-popup__title"><span class="typhoon-popup__dot" style="background:${GRADE_COLOR[props.grade] ?? GRADE_COLOR[0]}"></span>${head}</div>` +
       '<dl class="typhoon-popup__grid">' +
       `<div><dt>중심기압</dt><dd>${fmt(props.pressure, ' hPa')}</dd></div>` +
       `<div><dt>최대풍속</dt><dd>${fmt(props.wind, ' ㎧')}</dd></div>` +
@@ -1326,7 +1351,8 @@ function SatelliteView({
     if (!typhoon) return undefined;
 
     const scale = typhoonMarkScale(map.getZoom());
-    buildTyphoonCenters(typhoon).features.forEach((f) => {
+    let currentMarker = null;
+    buildTyphoonCenters(withInterpolatedCurrent(typhoon)).features.forEach((f) => {
       const props = f.properties;
       const el = buildTyphoonMarkerEl(props, scale);
       el.dataset.frac = String(props.frac ?? 0);
@@ -1335,11 +1361,11 @@ function SatelliteView({
         event.stopPropagation();
         openTyphoonPopup(map, f.geometry.coordinates, props);
       });
-      typhoonMarkersRef.current.push(
-        new maplibregl.Marker({ element: el, anchor: 'center' })
-          .setLngLat(f.geometry.coordinates)
-          .addTo(map),
-      );
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(f.geometry.coordinates)
+        .addTo(map);
+      if (props.isCurrent) currentMarker = marker;
+      typhoonMarkersRef.current.push(marker);
     });
 
     // 진로·반경과 동일한 layer.reveal을 따라 마커 불투명도를 갱신한다.
@@ -1353,8 +1379,17 @@ function SatelliteView({
     };
     revealRafRef.current = requestAnimationFrame(tick);
 
+    // 현재 위치는 실제 시각으로 계속 이동한다. 1분마다 현재 마커 위치를 다시 내삽하고
+    // 레이어(진로선·반경 시작점)도 리페인트해 실시간으로 따라가게 한다.
+    const posTimer = setInterval(() => {
+      const c = interpolatedCurrent(typhoon);
+      if (currentMarker && c) currentMarker.setLngLat([c.lon, c.lat]);
+      layer.map?.triggerRepaint();
+    }, 60000);
+
     return () => {
       cancelAnimationFrame(revealRafRef.current);
+      clearInterval(posTimer);
       typhoonMarkersRef.current.forEach((m) => m.remove());
       typhoonMarkersRef.current = [];
       typhoonPopupRef.current?.remove();
