@@ -1793,11 +1793,11 @@ function SatelliteView({
         <div
           className="relative flex items-center overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 shadow-2xl"
           style={{
-            width: 'clamp(430px, 29vw, 700px)',
+            width: 'clamp(460px, 33vw, 780px)',
             height: 'clamp(58px, 7.4vh, 96px)',
             paddingLeft: '1.3vw',
             paddingRight: '1.2vw',
-            gap: '1.1vw',
+            gap: '0.9vw',
           }}
         >
           <div className="relative flex flex-col leading-none text-white">
@@ -1831,7 +1831,7 @@ function SatelliteView({
             {typhoonActive ? typhoonBandTitle : '위성 영상'}
           </span>
           {typhoonActive ? (
-            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '2.8vw' }}>
+            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '0.4vw' }}>
               <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
               <span
                 className="flex flex-col items-center leading-tight text-[#dbe8fb]"
