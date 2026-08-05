@@ -18,6 +18,7 @@ import { formatStationLabel } from '../api/accumApi';
 import {
   fetchHeatwaveBroadcastData,
   fetchTemperatureChangeData,
+  HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS,
 } from '../api/heatwaveApi';
 import VideoExportMenu from './VideoExportMenu';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
@@ -334,7 +335,9 @@ const buildTemperatureGrid = (observations, landMask) => {
       (station) =>
         Number.isFinite(station.lon) &&
         Number.isFinite(station.lat) &&
-        Number.isFinite(station.value),
+        Number.isFinite(station.value) &&
+        // 폭염특보 미운영(별표) 지점은 지도 그래프에서도 제외한다(순위표와 동일 기준).
+        !HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS.has(String(station.id)),
     )
     .map((station) => ({
       ...projectGridPoint(station.lon, station.lat),

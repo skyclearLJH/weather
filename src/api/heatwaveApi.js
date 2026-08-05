@@ -7,7 +7,7 @@ const TEMPERATURE_TIMELINE_MAX_FRAMES = 49;
 const TEMPERATURE_FRAME_FALLBACK_MINUTES = [0, 3, 5, 10];
 const TEMPERATURE_FRAME_FETCH_CONCURRENCY = 4;
 
-const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
+export const HEAT_WARNING_UNSUPPORTED_AWS_STATION_IDS = new Set([
   // 폭염특보 미운영(별표) 지점 — 방재기상플랫폼 AWS 일자료 export(2026-08-04) C열 별표 기준.
   '116', '229', '334', '335', '336', '337', '351', '352',
   '355', '356', '358', '359', '360', '361', '364', '365',
