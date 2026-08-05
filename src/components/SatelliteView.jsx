@@ -1540,12 +1540,13 @@ function SatelliteView({
   const displayStatus = status ?? null;
 
   // 태풍 진로도 ON + 태풍 선택 시 좌상단 밴드를 태풍 이름/발표시각으로 교체.
-  // 이름이 3글자 이상이면 밴드가 좁아 '제N호'를 빼고 "태풍 '이름'"만 표시한다.
+  // 밴드를 레이더 등과 같은 폭으로 유지하려고 '제'는 빼고 'N호 태풍 이름'으로 쓴다.
+  // 이름이 3글자 이상이면 더 좁게 '태풍 이름'만 표시한다.
   const typhoonActive = typhoonEnabled && !!selectedTyphoon;
   const typhoonBandTitle = selectedTyphoon
     ? selectedTyphoon.name && selectedTyphoon.name.length >= 3
       ? `태풍 ‘${selectedTyphoon.name}’`
-      : `제${selectedTyphoon.number}호 태풍${selectedTyphoon.name ? ` ‘${selectedTyphoon.name}’` : ''}`
+      : `${selectedTyphoon.number}호 태풍${selectedTyphoon.name ? ` ‘${selectedTyphoon.name}’` : ''}`
     : null;
   const typhoonBandTime = selectedTyphoon ? formatAnnounceLabel(selectedTyphoon.announceTime) : null;
 
@@ -1741,11 +1742,11 @@ function SatelliteView({
         <div
           className="relative flex items-center overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 shadow-2xl"
           style={{
-            width: 'clamp(460px, 33vw, 780px)',
+            width: 'clamp(430px, 29vw, 700px)',
             height: 'clamp(58px, 7.4vh, 96px)',
             paddingLeft: '1.3vw',
             paddingRight: '1.2vw',
-            gap: '0.9vw',
+            gap: '1.1vw',
           }}
         >
           <div className="relative flex flex-col leading-none text-white">
