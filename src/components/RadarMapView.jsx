@@ -968,6 +968,9 @@ const RadarMapView = ({
   const [frames, setFrames] = useState([]);
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  // 재생이 끝까지 가 멈춘 상태 → 컨트롤 버튼을 '처음으로'로 바꾼다(방송에서 첫 장면
+  // 대기용). 버튼을 누르면 첫 장면으로 이동해 정지하고, 다시 누르면 처음부터 재생.
+  const [playbackFinished, setPlaybackFinished] = useState(false);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [statusMessage, setStatusMessage] = useState('');
   // 전체화면: 지원 브라우저는 네이티브 API, 미지원(iOS 사파리 등)은 CSS 오버레이로 대체
@@ -1904,6 +1907,7 @@ const RadarMapView = ({
     const endIndex = accumPlayRange?.endIndex ?? accumHours.length - 1;
     if (isAccumView && isPlaying && accumIndex >= endIndex) {
       setIsPlaying(false);
+      setPlaybackFinished(true);
     }
   }, [isAccumView, isPlaying, accumIndex, accumHours.length, accumPlayRange]);
 
@@ -1920,6 +1924,7 @@ const RadarMapView = ({
     const targetIndex = kimPlayTarget ?? kimFrames.length - 1;
     if (isKimView && isPlaying && kimIndex >= targetIndex) {
       setIsPlaying(false);
+      setPlaybackFinished(true);
     }
   }, [isKimView, isPlaying, kimIndex, kimFrames.length, kimPlayTarget]);
 
@@ -1927,6 +1932,7 @@ const RadarMapView = ({
   useEffect(() => {
     if (!isAccumView && !isKimView && isBroadcast && isPlaying && playTarget !== null && frameIndex >= playTarget) {
       setIsPlaying(false);
+      setPlaybackFinished(true);
     }
   }, [isBroadcast, isPlaying, playTarget, frameIndex, isAccumView, isKimView]);
 
@@ -2013,6 +2019,30 @@ const RadarMapView = ({
       setIsPlaying(false);
       return;
     }
+    // 끝까지 재생돼 멈춘 상태 → 재생 대신 첫 장면으로 이동해 정지한다.
+    if (playbackFinished) {
+      mapRef.current?.stop();
+      const startCamera = activePlayRange?.startCamera;
+      if (startCamera) {
+        mapRef.current?.jumpTo({
+          center: startCamera.center,
+          zoom: startCamera.zoom,
+          pitch: startCamera.pitch,
+          bearing: startCamera.bearing,
+        });
+      }
+      if (isAccumView) {
+        setAccumIndex(activePlayRange?.startIndex ?? 0);
+      } else if (isKimView) {
+        setKimIndex(activePlayRange?.startIndex ?? 0);
+      } else {
+        setFrameIndex(activePlayRange?.startIndex ?? 0);
+      }
+      setPlaybackFinished(false);
+      setIsPlaying(false);
+      return;
+    }
+    setPlaybackFinished(false);
     const cameraDurationMs = playDurationSec * 1000;
     if (isAccumView) {
       if (accumHours.length < 2 || accumStatus !== 'ready') {
@@ -2106,6 +2136,7 @@ const RadarMapView = ({
         throw new Error('선택한 기간에 재생할 프레임이 2개 이상 필요합니다.');
       }
       setIsPlaying(false);
+      setPlaybackFinished(false);
       // 녹화 첫 컷이 '직전에 머물던 화면'이 아니라 시작 프레임이 되도록,
       // 캡처 전에 표시를 시작 프레임으로 옮겨 둔다.
       if (isAccumView) setAccumIndex(range.startIndex);
@@ -3574,12 +3605,18 @@ const RadarMapView = ({
         className={`flex shrink-0 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:opacity-40 ${
           broadcast ? 'h-12 w-12 -translate-x-1/2' : 'h-10 w-10'
         }`}
-        aria-label={isPlaying ? '일시정지' : '재생'}
+        aria-label={isPlaying ? '일시정지' : playbackFinished ? '처음으로' : '재생'}
+        title={isPlaying ? '일시정지' : playbackFinished ? '처음으로' : '재생'}
       >
         {isPlaying ? (
           <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
             <rect x="3" y="2" width="3.5" height="12" rx="1" />
             <rect x="9.5" y="2" width="3.5" height="12" rx="1" />
+          </svg>
+        ) : playbackFinished ? (
+          <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+            <rect x="3" y="2.5" width="2.4" height="11" rx="1" />
+            <path d="M13.2 3.1a1 1 0 0 0-1.55-.84l-5.6 4.9a1 1 0 0 0 0 1.68l5.6 4.9a1 1 0 0 0 1.55-.84V3.1Z" />
           </svg>
         ) : (
           <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
@@ -3638,6 +3675,7 @@ const RadarMapView = ({
           step={isAccumView || isKimView ? 1 : 5}
           value={isAccumView ? accumIndex : isKimView ? kimIndex : currentOffset}
           onChange={(event) => {
+            setPlaybackFinished(false); // 수동 스크럽하면 '처음으로' 상태 해제
             if (isAccumView) {
               setIsPlaying(false);
               setAccumIndex(Number(event.target.value));

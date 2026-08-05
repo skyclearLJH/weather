@@ -6,6 +6,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  SkipBack,
   SlidersHorizontal,
 } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
@@ -664,6 +665,8 @@ const HeatwaveBroadcastView = () => {
   const timelineOverlayCanvasRef = useRef(null);
   const landMaskRef = useRef(null);
   const timelinePairRef = useRef(-1);
+  // renderTimelineDataset은 아래에서 정의되므로(=재생 토글보다 뒤) ref로 참조한다.
+  const renderTimelineDatasetRef = useRef(null);
   const timelinePlaybackStartedAtRef = useRef(0);
   const videoPrepareResolverRef = useRef(null);
   const [mode, setMode] = useState(getInitialTemperatureMode);
@@ -686,6 +689,8 @@ const HeatwaveBroadcastView = () => {
   const [isTimelineRangeOpen, setIsTimelineRangeOpen] = useState(false);
   const [timelineProgress, setTimelineProgress] = useState(0);
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
+  // 재생이 끝까지 가 멈춘 상태 → 버튼을 '처음으로'로 바꾼다(방송에서 첫 장면 대기용).
+  const [playbackFinished, setPlaybackFinished] = useState(false);
   const [timelineDurationSec, setTimelineDurationSec] = useState(10);
   const [showTimelineTop5, setShowTimelineTop5] = useState(true);
   const [playRangeVersion, setPlayRangeVersion] = useState(0);
@@ -1004,21 +1009,50 @@ const HeatwaveBroadcastView = () => {
       setIsTimelinePlaying(false);
       return;
     }
+    // 끝까지 재생돼 멈춘 상태 → 재생 대신 첫 장면으로 이동해 정지한다.
+    if (playbackFinished) {
+      mapRef.current?.stop();
+      if (playRange?.startCamera) {
+        mapRef.current?.jumpTo({
+          center: playRange.startCamera.center,
+          zoom: playRange.startCamera.zoom,
+          pitch: playRange.startCamera.pitch,
+          bearing: playRange.startCamera.bearing,
+        });
+      }
+      setTimelineProgress(playFrom);
+      timelinePairRef.current = -1;
+      renderTimelineDatasetRef.current?.(playFrom); // 첫 장면을 즉시 그려 잔상 방지
+      setPlaybackFinished(false);
+      setIsTimelinePlaying(false);
+      return;
+    }
+    setPlaybackFinished(false);
     // 지정 구간 [playFrom, playTo] 안에서만 재생. 구간 미지정이면 0~끝 전체.
     const span = Math.max(0.0001, playTo - playFrom);
     if (timelineProgress < playFrom || timelineProgress >= playTo) {
+      // 처음(playFrom)으로 되감아 재생. 데이터 소스 갱신(setData)이 비동기라 그냥
+      // 재생을 시작하면 직전(끝) 프레임이 한 컷 번쩍인다. 시작 프레임을 먼저 그리고
+      // 다음 프레임에 재생을 시작해 잔상을 없앤다.
       setTimelineProgress(playFrom);
       timelinePairRef.current = -1;
-      timelinePlaybackStartedAtRef.current = performance.now();
-    } else {
-      timelinePlaybackStartedAtRef.current =
-        performance.now() -
-        ((timelineProgress - playFrom) / span) * timelineDurationSec * 1000;
+      renderTimelineDatasetRef.current?.(playFrom);
+      applyPlayCamera(mapRef.current, playRange, timelineDurationSec * 1000);
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          timelinePlaybackStartedAtRef.current = performance.now();
+          setIsTimelinePlaying(true);
+        });
+      });
+      return;
     }
+    timelinePlaybackStartedAtRef.current =
+      performance.now() -
+      ((timelineProgress - playFrom) / span) * timelineDurationSec * 1000;
     // 지정 카메라가 있으면 시작 카메라로 점프 후 끝 카메라로 재생 길이만큼 이동.
     applyPlayCamera(mapRef.current, playRange, timelineDurationSec * 1000);
     setIsTimelinePlaying(true);
-  }, [isTimelinePlaying, playFrom, playTo, playRange, timelineDurationSec, timelineMaxProgress, timelineProgress]);
+  }, [isTimelinePlaying, playbackFinished, playFrom, playTo, playRange, timelineDurationSec, timelineMaxProgress, timelineProgress]);
 
   // 편집모드에서 현재 슬라이더 위치를 시작/끝 프레임으로 지정한다.
   // 현재 지도 카메라(위치·확대·기울기)도 함께 캡처해 재생 시 이동에 쓴다.
@@ -1065,6 +1099,7 @@ const HeatwaveBroadcastView = () => {
     setTimelineStartInput(nextRange.start);
     setTimelineEndInput(nextRange.end);
     setIsTimelinePlaying(false);
+    setPlaybackFinished(false);
     // 녹화 첫 컷이 직전 화면이 아니라 시작 프레임이 되도록 진행위치를 0으로 되돌린다.
     setTimelineProgress(0);
     timelinePairRef.current = -1;
@@ -1230,6 +1265,7 @@ const HeatwaveBroadcastView = () => {
     map.triggerRepaint();
     return true;
   }, [mode, timelineFrames, timelineMaxProgress]);
+  renderTimelineDatasetRef.current = renderTimelineDataset;
 
   useEffect(() => {
     if (status !== 'ready' || mode === 'change') return undefined;
@@ -1264,7 +1300,10 @@ const HeatwaveBroadcastView = () => {
         playFrom + (elapsed / (timelineDurationSec * 1000)) * span,
       );
       setTimelineProgress(nextProgress);
-      if (nextProgress >= playTo) setIsTimelinePlaying(false);
+      if (nextProgress >= playTo) {
+        setIsTimelinePlaying(false);
+        setPlaybackFinished(true); // 끝까지 재생됨 → 버튼을 '처음으로'로
+      }
     }, TIMELINE_RENDER_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [isTimelinePlaying, mode, status, timelineDurationSec, timelineMaxProgress, playFrom, playTo]);
@@ -1440,10 +1479,22 @@ const HeatwaveBroadcastView = () => {
               onClick={handleTimelinePlayToggle}
               disabled={status !== 'ready' || timelineFrames.length < 2}
               className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#1d5fd1] text-white shadow-xl transition hover:bg-[#2875d9] disabled:cursor-wait disabled:opacity-45"
-              aria-label={isTimelinePlaying ? '기온 변화 일시정지' : '기온 변화 재생'}
-              title={isTimelinePlaying ? '일시정지' : '재생'}
+              aria-label={
+                isTimelinePlaying
+                  ? '기온 변화 일시정지'
+                  : playbackFinished
+                    ? '기온 변화 처음으로'
+                    : '기온 변화 재생'
+              }
+              title={isTimelinePlaying ? '일시정지' : playbackFinished ? '처음으로' : '재생'}
             >
-              {isTimelinePlaying ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
+              {isTimelinePlaying ? (
+                <Pause className="h-5 w-5" />
+              ) : playbackFinished ? (
+                <SkipBack className="h-5 w-5" />
+              ) : (
+                <Play className="ml-0.5 h-5 w-5" />
+              )}
             </button>
             <div className="min-w-0 flex-1">
               <div className="mb-2 flex items-center justify-between text-xs font-bold tabular-nums text-white/75">
@@ -1462,6 +1513,7 @@ const HeatwaveBroadcastView = () => {
                   value={timelineProgress}
                   onChange={(event) => {
                     setIsTimelinePlaying(false);
+                    setPlaybackFinished(false); // 수동 스크럽하면 '처음으로' 상태 해제
                     setTimelineProgress(Number(event.target.value));
                   }}
                   disabled={timelineFrames.length < 2}

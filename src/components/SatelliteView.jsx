@@ -1015,6 +1015,8 @@ function SatelliteView({
   const [timeline, setTimeline] = useState([]);
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  // 재생이 끝까지 가 멈춘 상태(컨트롤 버튼을 '처음으로'로 바꾸는 용도).
+  const [playbackFinished, setPlaybackFinished] = useState(false);
   const [status, setStatus] = useState('최신 위성 자료 탐색 중…');
   const [exaggeration, setExaggeration] = useState(6);
   const [convHighlight, setConvHighlight] = useState(true);
@@ -1562,6 +1564,7 @@ function SatelliteView({
       setFrameIndex(next);
       if (next >= last) {
         setIsPlaying(false);
+        setPlaybackFinished(true); // 끝까지 재생됨 → 버튼을 '처음으로'로
       }
     }, intervalMs);
     return () => clearInterval(playTimerRef.current);
@@ -1608,7 +1611,8 @@ function SatelliteView({
     setPlayRangeVersion((value) => value + 1);
   }, []);
 
-  // 끝에서 다시 재생을 누르면 처음부터. 지정 구간이 있으면 그 구간만 재생한다.
+  // 컨트롤 버튼 3-상태: 재생 중이면 일시정지, 끝까지 재생돼 멈췄으면 '처음으로'(첫
+  // 장면에서 정지), 그 외에는 재생. 방송에서 첫 장면으로 멈춰두는 용도.
   const handlePlayToggle = useCallback(() => {
     if (isPlaying) {
       mapRef.current?.stop(); // 카메라 이동도 함께 멈춘다
@@ -1616,6 +1620,28 @@ function SatelliteView({
       return;
     }
     if (timeline.length === 0) return;
+    const startIdx = persistentPlayRange ? persistentPlayRange.startIndex : 0;
+
+    // 끝까지 재생돼 멈춘 상태 → 재생 대신 첫 장면으로 이동해 정지한다.
+    if (playbackFinished) {
+      mapRef.current?.stop();
+      const startCamera = persistentPlayRange?.startCamera;
+      if (startCamera) {
+        mapRef.current?.jumpTo({
+          center: startCamera.center,
+          zoom: startCamera.zoom,
+          pitch: startCamera.pitch,
+          bearing: startCamera.bearing,
+        });
+      }
+      setFrameIndex(startIdx);
+      setPlaybackFinished(false);
+      setIsPlaying(false);
+      return;
+    }
+
+    // 재생 시작
+    setPlaybackFinished(false);
     if (persistentPlayRange) {
       setVideoPlayRange(persistentPlayRange);
       setFrameIndex(persistentPlayRange.startIndex);
@@ -1628,11 +1654,13 @@ function SatelliteView({
       window.requestAnimationFrame(() => setIsPlaying(true));
       return;
     }
-    const startIndex = frameIndex >= timeline.length - 1 ? 0 : frameIndex;
-    setVideoPlayRange({ startIndex, endIndex: timeline.length - 1 });
-    if (startIndex !== frameIndex) setFrameIndex(startIndex);
+    setVideoPlayRange({ startIndex: frameIndex, endIndex: timeline.length - 1 });
     setIsPlaying(true);
-  }, [frameIndex, isPlaying, timeline.length, persistentPlayRange, playDurationSec]);
+  }, [frameIndex, isPlaying, timeline.length, persistentPlayRange, playDurationSec, playbackFinished]);
+
+  // '처음으로' 상태: 재생이 끝까지 가 멈춘 경우에만(초기 로드로 마지막 프레임에 있는
+  // 것과 구분하기 위해 별도 플래그를 쓴다).
+  const isAtPlaybackEnd = playbackFinished && !isPlaying;
 
   const videoDefaultStart = timeline[0] ? formatLocalDateTimeInput(timeline[0]) : '';
   const videoDefaultEnd = timeline.at(-1) ? formatLocalDateTimeInput(timeline.at(-1)) : '';
@@ -1643,6 +1671,7 @@ function SatelliteView({
         throw new Error('선택한 기간에 재생할 위성 프레임이 2개 이상 필요합니다.');
       }
       setIsPlaying(false);
+      setPlaybackFinished(false);
       // 녹화 첫 컷이 직전 화면이 아니라 시작 프레임이 되도록 미리 이동해 둔다.
       setFrameIndex(range.startIndex);
     },
@@ -1667,6 +1696,7 @@ function SatelliteView({
 
   const handleSlider = useCallback((event) => {
     setIsPlaying(false);
+    setPlaybackFinished(false); // 수동 스크럽하면 '처음으로' 상태 해제
     setFrameIndex(Number(event.target.value));
   }, []);
 
@@ -1818,13 +1848,18 @@ function SatelliteView({
             onClick={handlePlayToggle}
             disabled={timeline.length === 0}
             className="flex h-12 w-12 shrink-0 -translate-x-1/2 items-center justify-center rounded-full bg-[#0033a0] text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-wait disabled:opacity-55"
-            aria-label={isPlaying ? '일시정지' : '재생'}
-            title="재생"
+            aria-label={isPlaying ? '일시정지' : isAtPlaybackEnd ? '처음으로' : '재생'}
+            title={isPlaying ? '일시정지' : isAtPlaybackEnd ? '처음으로' : '재생'}
           >
             {isPlaying ? (
               <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
                 <rect x="3" y="2" width="3.5" height="12" rx="1" />
                 <rect x="9.5" y="2" width="3.5" height="12" rx="1" />
+              </svg>
+            ) : isAtPlaybackEnd ? (
+              <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+                <rect x="3" y="2.5" width="2.4" height="11" rx="1" />
+                <path d="M13.2 3.1a1 1 0 0 0-1.55-.84l-5.6 4.9a1 1 0 0 0 0 1.68l5.6 4.9a1 1 0 0 0 1.55-.84V3.1Z" />
               </svg>
             ) : (
               <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
