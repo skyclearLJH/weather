@@ -13,6 +13,8 @@ const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 // 형식: `${YY}-${TYP}` : { ko, en }
 const TYPHOON_NAMES = {
   '2026-13': { ko: '돌핀', en: 'Dolphin' },
+  '2026-14': { ko: '구지라', en: 'Kujira' },
+  '2026-15': { ko: '찬홈', en: 'Chan-hom' },
 };
 
 export const getTyphoonName = (year, number) => TYPHOON_NAMES[`${year}-${number}`] ?? null;
