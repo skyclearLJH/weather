@@ -100,12 +100,13 @@
   height: 100%;
 }
 /* 중앙 구멍(허리케인 눈)에 맞춰 등급 숫자 disc를 얹어 팔과 자연스럽게 잇는다. */
+/* 등급 원·숫자는 기존 대비 20% 크게 */
 .typhoon-mark__disc {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 40%;
-  height: 40%;
+  width: 48%;
+  height: 48%;
   transform: translate(-50%, -50%);
   border-radius: 9999px;
   background: var(--g-color, #94a3b8);
@@ -118,21 +119,26 @@
   transform: translate(-50%, -50%);
   color: #fff;
   font-weight: 900;
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
+/* 예측 일시는 50% 크게, 날짜/시각 두 줄 */
 .typhoon-mark__label {
   position: absolute;
   top: 100%;
   left: 50%;
   transform: translate(-50%, 3px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.15;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 16.5px;
   font-weight: 800;
   color: #fff;
-  padding: 1px 6px;
-  border-radius: 7px;
+  padding: 2px 7px;
+  border-radius: 8px;
   background: rgba(9, 20, 34, 0.72);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   pointer-events: none;

@@ -87,20 +87,23 @@ const buildTyphoonMarkerEl = (props, scale) => {
   el.className = `typhoon-mark${props.isCurrent ? ' typhoon-mark--current' : ''}`;
   el.style.setProperty('--g-color', GRADE_COLOR[props.grade] ?? GRADE_COLOR[0]);
   el.style.setProperty('--mark-scale', String(scale ?? 1));
-  // 지점 라벨: 현재는 '현재', 예측은 해당 예측시각(KST, 정시). 예측 유효시각은
-  // 정확한 값이라 +1h 보정 없이 그대로 쓴다(밴드의 '발표시각'만 +1h).
-  let label = '';
-  if (props.isCurrent) label = '현재';
-  else if (props.validTime) {
+  // 지점 라벨: 현재는 '현재', 예측은 해당 예측시각(KST, 정시)을 날짜/시각 두 줄로.
+  // 예측 유효시각은 정확한 값이라 +1h 보정 없이 그대로 쓴다(밴드의 '발표시각'만 +1h).
+  let labelHtml = '';
+  if (props.isCurrent) {
+    labelHtml = '<span class="typhoon-mark__label"><span>현재</span></span>';
+  } else if (props.validTime) {
     const k = new Date(new Date(props.validTime).getTime() + 9 * 3600 * 1000);
-    label = `${k.getUTCMonth() + 1}/${k.getUTCDate()} ${k.getUTCHours()}시`;
+    const day = `${k.getUTCMonth() + 1}/${k.getUTCDate()}`;
+    const hour = `${k.getUTCHours()}시`;
+    labelHtml = `<span class="typhoon-mark__label"><span>${day}</span><span>${hour}</span></span>`;
   }
   el.innerHTML =
     '<span class="typhoon-mark__inner">' +
     `<span class="typhoon-mark__swirl">${TYPHOON_SWIRL_SVG}</span>` +
     '<span class="typhoon-mark__disc"></span>' +
     `<span class="typhoon-mark__num">${props.gradeText || ''}</span>` +
-    `<span class="typhoon-mark__label">${label}</span>` +
+    labelHtml +
     '</span>';
   return el;
 };
@@ -2088,7 +2091,8 @@ function SatelliteView({
       </div>
       ) : null}
 
-      {convHighlight ? (
+      {/* 대류운 고도 스케일바 — 녹화모드에서는 화면에 남기지 않는다. */}
+      {convHighlight && workspaceMode !== 'record' ? (
         <div className="sat-conv-legend">
           <span className="sat-conv-legend-title">강한 대류운 (운정고도)</span>
           <span className="sat-conv-legend-bar" />
