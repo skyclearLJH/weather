@@ -381,16 +381,27 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     let active = true;
     const warm = async () => {
       let progress = kimRain.cacheProgress;
+      let consecutiveFailures = 0;
       while (active && !controller.signal.aborted) {
-        const result = await warmGlobalModelCache({ signal: controller.signal });
-        progress = { count: result.frames, total: result.totalFrames };
-        if (!active) return;
-        setKimWarmProgress(progress);
-        if (result.ready) {
-          setRefreshTick((value) => value + 1);
-          return;
+        try {
+          const result = await warmGlobalModelCache({ signal: controller.signal });
+          progress = { count: result.frames, total: result.totalFrames };
+          consecutiveFailures = 0;
+          if (!active) return;
+          setKimWarmProgress(progress);
+          if (result.ready) {
+            setRefreshTick((value) => value + 1);
+            return;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 3000));
+        } catch {
+          if (controller.signal.aborted) return;
+          consecutiveFailures += 1;
+          await new Promise((resolve) => window.setTimeout(
+            resolve,
+            Math.min(30000, 5000 * consecutiveFailures),
+          ));
         }
-        await new Promise((resolve) => window.setTimeout(resolve, 150));
       }
     };
     warm().catch(() => {});
