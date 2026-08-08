@@ -694,24 +694,13 @@ const canvasPointToLonLat = (x, y, width, height) => {
   return [lon, lat];
 };
 
-const sampleTrackingBucket = (frame, buckets, point, mappings, radius = 2) => {
+const sampleTrackingBucket = (frame, buckets, point, mappings) => {
   if (!frame || !buckets || !point || !mappings) return 0;
   const canvasPoint = lonLatToCanvasPoint(point.lon, point.lat, CANVAS_WIDTH, mappings.radarMap.length / CANVAS_WIDTH);
   if (!canvasPoint) return 0;
-  const height = mappings.radarMap.length / CANVAS_WIDTH;
   const dataMap = frame.kind === 'obs' ? mappings.radarMap : mappings.qpfMap;
-  let strongest = 0;
-  for (let dy = -radius; dy <= radius; dy += 1) {
-    const y = canvasPoint.y + dy;
-    if (y < 0 || y >= height) continue;
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      const x = canvasPoint.x + dx;
-      if (x < 0 || x >= CANVAS_WIDTH) continue;
-      const sourceIndex = dataMap[y * CANVAS_WIDTH + x];
-      if (sourceIndex >= 0) strongest = Math.max(strongest, buckets[sourceIndex] ?? 0);
-    }
-  }
-  return strongest;
+  const sourceIndex = dataMap[canvasPoint.y * CANVAS_WIDTH + canvasPoint.x];
+  return sourceIndex >= 0 ? buckets[sourceIndex] ?? 0 : 0;
 };
 
 const bucketLowerValue = (bucket) => (bucket > 0 ? RAIN_PALETTE[bucket - 1]?.min ?? 0 : 0);
@@ -1451,8 +1440,6 @@ const TrackingAnalysisPanel = ({
     : arrivalMinutes !== null
       ? `${arrivalMinutes}분 후`
       : '2시간 내 없음';
-  const maxChartValue = 150;
-
   return (
     <aside
       className="absolute z-20 w-[390px] max-w-[calc(100vw-7rem)] overflow-hidden rounded-md border border-white/15 bg-slate-950/78 text-white shadow-2xl backdrop-blur-md"
@@ -1515,8 +1502,8 @@ const TrackingAnalysisPanel = ({
           {series.map((item) => {
             const value = bucketLowerValue(item.bucket);
             const height = item.bucket
-              ? Math.max(8, (Math.log1p(value) / Math.log1p(maxChartValue)) * 100)
-              : 3;
+              ? Math.max(3, getLegendLabelPosition(value))
+              : 2;
             const isSelected = item.frameIndex === currentFrameIndex;
             return (
               <button
