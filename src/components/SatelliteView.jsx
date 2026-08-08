@@ -335,6 +335,7 @@ const MAP_STYLE = {
 // STEP=5 → 551x276 정점(약 15만). 구름 이미지는 풀해상도 DN 텍스처로 선명하게
 // 그리고, 3D 돌출 높이만 이 성긴 메쉬가 담당한다.
 const FD_MESH_STEP = 5;
+const FD_EDGE_FADE_CELLS = 6;
 
 // --- 커스텀 3D 구름 레이어 ---
 const createCloudLayer = () => {
@@ -362,22 +363,25 @@ const createCloudLayer = () => {
         ${shaderDescription.define}
         in vec2 aPos;
         in float aZScale;
+        in float aEdgeFade;
         in vec4 aCloud; // x: 강도 0..1, y: 고도(m), z: 음영 계수, w: 대류 0..1
         in vec2 aTexCoord;
         uniform float uExag;
         out float vTv;
         out float vShade;
         out float vConv;
+        out float vEdgeFade;
         out vec2 vTexCoord;
         void main() {
           vTv = aCloud.x;
           vShade = aCloud.z;
           vConv = aCloud.w;
+          vEdgeFade = aEdgeFade;
           vTexCoord = aTexCoord;
           #ifdef GLOBE
-            float elevation = aCloud.y * uExag;
+            float elevation = aCloud.y * uExag * aEdgeFade;
           #else
-            float elevation = aCloud.y * aZScale * uExag;
+            float elevation = aCloud.y * aZScale * uExag * aEdgeFade;
           #endif
           // projectTileWithElevation은 지구 뒷면 클리핑용 z를 쓴다 — 뒷면 구름 숨김
           gl_Position = projectTileWithElevation(aPos, elevation);
@@ -387,6 +391,7 @@ const createCloudLayer = () => {
         in float vTv;
         in float vShade;
         in float vConv;
+        in float vEdgeFade;
         in vec2 vTexCoord;
         uniform float uConvOn;
         uniform float uUseTexture;
@@ -427,6 +432,7 @@ const createCloudLayer = () => {
           vec3 warm = mix(vec3(1.0, 0.84, 0.30), vec3(0.93, 0.23, 0.12), smoothstep(0.35, 1.0, conv));
           color = mix(color, warm, convMixT);
           alpha = max(alpha, smoothstep(0.06, 0.6, conv) * 0.9);
+          alpha *= smoothstep(0.0, 1.0, vEdgeFade);
           float shade = mix(vShade, 1.0, convMixT);
           fragColor = vec4(color * shade * alpha, alpha) * uAlpha;
         }`;
@@ -450,6 +456,7 @@ const createCloudLayer = () => {
         program,
         aPos: gl.getAttribLocation(program, 'aPos'),
         aZScale: gl.getAttribLocation(program, 'aZScale'),
+        aEdgeFade: gl.getAttribLocation(program, 'aEdgeFade'),
         aCloud: gl.getAttribLocation(program, 'aCloud'),
         aTexCoord: gl.getAttribLocation(program, 'aTexCoord'),
         uExag: gl.getUniformLocation(program, 'uExag'),
@@ -504,7 +511,7 @@ const createCloudLayer = () => {
 
       // 정점 위치(메르카토르)/고도 스케일/텍스처좌표/인덱스는 고정 — 메쉬별로 한 번만 계산.
       // vertexAt(mi,mj)이 [lon,lat] 또는 null(무효 정점), texCoordAt이 [u,v]를 반환.
-      const buildMesh = (w, h, vertexAt, quadVisible, sample, texCoordAt) => {
+      const buildMesh = (w, h, vertexAt, quadVisible, sample, texCoordAt, edgeFadeCells = 0) => {
         const positions = new Float32Array(w * h * 2);
         const zScales = new Float32Array(w * h);
         const texCoords = new Float32Array(w * h * 2);
@@ -524,6 +531,66 @@ const createCloudLayer = () => {
             texCoords[v * 2] = uv[0];
             texCoords[v * 2 + 1] = uv[1];
             v++;
+          }
+        }
+        // 유효영역 외곽에서 안쪽으로 거리장을 만들어 높이와 알파를 완만하게 복원한다.
+        const edgeFades = new Float32Array(w * h);
+        edgeFades.fill(1);
+        if (edgeFadeCells > 0) {
+          const distances = new Int16Array(w * h);
+          distances.fill(-1);
+          const queue = new Int32Array(w * h);
+          let queueHead = 0;
+          let queueTail = 0;
+          for (let mj = 0; mj < h; mj++) {
+            for (let mi = 0; mi < w; mi++) {
+              const index = mj * w + mi;
+              if (!valid[index]) {
+                edgeFades[index] = 0;
+                continue;
+              }
+              const boundary =
+                mi === 0 ||
+                mi === w - 1 ||
+                mj === 0 ||
+                mj === h - 1 ||
+                !valid[index - 1] ||
+                !valid[index + 1] ||
+                !valid[index - w] ||
+                !valid[index + w];
+              if (boundary) {
+                distances[index] = 0;
+                queue[queueTail++] = index;
+              }
+            }
+          }
+          const offsets = [-1, 1, -w, w];
+          while (queueHead < queueTail) {
+            const index = queue[queueHead++];
+            const distance = distances[index];
+            if (distance >= edgeFadeCells) continue;
+            const mi = index % w;
+            for (const offset of offsets) {
+              if ((offset === -1 && mi === 0) || (offset === 1 && mi === w - 1)) continue;
+              const neighbor = index + offset;
+              if (
+                neighbor < 0 ||
+                neighbor >= valid.length ||
+                !valid[neighbor] ||
+                distances[neighbor] >= 0
+              ) {
+                continue;
+              }
+              distances[neighbor] = distance + 1;
+              queue[queueTail++] = neighbor;
+            }
+          }
+          for (let index = 0; index < valid.length; index++) {
+            if (!valid[index]) continue;
+            const distance = distances[index];
+            if (distance < 0 || distance >= edgeFadeCells) continue;
+            const t = distance / edgeFadeCells;
+            edgeFades[index] = t * t * (3 - 2 * t);
           }
         }
         const buildIndices = (visible) => {
@@ -553,6 +620,7 @@ const createCloudLayer = () => {
           heightScratch: new Float32Array(w * h),
           posBuffer: makeBuffer(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW),
           zScaleBuffer: makeBuffer(gl.ARRAY_BUFFER, zScales, gl.STATIC_DRAW),
+          edgeFadeBuffer: makeBuffer(gl.ARRAY_BUFFER, edgeFades, gl.STATIC_DRAW),
           texCoordBuffer: makeBuffer(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW),
           cloudBuffer: makeBuffer(gl.ARRAY_BUFFER, new Float32Array(w * h * 4), gl.DYNAMIC_DRAW),
           // 프레임 디졸브용 이전 프레임 버퍼(구름 값). 텍스처 메쉬는 prevDataTex도 둔다.
@@ -591,6 +659,7 @@ const createCloudLayer = () => {
         null,
         (frameData, mi, mj) => frameData[fdDataRow(mj) * FW + fdDataCol(mi)],
         (mi, mj) => [(fdDataCol(mi) + 0.5) / FW, (fdDataRow(mj) + 0.5) / FH],
+        FD_EDGE_FADE_CELLS,
       );
       fdMesh.textured = true;
       fdMesh.dataW = FW;
@@ -739,6 +808,11 @@ const createCloudLayer = () => {
           gl.bindBuffer(gl.ARRAY_BUFFER, mesh.zScaleBuffer);
           gl.enableVertexAttribArray(shader.aZScale);
           gl.vertexAttribPointer(shader.aZScale, 1, gl.FLOAT, false, 0, 0);
+        }
+        if (shader.aEdgeFade >= 0) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, mesh.edgeFadeBuffer);
+          gl.enableVertexAttribArray(shader.aEdgeFade);
+          gl.vertexAttribPointer(shader.aEdgeFade, 1, gl.FLOAT, false, 0, 0);
         }
         gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
         gl.enableVertexAttribArray(shader.aCloud);
