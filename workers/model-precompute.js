@@ -5,7 +5,7 @@ const CORS_HEADERS = {
 };
 
 const KIM_GRID_URL = 'https://apihub.kma.go.kr/api/typ06/cgi-bin/url/nph-kim_nc_xy_txt2_std';
-const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_BASE_URL = 'https://api.open-meteo.com/v1';
 const CACHE_PREFIX = 'models/east-asia/v1/';
 const KIM_SOURCE_PREFIX = `${CACHE_PREFIX}kim/source/`;
 const LEGACY_KIM_SOURCE_PREFIX = 'models/global/v3/kim-global/source/';
@@ -221,6 +221,13 @@ const findHourlyField = (hourly, baseName, providerModel) => {
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+const openMeteoEndpointFor = (providerModels) => {
+  const models = [].concat(providerModels);
+  if (models.every((model) => model.startsWith('ecmwf_'))) return `${OPEN_METEO_BASE_URL}/ecmwf`;
+  if (models.every((model) => model.startsWith('ncep_'))) return `${OPEN_METEO_BASE_URL}/gfs`;
+  return `${OPEN_METEO_BASE_URL}/forecast`;
+};
+
 const fetchOpenMeteoChunk = async (points, providerModels) => {
   const query = new URLSearchParams({
     latitude: points.map((point) => point.lat.toFixed(3)).join(','),
@@ -228,8 +235,9 @@ const fetchOpenMeteoChunk = async (points, providerModels) => {
     hourly: 'precipitation,pressure_msl', models: [].concat(providerModels).join(','),
     past_hours: '36', forecast_hours: '276', timezone: 'UTC', cell_selection: 'nearest',
   });
+  const endpoint = openMeteoEndpointFor(providerModels);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await fetch(`${OPEN_METEO_URL}?${query}`, { signal: AbortSignal.timeout(45000) });
+    const response = await fetch(`${endpoint}?${query}`, { signal: AbortSignal.timeout(45000) });
     if (response.ok) {
       const payload = await response.json();
       return Array.isArray(payload) ? payload : [payload];
