@@ -1,0 +1,11 @@
+name = "weathernow-model-precompute"
+main = "workers/model-precompute.js"
+compatibility_date = "2026-08-08"
+
+[triggers]
+# 한 프레임씩 적재해 새 KIM 전구 주기를 약 40분 안에 완성한다.
+crons = ["* * * * *"]
+
+[[r2_buckets]]
+binding = "MODEL_R2"
+bucket_name = "weathernow-model-tiles"

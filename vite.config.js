@@ -40,6 +40,7 @@ import {
   onRequestGet as globalModelRainGet,
   onRequestOptions as globalModelRainOptions,
 } from './functions/api/global-model-rain.js';
+import { onRequest as globalModelTileRequest } from './functions/api/global-model-tile.js';
 
 const sendFunctionResponse = async (response, res) => {
   res.statusCode = response.status;
@@ -101,6 +102,12 @@ const localFunctionsPlugin = (env) => ({
       };
 
       try {
+        if (requestUrl.pathname === '/api/global-model-tile') {
+          const response = await globalModelTileRequest(context);
+          await sendFunctionResponse(response, res);
+          return;
+        }
+
         if (requestUrl.pathname === '/api/global-model-rain') {
           const response = req.method === 'OPTIONS'
             ? await globalModelRainOptions(context)
