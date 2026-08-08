@@ -9,6 +9,22 @@
 
 These files are used only by the broadcast radar map and are loaded when broadcast mode opens.
 
+# Watersheds and national rivers
+
+- Basin source: VWorld national water-resource unit map, middle-basin layer, distributed through Esri Korea Living Atlas
+- Basin reference date: `2025-04`
+- River source: VWorld national river polygon layer, distributed through Esri Korea Living Atlas
+- Processing: reprojected to WGS84, geometry rounded to five decimal places, and simplified at approximately 20 m for web display
+- Files: `kr-basin-middle-202504.geojson`, `kr-national-rivers-2025.geojson`
+- Use: selectable basin boundaries and national-river overlays in the 3D terrain rainfall view
+
+# Terrain elevation
+
+- Source: Mapzen Terrain Tiles in Terrarium encoding, hosted by the Registry of Open Data on AWS
+- Dataset: https://registry.opendata.aws/terrain-tiles/
+- Tile endpoint: `s3://elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`
+- Use: client-side terrain mesh and hillshade in the 3D terrain rainfall view
+
 # World land polygons (`land-50m-world.geojson`)
 
 - Source: Natural Earth 1:50m `ne_50m_land` (public domain), via https://github.com/nvkelso/natural-earth-vector

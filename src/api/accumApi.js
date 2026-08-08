@@ -136,11 +136,13 @@ export const fetchAwsStationCoords = () => {
           }
           const lon = Number.parseFloat(fields[1]);
           const lat = Number.parseFloat(fields[2]);
+          const elevation = Number.parseFloat(fields[4]);
           if (Number.isFinite(lon) && Number.isFinite(lat) && lon > 100 && lat > 20) {
             stations.push({
               id: fields[0],
               lon,
               lat,
+              elevation: Number.isFinite(elevation) ? elevation : null,
               stationType: fields[3] ?? '',
               name: fields[8] ?? fields[0],
               address: fields.length > 13 ? fields.slice(13).join(' ') : '',

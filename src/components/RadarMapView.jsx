@@ -11,6 +11,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
+import TerrainRainOverlay from './TerrainRainOverlay.jsx';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import VideoExportMenu from './VideoExportMenu.jsx';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
@@ -95,7 +96,7 @@ const ACCUM_MIN_FRAME_INTERVAL_MS = 60;
 
 const getInitialBroadcastView = () => {
   const target = new URLSearchParams(window.location.search).get('videoTarget');
-  return ['radar', 'tracking', 'kim', 'accum', 'satellite'].includes(target) ? target : 'radar';
+  return ['radar', 'tracking', 'terrain', 'kim', 'accum', 'satellite'].includes(target) ? target : 'radar';
 };
 
 const findTimelineRange = (dates, startInput, endInput) => {
@@ -1579,7 +1580,7 @@ const RadarMapView = ({
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
-  const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView); // 'radar' | 'tracking' | 'kim' | 'accum' | 'satellite'
+  const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView); // 'radar' | 'tracking' | 'terrain' | 'kim' | 'accum' | 'satellite'
   const [kimFrames, setKimFrames] = useState([]);
   const [kimIndex, setKimIndex] = useState(0);
   const [kimStatus, setKimStatus] = useState('idle'); // idle | loading | ready | error
@@ -1618,7 +1619,8 @@ const RadarMapView = ({
   const isSatelliteView = isBroadcast && broadcastView === 'satellite';
   const isRadarView = isBroadcast && broadcastView === 'radar';
   const isTrackingView = isBroadcast && broadcastView === 'tracking';
-  const isRadarDataView = isRadarView || isTrackingView;
+  const isTerrainView = isBroadcast && broadcastView === 'terrain';
+  const isRadarDataView = isRadarView || isTrackingView || isTerrainView;
   const [trackingPoint, setTrackingPoint] = useState(TRACKING_DEFAULT_POINT);
   const [trackingStations, setTrackingStations] = useState([]);
   const [trackingSeries, setTrackingSeries] = useState([]);
@@ -1631,7 +1633,7 @@ const RadarMapView = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (isAccumView) {
+    if (isAccumView || isTerrainView) {
       map.dragRotate.enable();
       return;
     }
@@ -1640,7 +1642,7 @@ const RadarMapView = ({
     if (Math.abs(map.getBearing()) > 0.01) {
       map.easeTo({ bearing: 0, duration: 350 });
     }
-  }, [isAccumView]);
+  }, [isAccumView, isTerrainView]);
 
   // 레이더 화면 위 '시간당 강수량' 최다 5지점 표 (체크박스로 켜고 끈다).
   // 자료는 일반 페이지 '강수량 > 60분 현재'와 같은 서버 랭킹(precipitation-current)을 쓴다.
@@ -2759,14 +2761,18 @@ const RadarMapView = ({
     }
     if (isRadarDataView) {
       return {
-        viewId: isTrackingView ? 'radar:tracking' : 'radar:radar',
+        viewId: isTrackingView
+          ? 'radar:tracking'
+          : isTerrainView
+            ? 'radar:terrain'
+            : 'radar:radar',
         frames,
         keyOf: (frame) => String(frame?.validTime?.getTime?.() ?? ''),
         current: frameIndex,
       };
     }
     return null;
-  }, [isAccumView, isKimView, isRadarDataView, isTrackingView, accumHours, kimFrames, frames, accumIndex, kimIndex, frameIndex]);
+  }, [isAccumView, isKimView, isRadarDataView, isTerrainView, isTrackingView, accumHours, kimFrames, frames, accumIndex, kimIndex, frameIndex]);
 
   const activePlayRange = useMemo(
     () =>
@@ -4794,7 +4800,17 @@ const RadarMapView = ({
           <>
             {workspaceMode === 'record' ? (
               <VideoExportMenu
-                currentTarget={isAccumView ? 'accum' : isKimView ? 'kim' : isTrackingView ? 'tracking' : 'radar'}
+                currentTarget={
+                  isAccumView
+                    ? 'accum'
+                    : isKimView
+                      ? 'kim'
+                      : isTrackingView
+                        ? 'tracking'
+                        : isTerrainView
+                          ? 'terrain'
+                          : 'radar'
+                }
                 mapRef={mapRef}
                 defaultStart={videoDefaultStart}
                 defaultEnd={videoDefaultEnd}
@@ -4852,7 +4868,9 @@ const RadarMapView = ({
                       ? '강수 예상도'
                       : isTrackingView
                         ? '호우 추적'
-                        : '레이더 영상'}
+                        : isTerrainView
+                          ? '지형 호우'
+                          : '레이더 영상'}
                 </span>
                 {(isAccumView ? currentAccumHour : isKimView ? currentKimFrame : currentFrame) ? (
                   <div
@@ -4892,6 +4910,14 @@ const RadarMapView = ({
                 <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
               </div>
             </div>
+
+            <TerrainRainOverlay
+              active={isTerrainView}
+              currentTime={currentFrame?.validTime ?? null}
+              latestObservationTime={frames[latestObservationIndex]?.validTime ?? null}
+              mapRef={mapRef}
+              workspaceMode={workspaceMode}
+            />
 
             {isTrackingView ? (
               <TrackingAnalysisPanel

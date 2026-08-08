@@ -32,6 +32,10 @@ import {
   onRequestGet as kimRainGet,
   onRequestOptions as kimRainOptions,
 } from './functions/api/kim-rain.js';
+import {
+  onRequestGet as terrainRainGet,
+  onRequestOptions as terrainRainOptions,
+} from './functions/api/terrain-rain.js';
 
 const sendFunctionResponse = async (response, res) => {
   res.statusCode = response.status;
@@ -105,6 +109,14 @@ const localFunctionsPlugin = (env) => ({
           const response = req.method === 'OPTIONS'
             ? await gk2aIrOptions(context)
             : await gk2aIrGet(context);
+          await sendFunctionResponse(response, res);
+          return;
+        }
+
+        if (requestUrl.pathname === '/api/terrain-rain') {
+          const response = req.method === 'OPTIONS'
+            ? await terrainRainOptions(context)
+            : await terrainRainGet(context);
           await sendFunctionResponse(response, res);
           return;
         }

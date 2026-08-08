@@ -12,6 +12,7 @@ import {
 const VIDEO_TARGETS = [
   { id: 'radar', label: '레이더' },
   { id: 'tracking', label: '호우추적' },
+  { id: 'terrain', label: '지형호우' },
   { id: 'satellite', label: '위성' },
   { id: 'kim', label: '강수예상도' },
   { id: 'accum', label: '누적강수량' },
@@ -27,6 +28,7 @@ const VIDEO_BITRATE = 10_000_000;
 const TARGET_URLS = {
   radar: '/?view=radar&mode=record&videoTarget=radar',
   tracking: '/?view=radar&mode=record&videoTarget=tracking',
+  terrain: '/?view=radar&mode=record&videoTarget=terrain',
   satellite: '/?view=radar&mode=record&videoTarget=satellite',
   kim: '/?view=radar&mode=record&videoTarget=kim',
   accum: '/?view=radar&mode=record&videoTarget=accum',
