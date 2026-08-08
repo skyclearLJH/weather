@@ -30,7 +30,6 @@ const KIM_SUBSET = {
 const CHUNK_SIZE = 80;
 const KIM_CONCURRENCY = 8;
 const CACHE_SECONDS = 60 * 60;
-const RAW_KIM_CACHE_SECONDS = 7 * 24 * 60 * 60;
 const MISSING_VALUE = 65535;
 const MODEL_FIELDS = {
   ifs: 'precipitation_ecmwf_ifs025',
@@ -180,7 +179,7 @@ const parseUtcCycle = (value) => Date.UTC(
 
 const buildKimCycleCandidates = (nowMs = Date.now()) => {
   const now = new Date(nowMs);
-  const availableHour = now.getUTCHours() >= 18 ? 12 : now.getUTCHours() >= 6 ? 0 : -12;
+  const availableHour = now.getUTCHours() >= 20 ? 12 : now.getUTCHours() >= 8 ? 0 : -12;
   const firstMs = Date.UTC(
     now.getUTCFullYear(),
     now.getUTCMonth(),
@@ -209,13 +208,6 @@ const parseKimBinary = (buffer) => {
 };
 
 const fetchKimCumulative = async (context, cycle, leadHour) => {
-  const cache = getEdgeCache();
-  const cacheKey = new Request(
-    `${new URL(context.request.url).origin}/__kim-global-raw/v1/${cycle}/${leadHour}`,
-  );
-  const cached = cache ? await cache.match(cacheKey) : null;
-  if (cached) return parseKimBinary(await cached.arrayBuffer());
-
   const authKey = readAuthKey(context.env);
   if (!authKey) throw new Error('KIM 전구모델 기상청 인증키가 설정되지 않았습니다.');
   const query = new URLSearchParams({
@@ -237,18 +229,7 @@ const fetchKimCumulative = async (context, cycle, leadHour) => {
   if (response.status === 403) throw new Error('KIM 전구모델 API 활용 권한이 없습니다.');
   if (!response.ok) throw new KimNoDataError(`KIM 전구모델 요청 실패 (${response.status})`);
   const buffer = await response.arrayBuffer();
-  const parsed = parseKimBinary(buffer);
-  putCache(
-    context,
-    cacheKey,
-    new Response(buffer, {
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Cache-Control': `public, max-age=${RAW_KIM_CACHE_SECONDS}`,
-      },
-    }),
-  );
-  return parsed;
+  return parseKimBinary(buffer);
 };
 
 const fetchInBatches = async (items, batchSize, fetcher) => {
