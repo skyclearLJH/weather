@@ -155,15 +155,16 @@ const findPressureCenters = (values, grid) => {
 
 export const buildPressureFeatures = (tile, frameIndex, overridePressure = null) => {
   const pressure = overridePressure ?? tile?.pressure;
-  if (!tile?.grid || !pressure?.available || !pressure.values) {
+  const grid = pressure?.grid ?? tile?.grid;
+  if (!grid || !pressure?.available || !pressure.values) {
     return {
       contours: { type: 'FeatureCollection', features: [] },
       centers: { type: 'FeatureCollection', features: [] },
     };
   }
-  const pointCount = tile.grid.width * tile.grid.height;
+  const pointCount = grid.width * grid.height;
   const offset = pressure.values.length === pointCount ? 0 : frameIndex * pointCount;
-  const smoothed = smoothPressure(pressure.values, tile.grid.width, tile.grid.height, offset);
+  const smoothed = smoothPressure(pressure.values, grid.width, grid.height, offset);
   const finite = Array.from(smoothed).filter(Number.isFinite);
   if (!finite.length) {
     return {
@@ -175,7 +176,7 @@ export const buildPressureFeatures = (tile, frameIndex, overridePressure = null)
   const maximum = Math.min(1080, Math.floor(Math.max(...finite) / 4) * 4);
   const contourFeatures = [];
   for (let level = minimum; level <= maximum; level += 4) {
-    const lines = connectSegments(contourSegmentsForLevel(smoothed, tile.grid, level));
+    const lines = connectSegments(contourSegmentsForLevel(smoothed, grid, level));
     lines.forEach((coordinates, index) => {
       contourFeatures.push({
         type: 'Feature',
@@ -184,7 +185,7 @@ export const buildPressureFeatures = (tile, frameIndex, overridePressure = null)
       });
     });
   }
-  const { highs, lows } = findPressureCenters(smoothed, tile.grid);
+  const { highs, lows } = findPressureCenters(smoothed, grid);
   const centerFeatures = [
     ...highs.map((entry) => ({ ...entry, kind: 'H' })),
     ...lows.map((entry) => ({ ...entry, kind: 'L' })),

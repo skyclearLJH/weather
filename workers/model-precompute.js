@@ -8,7 +8,6 @@ const KIM_GRID_URL = 'https://apihub.kma.go.kr/api/typ06/cgi-bin/url/nph-kim_nc_
 const OPEN_METEO_BASE_URL = 'https://api.open-meteo.com/v1';
 const CACHE_PREFIX = 'models/east-asia/v1/';
 const KIM_SOURCE_PREFIX = `${CACHE_PREFIX}kim/source/`;
-const LEGACY_KIM_SOURCE_PREFIX = 'models/global/v3/kim-global/source/';
 const HOUR_MS = 60 * 60 * 1000;
 const FRAME_STEP_HOURS = 6;
 const FRAME_COUNT = 40;
@@ -373,11 +372,12 @@ const tileCacheKey = (cycle, model, bbox, step) =>
   `${CACHE_PREFIX}tiles/${cycle}/${model}/${bbox.map(stableNumber).join('_')}/${stableNumber(step)}.json`;
 const pressureCacheKey = (cycle, frame, bbox, step) =>
   `${CACHE_PREFIX}pressure/${cycle}/kim-global/${frame}/${bbox.map(stableNumber).join('_')}/${stableNumber(step)}.json`;
+const kimNativeFrameCacheKey = (cycle, frame, bbox) =>
+  `${CACHE_PREFIX}native-frame/${cycle}/kim-global/${frame}/${bbox.map(stableNumber).join('_')}.json`;
 const kimGlobalFrameKey = (cycle, frameIndex) =>
   `${KIM_SOURCE_PREFIX}${cycle}/frame-${String(frameIndex).padStart(2, '0')}.json`;
 const kimGlobalManifestKey = (cycle) => `${KIM_SOURCE_PREFIX}${cycle}/manifest.json`;
 const kimGlobalBundleKey = (cycle) => `${KIM_SOURCE_PREFIX}${cycle}/bundle-v2.json`;
-const legacyKimGlobalBundleKey = (cycle) => `${LEGACY_KIM_SOURCE_PREFIX}${cycle}/bundle.json`;
 
 const readStoredJson = async (store, key) => {
   if (!store) return null;
@@ -518,15 +518,7 @@ const buildCachedKimRain = async (env, cycle, grid, leadHours) => {
   const store = getStore(env);
   const valueCount = leadHours.length * grid.points.length;
   if (!store) return encodeUnavailableField(valueCount, 'KIM global cache storage is not configured.');
-  let bundle = await readStoredJson(store, kimGlobalBundleKey(cycle));
-  let fallbackResolution = null;
-  if (!bundle?.frames || bundle.frames.length !== leadHours.length) {
-    const legacyBundle = await readStoredJson(store, legacyKimGlobalBundleKey(cycle));
-    if (legacyBundle?.frames?.length === leadHours.length && legacyBundle.grid) {
-      bundle = legacyBundle;
-      fallbackResolution = 'legacy-global-grid';
-    }
-  }
+  const bundle = await readStoredJson(store, kimGlobalBundleKey(cycle));
   if (!bundle?.frames || bundle.frames.length !== leadHours.length) {
     const manifest = await readStoredJson(store, kimGlobalManifestKey(cycle));
     const count = manifest?.frames?.filter(Boolean).length || 0;
@@ -553,10 +545,7 @@ const buildCachedKimRain = async (env, cycle, grid, leadHours) => {
     });
     previous = current;
   });
-  return {
-    ...encodeField(encoded, validCount, 'uint16-centimm-le', 'mm/6h'),
-    fallbackResolution,
-  };
+  return encodeField(encoded, validCount, 'uint16-centimm-le', 'mm/6h');
 };
 
 const buildMetadata = async (env) => {
@@ -606,9 +595,7 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
       rain: kimRain,
       pressure: null,
       source: directKim ? 'KMA API Hub direct grid' : 'KMA API Hub cached East Asia grid',
-      sourceMode: directKim
-        ? 'native-subset'
-        : kimRain.fallbackResolution ?? (kimRain.available ? 'official-east-asia-cache' : 'cache-warming'),
+      sourceMode: directKim ? 'native-subset' : kimRain.available ? 'official-east-asia-cache' : 'cache-warming',
     };
     return {
       generatedAt: new Date().toISOString(), cycle, model: 'compare',
@@ -647,9 +634,7 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
       : model === 'kim-global' ? 'KMA API Hub cached East Asia grid' : config.provider,
     sourceMode: directKim
       ? 'native-subset'
-      : model === 'kim-global'
-        ? rain.fallbackResolution ?? (rain.available ? 'official-east-asia-cache' : 'cache-warming')
-        : 'normalized-spatial-grid',
+      : model === 'kim-global' ? rain.available ? 'official-east-asia-cache' : 'cache-warming' : 'normalized-spatial-grid',
     grid: {
       lonMin: grid.lonMin, lonMax: grid.lonMax, latMin: grid.latMin, latMax: grid.latMax,
       step: grid.step, width: grid.width, height: grid.height, order: grid.order,
@@ -703,6 +688,89 @@ const buildDirectKimPressure = async (env, { bbox, requestedStep, cycle, frameIn
       step: grid.step, width: grid.width, height: grid.height, order: grid.order,
     },
     pressure: encodeField(encoded, validCount, 'uint16-decihpa-le', 'hPa'),
+  };
+};
+
+const buildKimNativeFrame = async (env, { bbox, cycle, frameIndex }) => {
+  const subset = kimSubsetForBbox(bbox);
+  if (!subset) throw new Error('이 영역은 KIM 네이티브 격자 조회 범위를 벗어났습니다.');
+  const leadHour = frameLeadHours()[frameIndex];
+  const previousLeadHour = frameIndex > 0 ? frameLeadHours()[frameIndex - 1] : null;
+  const [currentRain, previousRain, pressureSource] = await Promise.all([
+    fetchKimField(env, cycle, leadHour, 'prec_acc', subset, 60000),
+    previousLeadHour == null
+      ? Promise.resolve(null)
+      : fetchKimField(env, cycle, previousLeadHour, 'prec_acc', subset, 60000),
+    fetchKimField(env, cycle, leadHour, 'psl', subset, 60000),
+  ]);
+
+  const rainValues = new Uint16Array(subset.width * subset.height);
+  rainValues.fill(MISSING_VALUE);
+  let rainValid = 0;
+  for (let row = 0; row < subset.height; row += 1) {
+    const sourceRow = subset.height - 1 - row;
+    for (let column = 0; column < subset.width; column += 1) {
+      const sourceIndex = sourceRow * subset.width + column;
+      const current = currentRain.values[sourceIndex];
+      const previous = previousRain?.values[sourceIndex] ?? 0;
+      if (!Number.isFinite(current) || !Number.isFinite(previous)) continue;
+      rainValues[row * subset.width + column] = Math.min(
+        MISSING_VALUE - 1,
+        Math.round(Math.max(0, current - previous) * 100),
+      );
+      rainValid += 1;
+    }
+  }
+
+  const pressureGrid = buildGrid(bbox, 0.5);
+  const pressureValues = new Uint16Array(pressureGrid.points.length);
+  pressureValues.fill(MISSING_VALUE);
+  let pressureValid = 0;
+  pressureGrid.points.forEach((point, pointIndex) => {
+    const sourceIndex = sourceIndexForPoint(point, subset);
+    if (sourceIndex < 0) return;
+    const pascals = pressureSource.values[sourceIndex];
+    if (!Number.isFinite(pascals) || pascals < 80000 || pascals > 120000) return;
+    pressureValues[pointIndex] = Math.round(pascals / 10);
+    pressureValid += 1;
+  });
+
+  const validTime = new Date(parseUtcCycle(cycle) + leadHour * HOUR_MS).toISOString();
+  const nativeGrid = {
+    lonMin: subset.lonMin,
+    lonMax: subset.lonMin + (subset.width - 1) * KIM_NATIVE_STEP,
+    latMin: subset.latMin,
+    latMax: subset.latMin + (subset.height - 1) * KIM_NATIVE_STEP,
+    step: KIM_NATIVE_STEP,
+    width: subset.width,
+    height: subset.height,
+    order: 'north-to-south-row-major',
+  };
+  return {
+    generatedAt: new Date().toISOString(),
+    cycle,
+    model: 'kim-global',
+    label: MODEL_CONFIG['kim-global'].label,
+    source: 'KMA API Hub direct native grid',
+    sourceMode: 'native-frame',
+    frameIndex,
+    grid: nativeGrid,
+    leadHours: [leadHour],
+    times: [validTime],
+    rain: encodeField(rainValues, rainValid, 'uint16-centimm-le', 'mm/6h'),
+    pressure: {
+      ...encodeField(pressureValues, pressureValid, 'uint16-decihpa-le', 'hPa'),
+      grid: {
+        lonMin: pressureGrid.lonMin,
+        lonMax: pressureGrid.lonMax,
+        latMin: pressureGrid.latMin,
+        latMax: pressureGrid.latMax,
+        step: pressureGrid.step,
+        width: pressureGrid.width,
+        height: pressureGrid.height,
+        order: pressureGrid.order,
+      },
+    },
   };
 };
 
@@ -795,6 +863,22 @@ const handlePressure = async (request, env, executionCtx) => {
   return serveWithCache(env, executionCtx, pressureCacheKey(cycle, frameIndex, parsed.bbox, parsed.requestedStep), () => buildDirectKimPressure(env, params));
 };
 
+const handleKimFrame = async (request, env, executionCtx) => {
+  const url = new URL(request.url);
+  const parsed = parseTileRequest(url);
+  const frameIndex = Number(url.searchParams.get('frame'));
+  if (parsed.model !== 'kim-global') return jsonResponse({ error: '네이티브 프레임 조회는 KIM 전구모델에만 사용합니다.' }, 400);
+  if (!Number.isInteger(frameIndex) || frameIndex < 0 || frameIndex >= FRAME_COUNT) return jsonResponse({ error: '예보 프레임 번호가 올바르지 않습니다.' }, 400);
+  const cycle = parsed.cycle || (await buildMetadata(env)).cycle;
+  const params = { ...parsed, cycle, frameIndex };
+  return serveWithCache(
+    env,
+    executionCtx,
+    kimNativeFrameCacheKey(cycle, frameIndex, parsed.bbox),
+    () => buildKimNativeFrame(env, params),
+  );
+};
+
 const handleStatus = async (env) => {
   const metadata = await buildMetadata(env);
   const store = getStore(env);
@@ -838,6 +922,7 @@ const routeRequest = async (request, env, executionCtx) => {
   const action = url.searchParams.get('action');
   try {
     if (action === 'metadata' || url.pathname.endsWith('/metadata')) return await handleMetadata(env, executionCtx);
+    if (action === 'frame' || url.pathname.endsWith('/frame')) return await handleKimFrame(request, env, executionCtx);
     if (action === 'pressure' || url.pathname.endsWith('/pressure')) return await handlePressure(request, env, executionCtx);
     if (action === 'status' || url.pathname.endsWith('/status')) return await handleStatus(env);
     if (action === 'warm' || url.pathname.endsWith('/warm')) return await handleWarm(env);

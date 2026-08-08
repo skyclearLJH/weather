@@ -88,6 +88,25 @@ export const fetchGlobalModelTile = ({ model, bbox, step, cycle, signal }) =>
     };
   }, signal);
 
+export const fetchGlobalModelFrame = ({ bbox, cycle, frameIndex, signal }) =>
+  withTimeout(async (timeoutSignal) => {
+    const payload = await requestJson('frame', {
+      model: 'kim-global',
+      bbox: bbox.join(','),
+      cycle,
+      frame: String(frameIndex),
+    }, timeoutSignal);
+    const rainPointCount = payload.grid.width * payload.grid.height;
+    const pressureGrid = payload.pressure?.grid ?? payload.grid;
+    const pressurePointCount = pressureGrid.width * pressureGrid.height;
+    return {
+      ...payload,
+      times: payload.times.map((time) => new Date(time)),
+      rain: decodeField(payload.rain, rainPointCount, 'KIM 강수'),
+      pressure: decodeField(payload.pressure, pressurePointCount, 'KIM 해면기압'),
+    };
+  }, signal);
+
 export const fetchGlobalModelBundle = ({ bbox, step, cycle, signal }) =>
   withTimeout(async (timeoutSignal) => {
     const payload = await requestJson('tile', {

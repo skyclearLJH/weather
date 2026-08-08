@@ -14,10 +14,9 @@ import {
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
+  fetchGlobalModelFrame,
   fetchGlobalModelMetadata,
   fetchGlobalModelTile,
-  fetchKimPressure,
-  warmGlobalModelCache,
 } from '../api/globalModelApi.js';
 import { buildPressureFeatures } from '../utils/modelPressure.js';
 import VideoExportMenu from './VideoExportMenu.jsx';
@@ -160,6 +159,13 @@ const nearestGridIndex = (point, grid) => {
 const modelForPixel = (x, width, splitPercent, leftModel, rightModel) =>
   x < (width * splitPercent) / 100 ? leftModel : rightModel;
 
+const tileMatchesFrame = (tile, frameIndex) =>
+  !Number.isInteger(tile?.frameIndex) || tile.frameIndex === frameIndex;
+
+const frameOffsetForTile = (tile, frameIndex) => Number.isInteger(tile?.frameIndex)
+  ? 0
+  : frameIndex * tile.grid.width * tile.grid.height;
+
 function ModelPointChart({ tiles, times, frameIndex, point }) {
   const chart = useMemo(() => {
     if (!point || !times?.length) return null;
@@ -169,10 +175,12 @@ function ModelPointChart({ tiles, times, frameIndex, point }) {
       const gridIndex = nearestGridIndex(point, tile.grid);
       if (gridIndex < 0) return [];
       const pointCount = tile.grid.width * tile.grid.height;
+      const isSingleFrame = Number.isInteger(tile.frameIndex);
       return [{
         modelId,
         values: times.map((_, index) => {
-          const value = tile.rain.values[index * pointCount + gridIndex];
+          if (isSingleFrame && index !== tile.frameIndex) return null;
+          const value = tile.rain.values[(isSingleFrame ? 0 : index * pointCount) + gridIndex];
           return value === MISSING_VALUE ? null : value / 100;
         }),
       }];
@@ -219,7 +227,8 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const [viewport, setViewport] = useState(null);
   const [tiles, setTiles] = useState({});
   const [status, setStatus] = useState('loading');
-  const [tileLoading, setTileLoading] = useState(false);
+  const [providerLoading, setProviderLoading] = useState(false);
+  const [kimFrameLoading, setKimFrameLoading] = useState(false);
   const [error, setError] = useState('');
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -233,8 +242,6 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const [showConsensus, setShowConsensus] = useState(true);
   const [showPressure, setShowPressure] = useState(true);
   const [pressureModel, setPressureModel] = useState('kim-global');
-  const [kimPressure, setKimPressure] = useState(null);
-  const [kimWarmProgress, setKimWarmProgress] = useState(null);
   const [selectedPoint, setSelectedPoint] = useState(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const isCompare = activeView === 'compare';
@@ -243,6 +250,11 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     () => isCompare ? [...new Set([leftModel, rightModel])] : [activeView],
     [activeView, isCompare, leftModel, rightModel],
   );
+  const providerModels = useMemo(
+    () => visibleModels.filter((model) => model !== 'kim-global'),
+    [visibleModels],
+  );
+  const tileLoading = providerLoading || kimFrameLoading;
   const contourModel = isCompare
     ? visibleModels.includes(pressureModel) ? pressureModel : leftModel
     : activeView;
@@ -343,70 +355,81 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     if (!metadata || !viewport) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      setTileLoading(true);
+      if (!providerModels.length) {
+        setProviderLoading(false);
+        setTiles((current) => Object.fromEntries(
+          Object.entries(current).filter(([model]) => visibleModels.includes(model)),
+        ));
+        return;
+      }
+      setProviderLoading(true);
       setError('');
-      const requests = Promise.allSettled(visibleModels.map(async (model) => [model, await fetchGlobalModelTile({
-            model,
-            bbox: viewport.bbox,
-            step: requestStepForModel(model, viewport.step),
-            cycle: metadata.cycle,
-            signal: controller.signal,
-          })]));
-      requests
+      Promise.allSettled(providerModels.map(async (model) => [model, await fetchGlobalModelTile({
+        model,
+        bbox: viewport.bbox,
+        step: requestStepForModel(model, viewport.step),
+        cycle: metadata.cycle,
+        signal: controller.signal,
+      })]))
         .then((results) => {
           if (controller.signal.aborted) return;
-          const nextTiles = {};
+          const entries = [];
           const failures = [];
           results.forEach((result, index) => {
-            if (result.status === 'fulfilled') nextTiles[result.value[0]] = result.value[1];
-            else failures.push(`${MODEL_META[visibleModels[index]].short}: ${result.reason.message}`);
+            if (result.status === 'fulfilled') entries.push(result.value);
+            else failures.push(`${MODEL_META[providerModels[index]].short}: ${result.reason.message}`);
           });
-          setTiles(nextTiles);
-          if (!Object.keys(nextTiles).length) setError(failures.join(' / '));
-          else if (failures.length) setError(failures.join(' / '));
+          setTiles((current) => {
+            const next = Object.fromEntries(Object.entries(current).filter(([model]) =>
+              visibleModels.includes(model) && model === 'kim-global'));
+            entries.forEach(([model, tile]) => { next[model] = tile; });
+            return next;
+          });
+          if (failures.length) setError(failures.join(' / '));
         })
-        .finally(() => { if (!controller.signal.aborted) setTileLoading(false); });
+        .finally(() => { if (!controller.signal.aborted) setProviderLoading(false); });
     }, 0);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [isCompare, metadata, refreshTick, viewport, visibleModels]);
+  }, [metadata, providerModels, refreshTick, viewport, visibleModels]);
 
   useEffect(() => {
-    const kimRain = tiles['kim-global']?.rain;
-    if (kimRain?.available) return undefined;
-    if (!kimRain?.cacheProgress) return undefined;
+    if (!metadata || !viewport) return undefined;
     const controller = new AbortController();
-    let active = true;
-    const warm = async () => {
-      let progress = kimRain.cacheProgress;
-      let consecutiveFailures = 0;
-      while (active && !controller.signal.aborted) {
-        try {
-          const result = await warmGlobalModelCache({ signal: controller.signal });
-          progress = { count: result.frames, total: result.totalFrames };
-          consecutiveFailures = 0;
-          if (!active) return;
-          setKimWarmProgress(progress);
-          if (result.ready) {
-            setRefreshTick((value) => value + 1);
-            return;
-          }
-          await new Promise((resolve) => window.setTimeout(resolve, 3000));
-        } catch {
-          if (controller.signal.aborted) return;
-          consecutiveFailures += 1;
-          await new Promise((resolve) => window.setTimeout(
-            resolve,
-            Math.min(30000, 5000 * consecutiveFailures),
-          ));
-        }
+    const timer = window.setTimeout(() => {
+      if (!visibleModels.includes('kim-global')) {
+        setKimFrameLoading(false);
+        setTiles((current) => {
+          const next = { ...current };
+          delete next['kim-global'];
+          return next;
+        });
+        return;
       }
+      setKimFrameLoading(true);
+      setError('');
+      fetchGlobalModelFrame({
+        bbox: viewport.bbox,
+        cycle: metadata.cycle,
+        frameIndex,
+        signal: controller.signal,
+      })
+        .then((tile) => {
+          if (controller.signal.aborted) return;
+          setTiles((current) => ({ ...current, 'kim-global': tile }));
+        })
+        .catch((loadError) => {
+          if (!controller.signal.aborted) setError(`KIM: ${loadError.message}`);
+        })
+        .finally(() => { if (!controller.signal.aborted) setKimFrameLoading(false); });
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
     };
-    warm().catch(() => {});
-    return () => { active = false; controller.abort(); };
-  }, [tiles]);
+  }, [frameIndex, metadata, refreshTick, viewport, visibleModels]);
 
   const primaryTile = tiles[visibleModels.find((model) => tiles[model])] ?? null;
   const canvasHeight = useMemo(() => {
@@ -454,10 +477,12 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     const mappings = mappingRef.current;
     const map = mapRef.current;
     if (!canvas || !mappings || !map || !primaryTile) return;
+    if (visibleModels.includes('kim-global') && !tileMatchesFrame(tiles['kim-global'], frameIndex)) return;
     const context = canvas.getContext('2d');
     const image = context.createImageData(canvas.width, canvas.height);
     const pixels = image.data;
-    const allReady = visibleModels.every((model) => tiles[model]?.rain?.available);
+    const allReady = visibleModels.every((model) =>
+      tiles[model]?.rain?.available && tileMatchesFrame(tiles[model], frameIndex));
     const pixelCount = canvas.width * canvas.height;
     for (let index = 0; index < pixelCount; index += 1) {
       const x = index % canvas.width;
@@ -465,9 +490,8 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       const tile = tiles[model];
       const mapping = mappings[model];
       const sourceIndex = mapping?.baseIndex[index] ?? -1;
-      if (!tile?.rain?.available || sourceIndex < 0) continue;
-      const pointCount = tile.grid.width * tile.grid.height;
-      const frameOffset = frameIndex * pointCount;
+      if (!tile?.rain?.available || !tileMatchesFrame(tile, frameIndex) || sourceIndex < 0) continue;
+      const frameOffset = frameOffsetForTile(tile, frameIndex);
       const value = sampleGrid(tile.rain.values, frameOffset, sourceIndex, mapping.fractionX[index], mapping.fractionY[index], tile.grid.width);
       const color = value === MISSING_VALUE ? null : colorForEncoded(value);
       if (!color) continue;
@@ -481,10 +505,10 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
           const candidateTile = tiles[candidate];
           const candidateMapping = mappings[candidate];
           const candidateSourceIndex = candidateMapping?.baseIndex[index] ?? -1;
-          const candidatePointCount = candidateTile.grid.width * candidateTile.grid.height;
+          if (!candidateTile || !tileMatchesFrame(candidateTile, frameIndex) || candidateSourceIndex < 0) return count;
           const candidateValue = sampleGrid(
             candidateTile.rain.values,
-            frameIndex * candidatePointCount,
+            frameOffsetForTile(candidateTile, frameIndex),
             candidateSourceIndex,
             candidateMapping.fractionX[index],
             candidateMapping.fractionY[index],
@@ -509,35 +533,19 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   useEffect(() => { drawFrame(); }, [drawFrame]);
 
   useEffect(() => {
-    const tile = tiles[contourModel];
-    if (!showPressure || contourModel !== 'kim-global' || !tile || tile.pressure?.available || !viewport || !metadata) return undefined;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      fetchKimPressure({
-        bbox: viewport.bbox, step: requestStepForModel('kim-global', viewport.step), cycle: metadata.cycle,
-        frameIndex, signal: controller.signal,
-      }).then((result) => setKimPressure({
-        key: `${viewport.key}:${frameIndex}`,
-        pressure: result.pressure,
-      })).catch(() => {});
-    }, isPlaying ? 180 : 30);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [contourModel, frameIndex, isPlaying, metadata, showPressure, tiles, viewport]);
-
-  useEffect(() => {
     const map = mapRef.current;
     if (!map?.getSource('global-isobars')) return;
     const tile = tiles[contourModel];
-    const pressureOverride = kimPressure?.key === `${viewport?.key}:${frameIndex}`
-      ? kimPressure.pressure
-      : null;
-    const features = showPressure && tile ? buildPressureFeatures(tile, frameIndex, pressureOverride) : { contours: EMPTY_FEATURES, centers: EMPTY_FEATURES };
+    if (contourModel === 'kim-global' && tile && !tileMatchesFrame(tile, frameIndex)) return;
+    const features = showPressure && tile
+      ? buildPressureFeatures(tile, frameIndex)
+      : { contours: EMPTY_FEATURES, centers: EMPTY_FEATURES };
     map.getSource('global-isobars').setData(features.contours);
     map.getSource('global-pressure-centers').setData(features.centers);
     ['global-isobars-line', 'global-isobars-label', 'global-pressure-centers-label'].forEach((layerId) => {
       if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', showPressure ? 'visible' : 'none');
     });
-  }, [contourModel, frameIndex, kimPressure, showPressure, tiles, viewport]);
+  }, [contourModel, frameIndex, showPressure, tiles]);
 
   useEffect(() => {
     markerRef.current?.remove();
@@ -548,13 +556,14 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
 
   useEffect(() => {
     if (!isPlaying || times.length < 2) return undefined;
+    if (visibleModels.includes('kim-global') && !tileMatchesFrame(tiles['kim-global'], frameIndex)) return undefined;
     const interval = Math.max(60, Math.round((playDurationSec * 1000) / Math.max(1, rangeEnd - rangeStart)));
     const timer = window.setInterval(() => setFrameIndex((current) => {
       if (current >= rangeEnd) { setIsPlaying(false); return rangeEnd; }
       return current + 1;
     }), interval);
     return () => window.clearInterval(timer);
-  }, [isPlaying, playDurationSec, rangeEnd, rangeStart, times.length]);
+  }, [frameIndex, isPlaying, playDurationSec, rangeEnd, rangeStart, tiles, times.length, visibleModels]);
 
   useEffect(() => {
     if (!isDraggingSplit) return undefined;
@@ -569,11 +578,12 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   }, [isDraggingSplit]);
 
   const currentTime = times[frameIndex] ?? null;
-  const currentModelAvailable = isCompare ? visibleModels.some((model) => tiles[model]?.rain?.available) : tiles[activeView]?.rain?.available;
+  const tileReady = (model) => tiles[model]?.rain?.available && tileMatchesFrame(tiles[model], frameIndex);
+  const currentModelAvailable = isCompare ? visibleModels.some(tileReady) : tileReady(activeView);
   const unavailableModels = visibleModels.filter((model) => tiles[model] && !tiles[model].rain?.available);
   const unavailableNotice = unavailableModels.length
     ? unavailableModels.map((model) => {
-        const progress = model === 'kim-global' ? kimWarmProgress ?? tiles[model].rain?.cacheProgress : tiles[model].rain?.cacheProgress;
+        const progress = tiles[model].rain?.cacheProgress;
         const suffix = progress ? ` (${progress.count}/${progress.total}프레임)` : '';
         return `${MODEL_META[model].short} 자료 준비 중${suffix}`;
       }).join(' · ')
