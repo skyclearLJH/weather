@@ -1,9 +1,8 @@
 // 방송모드 위성 영상 뷰 (작업 중 — main.jsx의 ?satellite=1 게이트로만 진입).
 //
 // 천리안2A(GK2A) IR105 관측을 구면 지도 위에 그리고, 휘도온도에서 유도한
-// 의사 운정고도로 구름을 3D 돌출(과장)시켜 표현한다. 데이터는 NOAA 공개
-// 버킷의 FD 원본 하나에서 두 해상도로 뽑는다: 전구 22km(FD) 배경 + 한반도
-// 주변 6km(KO) 정밀. 과거 12시간을 10분 간격으로 조회할 수 있다.
+// 의사 운정고도로 구름을 3D 돌출(과장)시켜 표현한다. NOAA 공개 버킷의 FD
+// 원본에서 남반구를 제외한 북반구를 약 4km 해상도로 표시한다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarClock } from 'lucide-react';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
@@ -13,14 +12,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DN_TO_BT_KELVIN,
   FD_GRID,
-  KO_GRID,
-  LA_GRID,
   buildSatTimeline,
   fdCellToLonLat,
-  fetchSatFrame,
   fetchSatFramePair,
-  koCellToLonLat,
-  laCellToLonLat,
   probeLatestSatDate,
 } from '../api/satApi';
 import {
@@ -37,16 +31,14 @@ import './SatelliteView.css';
 
 const PLAY_RANGE_VIEW_ID = 'satellite';
 
-// 6시간(36프레임). 12시간(72프레임)은 프레임당 약 4.3MB라 브라우저가 ~314MB를 들고
-// 있어야 해서, 메모리 압박으로 캐시가 밀려나며 스크럽 시 빈 화면이 보였다.
-// 6시간이면 ~160MB로 절반이고, 채워야 할 프레임도 절반이라 로딩이 안정적이다.
+// 북반구 4km DN 한 장은 약 7.56MB다. 6시간(최대 37프레임)은 약 280MB지만,
+// 12시간은 약 552MB라 브라우저 메모리와 네트워크 부담이 지나치게 커진다.
 // 워커(satellite-precompute.js)의 TIMELINE_HOURS와 반드시 같게 유지할 것.
 const TIMELINE_HOURS = 6;
 const STEP_MINUTES = 10;
 const AUTO_REFRESH_MS = 60 * 1000;
 const SATELLITE_ARCHIVE_MIN_INPUT = '2023-02-16T15:00';
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
-const LA_PREFETCH_WORKERS = 2;
 const PREFETCH_RETRY_BASE_MS = 2500;
 const PREFETCH_RETRY_MAX_MS = 30000;
 
@@ -303,7 +295,7 @@ const MAP_STYLE = {
   },
   light: { anchor: 'map', position: [1.5, 90, 80] },
   sources: {
-    // 전 세계 육지 — FD 전구 디스크가 보여주는 모든 영역(인도·중앙아시아·호주 등)을 덮는다
+    // 세계 육지 — FD 북반구 디스크가 보여주는 영역을 덮는다.
     land: { type: 'geojson', data: '/data/map/land-50m-world.geojson' },
     sido: { type: 'geojson', data: '/data/map/kr-sido-20260701.geojson' },
   },
@@ -339,11 +331,10 @@ const MAP_STYLE = {
   ],
 };
 
-// KO(동아시아) 3D 높이 메쉬는 데이터 해상도(1809x1066)와 분리해 성기게 만든다.
-// STEP=4 → 453x267 정점(약 12만). 구름 '이미지'는 풀해상도 DN 텍스처를 프래그먼트
-// 셰이더에서 샘플해 선명하게 그리고, 3D 돌출(높이)만 이 성긴 메쉬가 담당한다.
-const KO_MESH_STEP = 4;
-const LA_MESH_STEP = 2;
+// 북반구 FD의 3D 높이 메쉬는 데이터 해상도(2750x1375)와 분리해 성기게 만든다.
+// STEP=5 → 551x276 정점(약 15만). 구름 이미지는 풀해상도 DN 텍스처로 선명하게
+// 그리고, 3D 돌출 높이만 이 성긴 메쉬가 담당한다.
+const FD_MESH_STEP = 5;
 
 // --- 커스텀 3D 구름 레이어 ---
 const createCloudLayer = () => {
@@ -361,7 +352,7 @@ const createCloudLayer = () => {
     // 행렬이 메르카토르 z 단위를 기대하므로 aZScale(위도별 m→merc 변환)을 곱한다.
     // 색(강도)은 uUseTexture일 때 풀해상도 DN 텍스처(uEaTex)를 4탭 이중선형 샘플 →
     // DN→강도 LUT(uLut)로 매핑해 프래그먼트마다 선명하게 계산한다. 고도·음영·대류는
-    // 성긴 메쉬의 정점 보간값을 쓴다(3D 릴리프는 성겨도 됨). FD는 uUseTexture=0.
+    // 성긴 메쉬의 정점 보간값을 쓴다(3D 릴리프는 성겨도 됨).
     getShader(gl, shaderDescription) {
       if (this.shaderMap.has(shaderDescription.variantName)) {
         return this.shaderMap.get(shaderDescription.variantName);
@@ -481,7 +472,7 @@ const createCloudLayer = () => {
       this.map = map;
       // 전용 VAO: MapLibre(WebGL2)는 레이어마다 VAO를 바인딩한다. 커스텀 레이어가
       // 전역 VAO에 attribute를 설정하면, 태풍 진로도의 fill/line(과거의 지명 symbol)
-      // 레이어가 추가되는 순간 MapLibre가 남긴 VAO 상태와 뒤섞여 FD(전구) 드로우가
+      // 레이어가 추가되는 순간 MapLibre가 남긴 VAO 상태와 뒤섞여 FD 드로우가
       // 깨졌다(FD가 통째로 사라지거나 일부 프레임만 그려짐). 우리 VAO 안에서만
       // attribute/인덱스를 설정하고 끝나면 해제해 완전히 격리한다.
       this.vao = gl.createVertexArray ? gl.createVertexArray() : null;
@@ -586,80 +577,29 @@ const createCloudLayer = () => {
         return tex;
       };
 
-      // KO: 동아시아 정밀. 데이터는 1809x1066(4km)이지만 높이 메쉬는 STEP=4로 성기게.
-      // texCoord는 각 성긴 정점을 풀해상도 텍스처의 해당 위치로 매핑한다.
-      const KW = KO_GRID.width;
-      const KH = KO_GRID.height;
-      const koMeshW = Math.floor((KW - 1) / KO_MESH_STEP) + 1;
-      const koMeshH = Math.floor((KH - 1) / KO_MESH_STEP) + 1;
-      const koDataCol = (mi) => Math.min(mi * KO_MESH_STEP, KW - 1);
-      const koDataRow = (mj) => Math.min(mj * KO_MESH_STEP, KH - 1);
-      const koMesh = buildMesh(
-        koMeshW,
-        koMeshH,
-        (mi, mj) => koCellToLonLat(koDataCol(mi), koDataRow(mj)),
-        null,
-        (frameData, mi, mj) => frameData[koDataRow(mj) * KW + koDataCol(mi)],
-        (mi, mj) => [(koDataCol(mi) + 0.5) / KW, (koDataRow(mj) + 0.5) / KH],
-      );
-      koMesh.textured = true;
-      koMesh.dataW = KW;
-      koMesh.dataH = KH;
-      koMesh.dataTex = makeDataTex();
-      koMesh.prevDataTex = makeDataTex();
-
-      // LA: NOAA 한반도 국지 관측. 작은 원본으로 첫 화면을 먼저 채우고 FD/KO가
-      // 준비되면 제거한다. 격자 수를 줄여 초기 WebGL 메쉬 생성 부담도 낮춘다.
-      const LW = LA_GRID.width;
-      const LH = LA_GRID.height;
-      const laMeshW = Math.floor((LW - 1) / LA_MESH_STEP) + 1;
-      const laMeshH = Math.floor((LH - 1) / LA_MESH_STEP) + 1;
-      const laDataCol = (mi) => Math.min(mi * LA_MESH_STEP, LW - 1);
-      const laDataRow = (mj) => Math.min(mj * LA_MESH_STEP, LH - 1);
-      const laMesh = buildMesh(
-        laMeshW,
-        laMeshH,
-        (mi, mj) => laCellToLonLat(laDataCol(mi), laDataRow(mj)),
-        null,
-        (frameData, mi, mj) => frameData[laDataRow(mj) * LW + laDataCol(mi)],
-        (mi, mj) => [(laDataCol(mi) + 0.5) / LW, (laDataRow(mj) + 0.5) / LH],
-      );
-      laMesh.textured = true;
-      laMesh.dataW = LW;
-      laMesh.dataH = LH;
-      laMesh.dataTex = makeDataTex();
-      laMesh.prevDataTex = makeDataTex();
-
-      // FD: 디스크 밖 정점 무효화 + KO 크롭 안쪽은 KO 메쉬에 맡긴다.
-      // 둘 다 FD 픽셀 좌표계라 사각형 비교면 충분 (여유 22px ≈ 44km 겹침).
-      const koColMin = KO_GRID.col0 + 22;
-      const koColMax = KO_GRID.col0 + KO_GRID.width * KO_GRID.factor - 22;
-      const koRowMin = KO_GRID.row0 + 22;
-      const koRowMax = KO_GRID.row0 + KO_GRID.height * KO_GRID.factor - 22;
-      const fdCenter = (FD_GRID.factor - 1) / 2;
-      const fdInsideKo = (mi, mj) => {
-        const srcCol = mi * FD_GRID.factor + fdCenter;
-        const srcRow = mj * FD_GRID.factor + fdCenter;
-        return srcCol >= koColMin && srcCol <= koColMax && srcRow >= koRowMin && srcRow <= koRowMax;
-      };
+      // FD: 북반구 전체를 약 4km 데이터 텍스처로 그리고, 높이 메쉬만 STEP=5로 줄인다.
+      const FW = FD_GRID.width;
+      const FH = FD_GRID.height;
+      const fdMeshW = Math.ceil((FW - 1) / FD_MESH_STEP) + 1;
+      const fdMeshH = Math.ceil((FH - 1) / FD_MESH_STEP) + 1;
+      const fdDataCol = (mi) => Math.min(mi * FD_MESH_STEP, FW - 1);
+      const fdDataRow = (mj) => Math.min(mj * FD_MESH_STEP, FH - 1);
       const fdMesh = buildMesh(
-        FD_GRID.width,
-        FD_GRID.height,
-        (mi, mj) => fdCellToLonLat(mi, mj),
-        (mi, mj) =>
-          !(fdInsideKo(mi, mj) && fdInsideKo(mi + 1, mj) && fdInsideKo(mi, mj + 1) && fdInsideKo(mi + 1, mj + 1)),
-        (frameData, mi, mj) => frameData[mj * FD_GRID.width + mi],
+        fdMeshW,
+        fdMeshH,
+        (mi, mj) => fdCellToLonLat(fdDataCol(mi), fdDataRow(mj)),
         null,
+        (frameData, mi, mj) => frameData[fdDataRow(mj) * FW + fdDataCol(mi)],
+        (mi, mj) => [(fdDataCol(mi) + 0.5) / FW, (fdDataRow(mj) + 0.5) / FH],
       );
+      fdMesh.textured = true;
+      fdMesh.dataW = FW;
+      fdMesh.dataH = FH;
+      fdMesh.dataTex = makeDataTex();
+      fdMesh.prevDataTex = makeDataTex();
 
-      // KO 프레임이 없을 때는 FD가 크롭 영역까지 채우도록 전체 인덱스 버퍼를 따로 둔다.
-      const fdFullIndices = fdMesh.buildIndices(null);
-      fdMesh.indexBufferFull = fdMesh.makeBuffer(gl.ELEMENT_ARRAY_BUFFER, fdFullIndices, gl.STATIC_DRAW);
-      fdMesh.indexCountFull = fdFullIndices.length;
-
-      // 그리기 순서: FD(배경) → KO(정밀) → LA(빠른 첫 화면)
-      this.meshes = [fdMesh, koMesh, laMesh];
-      this.meshByArea = { ko: koMesh, fd: fdMesh, la: laMesh };
+      this.meshes = [fdMesh];
+      this.meshByArea = { fd: fdMesh };
       if (this.vao) gl.bindVertexArray(null);
     },
 
@@ -680,7 +620,7 @@ const createCloudLayer = () => {
     },
 
     // DN → (강도, 고도 m, 음영, 대류) 변환: 메쉬별 셀 중심 샘플.
-    // 텍스처 메쉬(KO)는 강도(x)를 프래그먼트에서 텍스처로 계산하므로 정점 강도는 안 쓰지만,
+    // 텍스처 메쉬는 강도(x)를 프래그먼트에서 텍스처로 계산하므로 정점 강도는 안 쓰지만,
     // 고도(y)·음영(z)·대류(w)는 여기서 채운다. 또 풀해상도 DN을 GPU 텍스처로 올린다.
     convertMesh(gl, mesh) {
       const { w, h, cloudArray: cloud, heightScratch: heights, frameData } = mesh;
@@ -765,7 +705,7 @@ const createCloudLayer = () => {
       gl.uniform1f(shader.uExag, this.exaggeration);
       gl.uniform1f(shader.uConvOn, this.convHighlight ? 1 : 0);
 
-      // LUT는 유닛1, KO/LA 풀해상도 DN 텍스처는 유닛0에 바인딩.
+      // LUT는 유닛1, FD 풀해상도 DN 텍스처는 유닛0에 바인딩.
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
       gl.uniform1i(shader.uLut, 1);
@@ -774,7 +714,7 @@ const createCloudLayer = () => {
       // GL 상태 위생: 태풍 진로도의 fill/line 레이어(예전 지명 라벨과 동일)를 얹으면
       // MapLibre가 레이어마다 서로 다른 gl.depthRange 슬라이스를 배정하고 STENCIL로
       // 타일을 클리핑하는데, 커스텀 구름 레이어가 그 depth/스텐실 상태를 물려받아
-      // FD(전구) 구름이 depth·스텐실에 잘려 사라지거나 간헐적으로만 보였다.
+      // FD 구름이 depth·스텐실에 잘려 사라지거나 간헐적으로만 보였다.
       // 구름은 지구 뒷면을 셰이더 클립(projectTileWithElevation)으로 숨기므로 depth
       // 테스트가 필요 없다 → depth·스텐실을 꺼서 다른 레이어의 잔여 상태와 분리한다.
       gl.disable(gl.DEPTH_TEST);
@@ -784,9 +724,8 @@ const createCloudLayer = () => {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-      const koHasData = !!this.meshByArea.ko.frameData;
       // 한 메쉬를 지정한 구름버퍼/텍스처/알파로 그린다.
-      const drawMesh = (mesh, cloudBuffer, dataTex, alpha, useFull) => {
+      const drawMesh = (mesh, cloudBuffer, dataTex, alpha) => {
         if (mesh.textured) {
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, dataTex);
@@ -809,14 +748,13 @@ const createCloudLayer = () => {
           gl.enableVertexAttribArray(shader.aTexCoord);
           gl.vertexAttribPointer(shader.aTexCoord, 2, gl.FLOAT, false, 0, 0);
         }
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, useFull ? mesh.indexBufferFull : mesh.indexBuffer);
-        gl.drawElements(gl.TRIANGLES, useFull ? mesh.indexCountFull : mesh.indexCount, gl.UNSIGNED_INT, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+        gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
       };
 
       for (const mesh of this.meshes) {
         if (!mesh.frameData) continue;
-        const useFull = mesh.indexBufferFull && !koHasData;
-        drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, 1, useFull);
+        drawMesh(mesh, mesh.cloudBuffer, mesh.dataTex, 1);
       }
 
       // MapLibre가 이어서 자기 레이어를 그리므로 VAO 바인딩을 해제해 돌려준다.
@@ -828,7 +766,7 @@ const createCloudLayer = () => {
 
 // --- 태풍 진로도 커스텀 WebGL 레이어 ---
 // MapLibre의 fill/line(GeoJSON) 레이어로 그리면 두 가지 문제가 있었다:
-//  (1) 벡터 레이어가 추가되는 순간 커스텀 구름 레이어의 FD(전구)가 깨졌다.
+//  (1) 벡터 레이어가 추가되는 순간 커스텀 구름 레이어의 FD가 깨졌다.
 //  (2) setData가 비동기라, 껐다 켤 때 소스에 남은 완성 진로도가 한 프레임 새어나왔다.
 // 진로도도 커스텀 레이어로 직접 그리면 둘 다 구조적으로 사라진다. 지오메트리는
 // 매 프레임 CPU에서 만들어도 정점 수백 개 수준이라 부담이 없고, 리빌 진행도를
@@ -1029,9 +967,7 @@ function SatelliteView({
   const [historyEnd, setHistoryEnd] = useState(null);
   const [historyInput, setHistoryInput] = useState('');
   const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState(false);
-  const [, setReadyFrameTimes] = useState(() => new Set());
-  const pendingFramesRef = useRef({ ko: null, fd: null, la: null });
-  const readyFrameTimesRef = useRef(new Set());
+  const pendingFramesRef = useRef({ fd: null });
   const fullReadyFrameTimesRef = useRef(new Set());
   const pendingConvRangeRef = useRef(SEASON_CONV_KM.summer);
   const exaggerationRef = useRef(6);
@@ -1070,20 +1006,9 @@ function SatelliteView({
     [currentDate],
   );
 
-  const markFrameReady = useCallback((date) => {
-    const frameTime = date.getTime();
-    if (readyFrameTimesRef.current.has(frameTime)) return;
-    readyFrameTimesRef.current.add(frameTime);
-    setReadyFrameTimes(new Set(readyFrameTimesRef.current));
+  const markFullFrameReady = useCallback((date) => {
+    fullReadyFrameTimesRef.current.add(date.getTime());
   }, []);
-
-  const markFullFrameReady = useCallback(
-    (date) => {
-      fullReadyFrameTimesRef.current.add(date.getTime());
-      markFrameReady(date);
-    },
-    [markFrameReady],
-  );
 
   // 중심 마크 클릭 시 상세 팝업(중심기압·최대풍속·폭풍/강풍반경). 모든 모드 공통.
   const openTyphoonPopup = useCallback((map, lngLat, props) => {
@@ -1171,10 +1096,8 @@ function SatelliteView({
 
       // 레이어 생성 전에 도착한 프레임이 있으면 즉시 반영
       layer.setConvRange(...pendingConvRangeRef.current);
-      for (const area of ['ko', 'fd']) {
-        if (pendingFramesRef.current[area]) {
-          layer.setFrame(area, pendingFramesRef.current[area]);
-        }
+      if (pendingFramesRef.current.fd) {
+        layer.setFrame('fd', pendingFramesRef.current.fd);
       }
       mapReadyRef.current = true;
       setMapReady(true);
@@ -1328,7 +1251,7 @@ function SatelliteView({
     }
   }, [mapZoom]);
 
-  // 최신 시각 탐색 → 12시간 타임라인 구성 (5분마다 갱신)
+  // 최신 시각 탐색 → 6시간 타임라인 구성 (1분마다 갱신)
   useEffect(() => {
     let active = true;
 
@@ -1352,13 +1275,9 @@ function SatelliteView({
           if (heldIndex >= 0) nextIndex = heldIndex;
         }
         const nextFrameTimes = new Set(next.map((date) => date.getTime()));
-        readyFrameTimesRef.current = new Set(
-          [...readyFrameTimesRef.current].filter((time) => nextFrameTimes.has(time)),
-        );
         fullReadyFrameTimesRef.current = new Set(
           [...fullReadyFrameTimesRef.current].filter((time) => nextFrameTimes.has(time)),
         );
-        setReadyFrameTimes(new Set(readyFrameTimesRef.current));
         setTimeline(next);
         setFrameIndex(nextIndex);
       } catch (error) {
@@ -1389,9 +1308,9 @@ function SatelliteView({
         pair = await fetchSatFramePair(currentDate, true, 'interactive');
       } catch (error) {
         if (!active) return;
-        // 전체 프레임(FD/KO)이 실패해도 화면을 지우거나 오류를 띄우지 않고 직전 전체
+        // 전체 프레임(FD)이 실패해도 화면을 지우거나 오류를 띄우지 않고 직전 전체
         // 프레임을 그대로 둔다. 이미 뭔가 그려져 있으면 조용히 유지한다. (예전엔 빠른
-        // 첫화면용 LA 보조 레이어를 따로 얹었는데, FD/KO가 실패한 시각엔 그 영역만
+        // 첫화면용 LA 보조 레이어를 따로 얹었는데, FD가 실패한 시각엔 그 영역만
         // 새 자료로 남아 이전 프레임 위에서 그 부분만 튀어 보였다 — 방송용으로
         // 부적합해 LA 표시를 제거했다.)
         if (!hadFrameBefore) setStatus(error.message);
@@ -1402,11 +1321,9 @@ function SatelliteView({
       const range = seasonalConvRange(currentDate);
       pendingConvRangeRef.current = range;
       cloudLayerRef.current?.setConvRange(...range);
-      for (const area of ['ko', 'fd']) {
-        const data = pair[area].data;
-        pendingFramesRef.current[area] = data;
-        cloudLayerRef.current?.setFrame(area, data);
-      }
+      const data = pair.fd.data;
+      pendingFramesRef.current.fd = data;
+      cloudLayerRef.current?.setFrame('fd', data);
       setStatus(null);
     })();
 
@@ -1419,71 +1336,9 @@ function SatelliteView({
     return () => {
       active = false;
     };
-  }, [currentDate, frameIndex, markFrameReady, markFullFrameReady, timeline]);
+  }, [currentDate, frameIndex, markFullFrameReady, timeline]);
 
-  // 가벼운 LA 프레임은 전 구간을 먼저 채운다. 실패 시 다른 시각을 계속 받은 뒤
-  // 지수 백오프로 재시도해 일시 오류 하나가 전체 준비를 막지 않게 한다.
-  useEffect(() => {
-    if (timeline.length === 0) return undefined;
-    let active = true;
-    const inFlight = new Set();
-    const attempts = new Map();
-    const retryAt = new Map();
-
-    const nearestPendingIndex = () => {
-      const center = Math.min(Math.max(frameIndexRef.current, 0), timeline.length - 1);
-      let best = -1;
-      let bestDist = Infinity;
-      for (let i = 0; i < timeline.length; i++) {
-        const frameTime = timeline[i].getTime();
-        if (
-          readyFrameTimesRef.current.has(frameTime) ||
-          inFlight.has(i) ||
-          (retryAt.get(i) ?? 0) > Date.now()
-        ) {
-          continue;
-        }
-        const dist = Math.abs(i - center);
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = i;
-        }
-      }
-      return best;
-    };
-
-    const worker = async () => {
-      while (active) {
-        const index = nearestPendingIndex();
-        if (index < 0) {
-          if (timeline.every((date) => readyFrameTimesRef.current.has(date.getTime()))) return;
-          await waitFor(500);
-          continue;
-        }
-        inFlight.add(index);
-        try {
-          await fetchSatFrame(timeline[index], 'la');
-          if (active) markFrameReady(timeline[index]);
-          attempts.delete(index);
-          retryAt.delete(index);
-        } catch {
-          const attempt = (attempts.get(index) ?? 0) + 1;
-          attempts.set(index, attempt);
-          retryAt.set(index, Date.now() + prefetchRetryDelay(attempt));
-        } finally {
-          inFlight.delete(index);
-        }
-      }
-    };
-
-    Array.from({ length: LA_PREFETCH_WORKERS }, () => worker());
-
-    return () => {
-      active = false;
-    };
-  }, [markFrameReady, timeline]);
-
-  // FD/KO 고해상도 쌍도 가까운 시각부터 전 구간을 한 장씩 보강한다. 직렬 요청으로
+  // FD 고해상도 프레임도 가까운 시각부터 전 구간을 한 장씩 보강한다. 직렬 요청으로
   // 서버 메모리 부담을 제한하고, 실패 프레임은 뒤로 돌려 계속 재시도한다.
   useEffect(() => {
     if (timeline.length === 0) return undefined;

@@ -1,4 +1,4 @@
-const CACHE_PREFIX = 'satellite/gk2a-ir/v1/pairs/';
+const CACHE_PREFIX = 'satellite/gk2a-ir/v2/pairs/';
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 // src/components/SatelliteView.jsx의 TIMELINE_HOURS와 반드시 같아야 한다.
 // 워커가 더 넓은 구간을 채우면 화면에 안 쓰이는 프레임까지 저장해 KV를 낭비한다.
@@ -13,7 +13,7 @@ const TIMELINE_HOURS = 6;
 // 한도의 6% 수준이라, 정상 운영에선 절대 닿지 않고 폭주 때만 제동을 건다.
 // env.MAX_SATELLITE_WRITES_PER_DAY로 덮어쓸 수 있다.
 const DEFAULT_MAX_WRITES_PER_DAY = 2000;
-const WRITE_BUDGET_PREFIX = 'satellite/gk2a-ir/v1/write-budget/';
+const WRITE_BUDGET_PREFIX = 'satellite/gk2a-ir/v2/write-budget/';
 
 const jsonResponse = (payload, status = 200) =>
   new Response(JSON.stringify(payload), {

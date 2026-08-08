@@ -88,10 +88,10 @@ export const lccKmToLonLat = (xKm, yKm) => {
   return [lon, phi / DEG];
 };
 
-// --- 전구(FD) GEOS 격자 ---
-// 원본 5500x5500(2km)을 서버가 11x11 블록 최대로 500x500으로 다운샘플.
+// --- 북반구 FD GEOS 격자 ---
+// 원본 5500x5500(2km)의 북쪽 절반을 서버가 2x2 블록 최대로 다운샘플.
 // 투영 상수는 gk2a_ami_le1b_ir105_fd020ge_202607180500.nc 전역 속성에서 추출.
-export const FD_GRID = { width: 500, height: 500, factor: 11 };
+export const FD_GRID = { width: 2750, height: 1375, factor: 2 };
 
 const FD_CFAC = 20425338.903339352;
 const FD_LFAC = -20425338.903339352;
@@ -132,19 +132,6 @@ export const fdCellToLonLat = (col, row) =>
   geosPixelToLonLat(
     col * FD_GRID.factor + (FD_GRID.factor - 1) / 2,
     row * FD_GRID.factor + (FD_GRID.factor - 1) / 2,
-  );
-
-// --- 동아시아 정밀 크롭(KO) 격자 ---
-// FD 원본 2km에서 (1071,354)부터 3618x2132 픽셀을 2x2 블록최대(4km)로 잘라
-// 1809x1066으로 제공 (대략 lon 95~168E / lat 5~55N, 기상청 EA 섹터 상당).
-// 서버 gk2a-ir.js의 KO_CROP과 반드시 일치. 클라이언트는 이 격자를 3D 메쉬가
-// 아니라 텍스처로 입혀 렌더하므로(정점 수와 분리) 고해상도도 가볍게 그린다.
-export const KO_GRID = { width: 1809, height: 1066, col0: 1071, row0: 354, factor: 2 };
-
-export const koCellToLonLat = (col, row) =>
-  geosPixelToLonLat(
-    KO_GRID.col0 + col * KO_GRID.factor + (KO_GRID.factor - 1) / 2,
-    KO_GRID.row0 + row * KO_GRID.factor + (KO_GRID.factor - 1) / 2,
   );
 
 // NOAA Local Area: 500x500, 약 2km. FD보다 약 60배 작은 원본이라 첫 화면에 사용한다.
@@ -204,17 +191,16 @@ export const buildSatTimeline = (latestDate, hours = 12, stepMinutes = 10) => {
 
 // --- 프레임 로드 ---
 const FRAME_CACHE = new Map();
-const FRAME_CACHE_LIMIT = 220;
+const FRAME_CACHE_LIMIT = 60;
 const PAIR_CACHE = new Map();
-const PAIR_CACHE_LIMIT = 90;
+const PAIR_CACHE_LIMIT = 42;
 const BUNDLE_CACHE = new Map();
-const BUNDLE_CACHE_LIMIT = 30;
+const BUNDLE_CACHE_LIMIT = 14;
 
-// 응답 매직: EA는 'GKIR', FD는 'GKFD', KO는 'GKKO'
+// 응답 매직: EA는 'GKIR', FD는 'GKFD'
 const FRAME_MAGIC = {
   ea: [0x47, 0x4b, 0x49, 0x52],
   fd: [0x47, 0x4b, 0x46, 0x44],
-  ko: [0x47, 0x4b, 0x4b, 0x4f],
   la: [0x47, 0x4b, 0x4c, 0x41],
 };
 
@@ -269,16 +255,19 @@ const parsePairFrame = (input, dateUtc) => {
   const head = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const koLength = head.getUint32(4, true);
   const fdLength = head.getUint32(8, true);
-  if (16 + koLength + fdLength !== bytes.length) {
+  const version = head.getUint32(12, true);
+  if (version !== 2 || koLength !== 0 || 16 + fdLength !== bytes.length) {
     throw new Error('위성 묶음 자료 길이 오류');
   }
-  const koBytes = bytes.slice(16, 16 + koLength);
-  const fdBytes = bytes.slice(16 + koLength);
+  const fdBytes = bytes.subarray(16);
+  const fd = parseAreaFrame(fdBytes, 'fd', dateUtc);
+  if (fd.width !== FD_GRID.width || fd.height !== FD_GRID.height) {
+    throw new Error('위성 북반구 격자 크기 오류');
+  }
   return {
     key: formatSatDateUtc(dateUtc),
     date: dateUtc,
-    ko: parseAreaFrame(koBytes, 'ko', dateUtc),
-    fd: parseAreaFrame(fdBytes, 'fd', dateUtc),
+    fd,
   };
 };
 
@@ -333,7 +322,7 @@ const parseBundle = async (buffer) => {
 const fetchSatBundle = (bundleStart) => {
   if (BUNDLE_CACHE.has(bundleStart)) return BUNDLE_CACHE.get(bundleStart);
   const promise = (async () => {
-    const response = await fetch(`/api/gk2a-ir?bundle=${bundleStart}`, {
+    const response = await fetch(`/api/gk2a-ir?bundle=${bundleStart}&format=2`, {
       signal: AbortSignal.timeout(90000),
     });
     if (response.status === 404) return new Map();
@@ -353,7 +342,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const fetchDirectPair = async (dateUtc, priority = 'background') => {
   const date = formatSatDateUtc(dateUtc);
   const priorityQuery = priority === 'interactive' ? '&priority=interactive' : '';
-  const url = `/api/gk2a-ir?date=${date}&area=pair${priorityQuery}`;
+  const url = `/api/gk2a-ir?date=${date}&area=pair&format=2${priorityQuery}`;
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (attempt > 0) await delay(500 * attempt);
@@ -411,9 +400,9 @@ export const fetchSatFramePair = (dateUtc, preferSingle = false, priority = 'bac
 };
 
 export const fetchSatFrame = async (dateUtc, area = 'ea') => {
-  if (area === 'ko' || area === 'fd') {
+  if (area === 'fd') {
     const pair = await fetchSatFramePair(dateUtc);
-    return pair[area];
+    return pair.fd;
   }
   const key = `${area}:${formatSatDateUtc(dateUtc)}`;
   if (FRAME_CACHE.has(key)) {
@@ -482,7 +471,7 @@ export const probeLatestSatDate = async (beforeDate = null) => {
       continue;
     }
     try {
-      await fetchSatFrame(candidate, 'ko');
+      await fetchSatFrame(candidate, 'fd');
       return candidate;
     } catch {
       candidate = new Date(candidate.getTime() - 10 * 60 * 1000);

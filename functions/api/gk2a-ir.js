@@ -21,7 +21,7 @@ const OUT_WIDTH = SRC_WIDTH / FACTOR;
 const OUT_HEIGHT = SRC_HEIGHT / FACTOR;
 const HISTORICAL_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const RECENT_AGE_MS = 30 * 60 * 1000;
-const SATELLITE_CACHE_VERSION = 'v1';
+const SATELLITE_CACHE_VERSION = 'v2';
 const SATELLITE_CACHE_PREFIX = `satellite/gk2a-ir/${SATELLITE_CACHE_VERSION}/pairs/`;
 const SATELLITE_RETENTION_SECONDS = 20 * 60 * 60;
 
@@ -200,21 +200,17 @@ const parseUtcDate = (value) => {
 // 항상 오프셋 6524에 있고(검증 후 전체 스캔 폴백), 청크 주소만 프레임마다 다르다.
 const FD_SRC = 5500;
 const FD_CHUNK = 1375;
-const FD_FACTOR = 11; // 1375의 약수 → 청크 단위 처리 가능, 출력 500x500
-const FD_OUT = FD_SRC / FD_FACTOR;
+const FD_FACTOR = 2;
+const FD_NORTH_SRC_HEIGHT = FD_SRC / 2;
+const FD_OUT_WIDTH = FD_SRC / FD_FACTOR;
+const FD_OUT_HEIGHT = FD_NORTH_SRC_HEIGHT / FD_FACTOR;
 const FD_DATASET_HEADER_HINT = 6524;
 const LA_SRC = 500;
 const LA_CHUNK = 500;
 const LA_DATASET_HEADER_HINT = 6527;
 
-// 동아시아 정밀 크롭(area=ko): FD 원본 2km에서 대략 lon 95~168E / lat 5~55N
-// (기상청 EA 섹터 상당)을 덮는 GEOS 픽셀 사각형을 2x2 블록최대(4km)로 잘라낸다.
-// 같은 NOAA 파일에서 나오므로 KMA 데이터 용량을 전혀 쓰지 않는다.
-// 클라이언트는 이 격자를 3D 높이 메쉬가 아니라 텍스처로 입혀 렌더하므로(정점 수와
-// 분리) 1809x1066 해상도도 가볍게 그린다. satApi.js의 KO_GRID와 반드시 일치해야 함.
-const KO_CROP = { col0: 1071, row0: 354, srcW: 3618, srcH: 2132, factor: 2 };
-const KO_OUT_W = KO_CROP.srcW / KO_CROP.factor; // 1809
-const KO_OUT_H = KO_CROP.srcH / KO_CROP.factor; // 1066
+// 남반구는 방송 화면에서 사용하지 않는다. FD 원본의 북쪽 절반만 2x2 블록 최대
+// (약 4km)로 변환하며, 클라이언트의 FD_GRID와 크기가 반드시 일치해야 한다.
 
 const inflateBytes = async (bytes) => {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
@@ -380,12 +376,12 @@ const walkFdChunkBtree = (buf, dv, addr, out) => {
   }
 };
 
-// 처리 결과(ko/fd 출력 바이트) 메모리 캐시 — 로컬 개발(엣지 캐시 없음)과
+// 처리 결과(FD/LA 출력 바이트) 메모리 캐시 — 로컬 개발(엣지 캐시 없음)과
 // 워커 웜 아이솔레이트에서 재계산을 막는다.
 const FD_OUTPUT_CACHE = new Map(); // `${date}:${area}` → Uint8Array
-const FD_OUTPUT_CACHE_LIMIT = 40;
+const FD_OUTPUT_CACHE_LIMIT = 8;
 const LA_PROCESS_IN_FLIGHT = new Map();
-const FD_PROCESS_IN_FLIGHT = new Map(); // date → Promise<{ko, fd}>
+const FD_PROCESS_IN_FLIGHT = new Map(); // date → Promise<{fd}>
 const SAT_PAIR_WRITE_IN_FLIGHT = new Map(); // date → Promise<{raw, compressed}>
 
 const rememberOutput = (key, bytes) => {
@@ -415,14 +411,13 @@ const packOutput = (magic, w, h, data) => {
 };
 
 const packPairOutputs = (outputs) => {
-  const outBytes = new Uint8Array(16 + outputs.ko.length + outputs.fd.length);
+  const outBytes = new Uint8Array(16 + outputs.fd.length);
   const head = new DataView(outBytes.buffer);
   outBytes.set([0x47, 0x4b, 0x53, 0x50]); // GKSP
-  head.setUint32(4, outputs.ko.length, true);
+  head.setUint32(4, 0, true);
   head.setUint32(8, outputs.fd.length, true);
-  head.setUint32(12, 1, true);
-  outBytes.set(outputs.ko, 16);
-  outBytes.set(outputs.fd, 16 + outputs.ko.length);
+  head.setUint32(12, 2, true);
+  outBytes.set(outputs.fd, 16);
   return outBytes;
 };
 
@@ -439,12 +434,12 @@ const unpackPairOutputs = (pairBytes) => {
   const head = new DataView(pairBytes.buffer, pairBytes.byteOffset, pairBytes.byteLength);
   const koLength = head.getUint32(4, true);
   const fdLength = head.getUint32(8, true);
-  if (16 + koLength + fdLength !== pairBytes.length) {
+  const version = head.getUint32(12, true);
+  if (version !== 2 || koLength !== 0 || 16 + fdLength !== pairBytes.length) {
     throw new Error('stored satellite pair length is invalid');
   }
   return {
-    ko: pairBytes.slice(16, 16 + koLength),
-    fd: pairBytes.slice(16 + koLength),
+    fd: pairBytes.slice(16),
   };
 };
 
@@ -469,8 +464,7 @@ const packSatelliteBundle = (entries) => {
   return outBytes;
 };
 
-// 원본 파일을 한 번만 받아 청크를 한 번씩만 inflate하면서 FD(전구 22km)와
-// KO(한반도 6km) 출력을 동시에 만든다 — 두 영역의 성공/실패가 항상 함께 간다.
+// 원본 파일에서 북반구 청크만 inflate해 약 4km FD 출력을 만든다.
 const buildFrameOutputs = async (context, date) => {
   const base =
     context.env?.GK2A_FD_UPSTREAM_BASE || 'https://noaa-gk2a-pds.s3.amazonaws.com/AMI/L1B/FD/';
@@ -512,74 +506,36 @@ const buildFrameOutputs = async (context, date) => {
   const chunks = [];
   walkFdChunkBtree(buf, dv, layout.btree, chunks);
 
-  const fdData = new Uint16Array(FD_OUT * FD_OUT);
-  const per = FD_CHUNK / FD_FACTOR; // 125
-  const { col0, row0, srcW, srcH, factor } = KO_CROP;
-  const cropRaw = new Uint16Array(srcW * srcH);
+  const fdData = new Uint16Array(FD_OUT_WIDTH * FD_OUT_HEIGHT);
 
   for (const chunk of chunks) {
+    if (chunk.row >= FD_NORTH_SRC_HEIGHT) continue;
     const raw = await inflateBytes(buf.subarray(chunk.addr, chunk.addr + chunk.size));
     if (raw.length !== FD_CHUNK * FD_CHUNK * 2) {
       throw frameError(`FD chunk size mismatch: ${raw.length}`, 502);
     }
     const cdv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
 
-    // 전구: 11x11 블록 최대 DN 다운샘플 (DN 클수록 차가운 운정)
-    const outY0 = chunk.row / FD_FACTOR;
-    const outX0 = chunk.col / FD_FACTOR;
-    for (let oy = 0; oy < per; oy++) {
-      for (let ox = 0; ox < per; ox++) {
-        let max = 0;
-        for (let dy = 0; dy < FD_FACTOR; dy++) {
-          let idx = ((oy * FD_FACTOR + dy) * FD_CHUNK + ox * FD_FACTOR) * 2;
-          for (let dx = 0; dx < FD_FACTOR; dx++) {
-            const v = cdv.getUint16(idx, true);
-            if (v <= 8191 && v > max) max = v;
-            idx += 2;
-          }
+    // 청크 폭 1375는 2의 배수가 아니므로 청크 경계에서도 같은 2x2 출력 셀에
+    // 누적되도록 원본 전역 좌표로 최대 DN을 계산한다.
+    for (let localRow = 0; localRow < FD_CHUNK; localRow++) {
+      const outRow = Math.floor((chunk.row + localRow) / FD_FACTOR);
+      const outRowOffset = outRow * FD_OUT_WIDTH;
+      let sourceOffset = localRow * FD_CHUNK * 2;
+      for (let localCol = 0; localCol < FD_CHUNK; localCol++) {
+        const value = cdv.getUint16(sourceOffset, true);
+        if (value <= 8191) {
+          const outCol = Math.floor((chunk.col + localCol) / FD_FACTOR);
+          const outIndex = outRowOffset + outCol;
+          if (value > fdData[outIndex]) fdData[outIndex] = value;
         }
-        fdData[(outY0 + oy) * FD_OUT + outX0 + ox] = max;
+        sourceOffset += 2;
       }
-    }
-
-    // 한반도 크롭: 교차 청크(4개)의 해당 영역을 원본 해상도로 조립
-    if (
-      chunk.row + FD_CHUNK > row0 && chunk.row < row0 + srcH &&
-      chunk.col + FD_CHUNK > col0 && chunk.col < col0 + srcW
-    ) {
-      const rowStart = Math.max(chunk.row, row0);
-      const rowEnd = Math.min(chunk.row + FD_CHUNK, row0 + srcH);
-      const colStart = Math.max(chunk.col, col0);
-      const colEnd = Math.min(chunk.col + FD_CHUNK, col0 + srcW);
-      for (let r = rowStart; r < rowEnd; r++) {
-        const srcOff = ((r - chunk.row) * FD_CHUNK + (colStart - chunk.col)) * 2;
-        const dstOff = (r - row0) * srcW + (colStart - col0);
-        for (let i = 0; i < colEnd - colStart; i++) {
-          cropRaw[dstOff + i] = cdv.getUint16(srcOff + i * 2, true);
-        }
-      }
-    }
-  }
-
-  // 크롭 3x3 블록 최대 → 6km
-  const koData = new Uint16Array(KO_OUT_W * KO_OUT_H);
-  for (let oy = 0; oy < KO_OUT_H; oy++) {
-    for (let ox = 0; ox < KO_OUT_W; ox++) {
-      let max = 0;
-      for (let dy = 0; dy < factor; dy++) {
-        let idx = (oy * factor + dy) * srcW + ox * factor;
-        for (let dx = 0; dx < factor; dx++) {
-          const v = cropRaw[idx + dx];
-          if (v <= 8191 && v > max) max = v;
-        }
-      }
-      koData[oy * KO_OUT_W + ox] = max;
     }
   }
 
   return {
-    fd: packOutput('GKFD', FD_OUT, FD_OUT, fdData),
-    ko: packOutput('GKKO', KO_OUT_W, KO_OUT_H, koData),
+    fd: packOutput('GKFD', FD_OUT_WIDTH, FD_OUT_HEIGHT, fdData),
   };
 };
 
@@ -826,7 +782,6 @@ const schedulePairPersistence = (context, date, outputs) => {
 };
 
 const rememberOutputs = (date, outputs) => {
-  rememberOutput(`${date}:ko`, outputs.ko);
   rememberOutput(`${date}:fd`, outputs.fd);
 };
 
@@ -842,22 +797,17 @@ const readStoredOutputs = async (env, date) => {
 };
 
 const makeAreaCacheKey = (date, area) =>
-  new Request(`https://gk2a-ir.internal/frame?date=${date}&area=${area}&v=3`, { method: 'GET' });
+  new Request(`https://gk2a-ir.internal/frame?date=${date}&area=${area}&v=4`, { method: 'GET' });
 
 const makeBundleCacheKey = (bundleStart) =>
-  new Request(`https://gk2a-ir.internal/bundle?start=${bundleStart}&v=1`, { method: 'GET' });
+  new Request(`https://gk2a-ir.internal/bundle?start=${bundleStart}&v=2`, { method: 'GET' });
 
 const cacheOutputs = (context, edgeCache, date, outputs, isHistorical) => {
   if (!edgeCache) return;
-  for (const area of ['ko', 'fd']) {
-    const task = edgeCache
-      .put(
-        makeAreaCacheKey(date, area),
-        buildFrameResponse(outputs[area], isHistorical, 'live'),
-      )
-      .catch(() => {});
-    if (typeof context.waitUntil === 'function') context.waitUntil(task);
-  }
+  const task = edgeCache
+    .put(makeAreaCacheKey(date, 'fd'), buildFrameResponse(outputs.fd, isHistorical, 'live'))
+    .catch(() => {});
+  if (typeof context.waitUntil === 'function') context.waitUntil(task);
 };
 
 const handlePairRequest = async (
@@ -882,13 +832,9 @@ const handlePairRequest = async (
 
   let outputs = null;
   if (edgeCache) {
-    const [koHit, fdHit] = await Promise.all([
-      edgeCache.match(makeAreaCacheKey(date, 'ko')),
-      edgeCache.match(makeAreaCacheKey(date, 'fd')),
-    ]);
-    if (koHit && fdHit) {
+    const fdHit = await edgeCache.match(makeAreaCacheKey(date, 'fd'));
+    if (fdHit) {
       outputs = {
-        ko: new Uint8Array(await koHit.arrayBuffer()),
         fd: new Uint8Array(await fdHit.arrayBuffer()),
       };
     }
@@ -1083,21 +1029,7 @@ const handleFdRequest = async (
       schedulePairPersistence(context, date, outputs);
     }
     rememberOutputs(date, outputs);
-    outBytes = outputs[area];
-
-    // 반대 영역도 엣지 캐시에 미리 저장 — 곧바로 이어질 요청이 재계산하지 않게
-    if (edgeCache) {
-      const other = area === 'ko' ? 'fd' : 'ko';
-      const putOther = edgeCache
-        .put(
-          makeAreaCacheKey(date, other),
-          buildFrameResponse(outputs[other], isHistorical, dataSource),
-        )
-        .catch(() => {});
-      if (context.waitUntil) {
-        context.waitUntil(putOther);
-      }
-    }
+    outBytes = outputs.fd;
   }
 
   const response = buildFrameResponse(outBytes, isHistorical, dataSource);
@@ -1148,7 +1080,7 @@ export async function onRequestGet(context) {
   }
   const date = url.searchParams.get('date') ?? '';
   const areaParam = url.searchParams.get('area');
-  const area = ['fd', 'ko', 'la', 'pair'].includes(areaParam) ? areaParam : 'ea';
+  const area = ['fd', 'la', 'pair'].includes(areaParam) ? areaParam : 'ea';
   const timestamp = parseUtcDate(date);
 
   if (timestamp === null || timestamp % (10 * 60 * 1000) !== 0) {
@@ -1192,7 +1124,7 @@ export async function onRequestGet(context) {
     return handleLaRequest(context, date, isHistorical, edgeCache, cacheKey);
   }
 
-  if (area === 'fd' || area === 'ko') {
+  if (area === 'fd') {
     return handleFdRequest(context, date, area, isHistorical, edgeCache, cacheKey, priority);
   }
 
