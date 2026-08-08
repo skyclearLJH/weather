@@ -753,37 +753,281 @@ const findNearestStation = (point, stations, maxDistanceKm = 25) => {
   return nearest ? { station: nearest, distance: nearestDistance } : null;
 };
 
-const calculateTrackingCore = (frame, buckets, point, mappings) => {
-  if (!frame || !buckets || !point || !mappings) return null;
+const TRACKING_COMPONENT_RADIUS_PX = 110;
+const TRACKING_COMPONENT_STEP_PX = 4;
+const TRACKING_COMPONENT_MIN_BUCKET = 3;
+const TRACKING_COMPONENT_MIN_CELLS = 3;
+const TRACKING_LOCAL_CORE_RADIUS_PX = 52;
+
+const coordinateDistanceKm = (first, second) =>
+  distanceKm(
+    { lon: first[0], lat: first[1] },
+    { lon: second[0], lat: second[1] },
+  );
+
+// 한 프레임의 강수 픽셀을 연결 성분으로 분리한다. 이후 프레임에서도 같은
+// 로컬 격자를 사용하므로 cellSet의 교집합으로 실제 영역 중첩을 비교할 수 있다.
+const buildTrackingComponents = (frame, buckets, point, mappings) => {
+  if (!frame || !buckets || !point || !mappings) return [];
   const height = mappings.radarMap.length / CANVAS_WIDTH;
   const center = lonLatToCanvasPoint(point.lon, point.lat, CANVAS_WIDTH, height);
-  if (!center) return null;
+  if (!center) return [];
   const dataMap = frame.kind === 'obs' ? mappings.radarMap : mappings.qpfMap;
-  const radius = 145;
-  const step = 7;
+  const startX = Math.max(0, center.x - TRACKING_COMPONENT_RADIUS_PX);
+  const endX = Math.min(CANVAS_WIDTH - 1, center.x + TRACKING_COMPONENT_RADIUS_PX);
+  const startY = Math.max(0, center.y - TRACKING_COMPONENT_RADIUS_PX);
+  const endY = Math.min(height - 1, center.y + TRACKING_COMPONENT_RADIUS_PX);
+  const columns = Math.floor((endX - startX) / TRACKING_COMPONENT_STEP_PX) + 1;
+  const rows = Math.floor((endY - startY) / TRACKING_COMPONENT_STEP_PX) + 1;
+  const grid = new Uint8Array(columns * rows);
+
+  for (let row = 0; row < rows; row += 1) {
+    const y = startY + row * TRACKING_COMPONENT_STEP_PX;
+    for (let column = 0; column < columns; column += 1) {
+      const x = startX + column * TRACKING_COMPONENT_STEP_PX;
+      if (
+        (x - center.x) ** 2 + (y - center.y) ** 2 >
+        TRACKING_COMPONENT_RADIUS_PX ** 2
+      ) {
+        continue;
+      }
+      const sourceIndex = dataMap[y * CANVAS_WIDTH + x];
+      const bucket = sourceIndex >= 0 ? buckets[sourceIndex] ?? 0 : 0;
+      if (bucket >= TRACKING_COMPONENT_MIN_BUCKET) grid[row * columns + column] = bucket;
+    }
+  }
+
+  const visited = new Uint8Array(grid.length);
+  const components = [];
+  for (let start = 0; start < grid.length; start += 1) {
+    if (visited[start] || grid[start] === 0) continue;
+    visited[start] = 1;
+    const queue = [start];
+    const cellSet = new Set();
+    const cells = [];
+    let cursor = 0;
+    let totalWeight = 0;
+    let weightedX = 0;
+    let weightedY = 0;
+    let maxBucket = 0;
+    let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+
+    while (cursor < queue.length) {
+      const index = queue[cursor];
+      cursor += 1;
+      const row = Math.floor(index / columns);
+      const column = index % columns;
+      const x = startX + column * TRACKING_COMPONENT_STEP_PX;
+      const y = startY + row * TRACKING_COMPONENT_STEP_PX;
+      const bucket = grid[index];
+      const weight = Math.max(1, bucketLowerValue(bucket)) ** 1.2;
+      cellSet.add(index);
+      cells.push({ index, x, y, bucket });
+      totalWeight += weight;
+      weightedX += x * weight;
+      weightedY += y * weight;
+      maxBucket = Math.max(maxBucket, bucket);
+      nearestDistanceSquared = Math.min(
+        nearestDistanceSquared,
+        (x - center.x) ** 2 + (y - center.y) ** 2,
+      );
+
+      for (let deltaRow = -1; deltaRow <= 1; deltaRow += 1) {
+        for (let deltaColumn = -1; deltaColumn <= 1; deltaColumn += 1) {
+          if (deltaRow === 0 && deltaColumn === 0) continue;
+          const nextRow = row + deltaRow;
+          const nextColumn = column + deltaColumn;
+          if (nextRow < 0 || nextRow >= rows || nextColumn < 0 || nextColumn >= columns) continue;
+          const nextIndex = nextRow * columns + nextColumn;
+          if (visited[nextIndex] || grid[nextIndex] === 0) continue;
+          visited[nextIndex] = 1;
+          queue.push(nextIndex);
+        }
+      }
+    }
+
+    if (cellSet.size < TRACKING_COMPONENT_MIN_CELLS || totalWeight === 0) continue;
+    components.push({
+      cellSet,
+      cells,
+      area: cellSet.size,
+      maxBucket,
+      nearestDistancePx: Math.sqrt(nearestDistanceSquared),
+      coordinates: canvasPointToLonLat(
+        weightedX / totalWeight,
+        weightedY / totalWeight,
+        CANVAS_WIDTH,
+        height,
+      ),
+      canvasHeight: height,
+    });
+  }
+  return components;
+};
+
+const localizeTrackingComponent = (component, anchorCoordinates) => {
+  const anchor = lonLatToCanvasPoint(
+    anchorCoordinates[0],
+    anchorCoordinates[1],
+    CANVAS_WIDTH,
+    component.canvasHeight,
+  );
+  if (!anchor) return null;
+  const localCells = component.cells.filter(
+    (cell) =>
+      (cell.x - anchor.x) ** 2 + (cell.y - anchor.y) ** 2 <=
+      TRACKING_LOCAL_CORE_RADIUS_PX ** 2,
+  );
+  if (localCells.length < 2) return null;
   let totalWeight = 0;
   let weightedX = 0;
   let weightedY = 0;
-  let sampleCount = 0;
-  for (let y = Math.max(0, center.y - radius); y <= Math.min(height - 1, center.y + radius); y += step) {
-    for (let x = Math.max(0, center.x - radius); x <= Math.min(CANVAS_WIDTH - 1, center.x + radius); x += step) {
-      if ((x - center.x) ** 2 + (y - center.y) ** 2 > radius ** 2) continue;
-      const sourceIndex = dataMap[y * CANVAS_WIDTH + x];
-      const bucket = sourceIndex >= 0 ? buckets[sourceIndex] ?? 0 : 0;
-      if (bucket < 2) continue;
-      const weight = Math.max(1, bucketLowerValue(bucket)) ** 1.35;
-      weightedX += x * weight;
-      weightedY += y * weight;
-      totalWeight += weight;
-      sampleCount += 1;
+  let maxBucket = 0;
+  const cellSet = new Set();
+  localCells.forEach((cell) => {
+    const weight = Math.max(1, bucketLowerValue(cell.bucket)) ** 1.2;
+    cellSet.add(cell.index);
+    totalWeight += weight;
+    weightedX += cell.x * weight;
+    weightedY += cell.y * weight;
+    maxBucket = Math.max(maxBucket, cell.bucket);
+  });
+  return {
+    ...component,
+    cells: localCells,
+    cellSet,
+    area: localCells.length,
+    maxBucket,
+    coordinates: canvasPointToLonLat(
+      weightedX / totalWeight,
+      weightedY / totalWeight,
+      CANVAS_WIDTH,
+      component.canvasHeight,
+    ),
+  };
+};
+
+const selectInitialTrackingComponent = (components, point) => {
+  const nearby = components.filter(
+    (component) => component.nearestDistancePx <= TRACKING_COMPONENT_RADIUS_PX * 0.72,
+  );
+  if (nearby.length === 0) return null;
+  const nearestDistance = Math.min(...nearby.map((component) => component.nearestDistancePx));
+  const selected = nearby
+    .filter((component) => component.nearestDistancePx <= nearestDistance + 8)
+    .sort(
+      (first, second) =>
+        second.maxBucket - first.maxBucket ||
+        second.area - first.area ||
+        first.nearestDistancePx - second.nearestDistancePx,
+    )[0];
+  return localizeTrackingComponent(selected, [point.lon, point.lat]);
+};
+
+const getComponentOverlap = (first, second) => {
+  const [smaller, larger] =
+    first.cellSet.size <= second.cellSet.size
+      ? [first.cellSet, second.cellSet]
+      : [second.cellSet, first.cellSet];
+  let intersection = 0;
+  smaller.forEach((cell) => {
+    if (larger.has(cell)) intersection += 1;
+  });
+  return {
+    overlap: intersection / Math.max(1, Math.min(first.area, second.area)),
+    iou: intersection / Math.max(1, first.area + second.area - intersection),
+  };
+};
+
+const predictTrackingCoordinate = (reference, previous, targetTime) => {
+  if (!previous) return reference.component.coordinates;
+  const referenceTime = reference.item.validTime.getTime();
+  const previousTime = previous.item.validTime.getTime();
+  const interval = referenceTime - previousTime;
+  if (interval === 0) return reference.component.coordinates;
+  const ratio = (targetTime.getTime() - referenceTime) / interval;
+  return [
+    reference.component.coordinates[0] +
+      (reference.component.coordinates[0] - previous.component.coordinates[0]) * ratio,
+    reference.component.coordinates[1] +
+      (reference.component.coordinates[1] - previous.component.coordinates[1]) * ratio,
+  ];
+};
+
+const matchTrackingComponent = (reference, previous, targetItem, candidates) => {
+  const elapsedMinutes = Math.max(
+    1,
+    Math.abs(targetItem.validTime.getTime() - reference.item.validTime.getTime()) / 60000,
+  );
+  const predicted = predictTrackingCoordinate(reference, previous, targetItem.validTime);
+  const maxDistanceKm = Math.min(42, 9 + elapsedMinutes * 2.1);
+  let best = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  candidates.forEach((candidate) => {
+    const localizedCandidate = localizeTrackingComponent(candidate, predicted);
+    if (!localizedCandidate) return;
+    const distanceFromReference = coordinateDistanceKm(
+      reference.component.coordinates,
+      localizedCandidate.coordinates,
+    );
+    const distanceFromPrediction = coordinateDistanceKm(predicted, localizedCandidate.coordinates);
+    const { overlap, iou } = getComponentOverlap(reference.component, localizedCandidate);
+    const areaContinuity =
+      Math.min(reference.component.area, localizedCandidate.area) /
+      Math.max(reference.component.area, localizedCandidate.area);
+    if (distanceFromReference > maxDistanceKm * 1.55) return;
+    if (overlap < 0.04 && distanceFromPrediction > maxDistanceKm) return;
+    if (areaContinuity < 0.08 && overlap < 0.25) return;
+
+    const distanceScore = Math.max(0, 1 - distanceFromPrediction / maxDistanceKm);
+    const score = overlap * 5 + iou * 3 + distanceScore * 2 + areaContinuity;
+    if (score > bestScore) {
+      bestScore = score;
+      best = localizedCandidate;
     }
+  });
+  return bestScore >= 1.2 ? best : null;
+};
+
+const trackObservedComponents = (items, initialComponent) => {
+  if (!initialComponent || items.length === 0) return [];
+  const tracked = [{ item: items.at(-1), component: initialComponent }];
+  let reference = tracked[0];
+  let previous = null;
+  for (let index = items.length - 2; index >= 0; index -= 1) {
+    const item = items[index];
+    const matched = matchTrackingComponent(reference, previous, item, item.components);
+    if (!matched) break;
+    const next = { item, component: matched };
+    tracked.unshift(next);
+    previous = reference;
+    reference = next;
   }
-  if (sampleCount < 3 || totalWeight === 0) return null;
-  return canvasPointToLonLat(weightedX / totalWeight, weightedY / totalWeight, CANVAS_WIDTH, height);
+  return tracked;
+};
+
+const trackForecastComponents = (items, observedTrack, point) => {
+  if (items.length === 0) return [];
+  let reference = observedTrack.at(-1) ?? null;
+  let previous = observedTrack.length >= 2 ? observedTrack.at(-2) : null;
+  const tracked = [];
+
+  for (const item of items) {
+    let matched = reference
+      ? matchTrackingComponent(reference, previous, item, item.components)
+      : selectInitialTrackingComponent(item.components, point);
+    if (!matched) break;
+    const next = { item, component: matched };
+    tracked.push(next);
+    previous = reference;
+    reference = next;
+  }
+  return tracked;
 };
 
 const formatTrackingDirection = (points) => {
-  if (points.length < 2) return '분석 중';
+  if (points.length < 2) return '경로 불충분';
   const first = points[0];
   const last = points.at(-1);
   const meanLat = ((first[1] + last[1]) / 2) * (Math.PI / 180);
@@ -2170,6 +2414,7 @@ const RadarMapView = ({
     let isActive = true;
     setTrackingLoading(true);
     setTrackingSeries([]);
+    setTrackingPathData(EMPTY_FEATURE_COLLECTION);
     setTrackingDirection('분석 중');
     const results = new Array(targets.length);
     let cursor = 0;
@@ -2187,10 +2432,8 @@ const RadarMapView = ({
             validTime: frame.validTime,
             frameIndex: targetFrameIndex,
             bucket: sampleTrackingBucket(frame, buckets, trackingPoint, mappings),
-            core:
-              offsetMinutes >= -30 && offsetMinutes <= 60
-                ? calculateTrackingCore(frame, buckets, trackingPoint, mappings)
-                : null,
+            offsetMinutes,
+            buckets: offsetMinutes >= -30 && offsetMinutes <= 60 ? buckets : null,
           };
         } catch {
           results[resultIndex] = null;
@@ -2201,12 +2444,21 @@ const RadarMapView = ({
     Promise.all([worker(), worker(), worker(), worker()]).then(() => {
       if (!isActive) return;
       const loadedSeries = results.filter(Boolean);
-      const observedCore = loadedSeries
-        .filter((item) => item.kind === 'obs' && item.core)
-        .map((item) => item.core);
-      const forecastCore = loadedSeries
-        .filter((item) => item.kind === 'fct' && item.core)
-        .map((item) => item.core);
+      const componentFrames = loadedSeries
+        .filter((item) => item.buckets)
+        .map((item) => ({
+          ...item,
+          components: buildTrackingComponents(item, item.buckets, trackingPoint, mappings),
+        }));
+      const observedItems = componentFrames.filter((item) => item.kind === 'obs');
+      const forecastItems = componentFrames.filter((item) => item.kind === 'fct');
+      const initialObservedComponent = observedItems.length > 0
+        ? selectInitialTrackingComponent(observedItems.at(-1).components, trackingPoint)
+        : null;
+      const observedTrack = trackObservedComponents(observedItems, initialObservedComponent);
+      const forecastTrack = trackForecastComponents(forecastItems, observedTrack, trackingPoint);
+      const observedCore = observedTrack.map(({ component }) => component.coordinates);
+      const forecastCore = forecastTrack.map(({ component }) => component.coordinates);
       const features = [];
       if (observedCore.length >= 2) {
         features.push({
@@ -2215,7 +2467,7 @@ const RadarMapView = ({
           geometry: { type: 'LineString', coordinates: observedCore },
         });
       }
-      const forecastLine = observedCore.length > 0
+      const forecastLine = observedCore.length > 0 && forecastCore.length > 0
         ? [observedCore.at(-1), ...forecastCore]
         : forecastCore;
       if (forecastLine.length >= 2) {
@@ -2243,7 +2495,15 @@ const RadarMapView = ({
           });
         }
       });
-      setTrackingSeries(loadedSeries);
+      setTrackingSeries(
+        loadedSeries.map((item) => ({
+          key: item.key,
+          kind: item.kind,
+          validTime: item.validTime,
+          frameIndex: item.frameIndex,
+          bucket: item.bucket,
+        })),
+      );
       setTrackingPathData({ type: 'FeatureCollection', features });
       setTrackingDirection(formatTrackingDirection(observedCore));
       setTrackingLoading(false);
