@@ -580,7 +580,7 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
       directKim
         ? buildDirectKimRain(env, cycle, grid, bbox, leadHours)
         : buildCachedKimRain(env, cycle, grid, leadHours),
-      fetchInBatches(chunks, 2, (points) => fetchOpenMeteoChunk(points, providerModels)),
+      fetchInBatches(chunks, 4, (points) => fetchOpenMeteoChunk(points, providerModels)),
     ]);
     const rows = chunkRows.flat();
     if (rows.length !== grid.points.length) throw new Error(`전구모델 격자 수가 일치하지 않습니다. (${rows.length}/${grid.points.length})`);
@@ -628,7 +628,7 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
     rain = await buildCachedKimRain(env, cycle, grid, leadHours);
   } else {
     const chunks = splitIntoChunks(grid.points, OPEN_METEO_CHUNK_SIZE);
-    const rows = (await fetchInBatches(chunks, 2, (points) => fetchOpenMeteoChunk(points, config.providerModel))).flat();
+    const rows = (await fetchInBatches(chunks, 4, (points) => fetchOpenMeteoChunk(points, config.providerModel))).flat();
     if (rows.length !== grid.points.length) throw new Error(`전구모델 격자 수가 일치하지 않습니다. (${rows.length}/${grid.points.length})`);
     ({ rain, pressure } = encodeOpenMeteo(rows, targetTimes, config.providerModel, grid.points.length));
   }
