@@ -9,12 +9,12 @@ const MODE_ITEMS = [
 const SECTION_ITEMS = [
   { id: 'rain', label: '강수' },
   { id: 'heat', label: '폭염' },
+  { id: 'forecast', label: '예측' },
+  { id: 'analysis', label: '분석' },
 ];
 
 const RAIN_ITEMS = [
   { id: 'radar', label: '레이더' },
-  { id: 'tracking', label: '호우추적' },
-  { id: 'terrain', label: '지형호우' },
   { id: 'kim', label: '강수예상' },
   { id: 'accum', label: '강수량' },
   { id: 'satellite', label: '위성' },
@@ -25,6 +25,47 @@ const HEAT_ITEMS = [
   { id: 'heat', label: '폭염' },
   { id: 'change', label: '기온변화' },
 ];
+
+const FORECAST_ITEMS = [
+  { id: 'kim-global', label: 'KIM 전구' },
+  { id: 'ifs', label: 'ECMWF IFS' },
+  { id: 'aifs', label: 'AIFS' },
+  { id: 'gfs', label: 'GFS' },
+  { id: 'compare', label: '비교분석' },
+];
+
+const ANALYSIS_ITEMS = [
+  { id: 'tracking', label: '호우추적' },
+  { id: 'terrain', label: '지형호우' },
+];
+
+const SECTION_VIEW_ITEMS = {
+  rain: RAIN_ITEMS,
+  heat: HEAT_ITEMS,
+  forecast: FORECAST_ITEMS,
+  analysis: ANALYSIS_ITEMS,
+};
+
+const SECTION_ACTIVE_CLASSES = {
+  rain: 'bg-cyan-400 text-slate-950 shadow-sm',
+  heat: 'bg-orange-400 text-slate-950 shadow-sm',
+  forecast: 'bg-violet-400 text-slate-950 shadow-sm',
+  analysis: 'bg-emerald-400 text-slate-950 shadow-sm',
+};
+
+const VIEW_ACTIVE_CLASSES = {
+  rain: 'bg-blue-500 text-white shadow-sm',
+  heat: 'bg-rose-500 text-white shadow-sm',
+  forecast: 'bg-violet-600 text-white shadow-sm',
+  analysis: 'bg-emerald-600 text-white shadow-sm',
+};
+
+const SECTION_LABELS = {
+  rain: '강수 화면',
+  heat: '폭염 화면',
+  forecast: '예측 모델',
+  analysis: '분석 화면',
+};
 
 function SegmentedControl({ label, items, value, onChange, activeClassName }) {
   return (
@@ -68,7 +109,7 @@ function WeatherWorkspaceMenu({
   onShowPlaceLabelsChange,
   onExit,
 }) {
-  const viewItems = section === 'rain' ? RAIN_ITEMS : HEAT_ITEMS;
+  const viewItems = SECTION_VIEW_ITEMS[section] ?? RAIN_ITEMS;
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -96,14 +137,14 @@ function WeatherWorkspaceMenu({
           items={SECTION_ITEMS}
           value={section}
           onChange={onSectionChange}
-          activeClassName={section === 'rain' ? 'bg-cyan-400 text-slate-950 shadow-sm' : 'bg-orange-400 text-slate-950 shadow-sm'}
+          activeClassName={SECTION_ACTIVE_CLASSES[section]}
         />
         <SegmentedControl
-          label={section === 'rain' ? '강수 화면' : '폭염 화면'}
+          label={SECTION_LABELS[section]}
           items={viewItems}
           value={activeView}
           onChange={onViewChange}
-          activeClassName={section === 'rain' ? 'bg-blue-500 text-white shadow-sm' : 'bg-rose-500 text-white shadow-sm'}
+          activeClassName={VIEW_ACTIVE_CLASSES[section]}
         />
         {/* 지명 표시 토글: 편집·녹화 모드에서 켜고 끌 수 있게 남긴다(방송모드에서는
             이 메뉴 자체가 숨겨짐). 단, 위성 화면은 라벨을 켜면 FD 깜빡임이 생겨

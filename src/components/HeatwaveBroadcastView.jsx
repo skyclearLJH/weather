@@ -1343,7 +1343,12 @@ const HeatwaveBroadcastView = () => {
       section="heat"
       onSectionChange={(nextSection) => {
         if (nextSection === 'heat') return;
-        window.location.href = `/?view=radar&mode=${workspaceMode}&videoTarget=radar`;
+        const nextView = nextSection === 'forecast'
+          ? 'kim-global'
+          : nextSection === 'analysis'
+            ? 'tracking'
+            : 'radar';
+        window.location.href = `/?view=radar&mode=${workspaceMode}&videoTarget=${nextView}`;
       }}
       activeView={mode}
       onViewChange={handleModeChange}

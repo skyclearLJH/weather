@@ -14,8 +14,13 @@ const VIDEO_TARGETS = [
   { id: 'tracking', label: '호우추적' },
   { id: 'terrain', label: '지형호우' },
   { id: 'satellite', label: '위성' },
-  { id: 'kim', label: '강수예상도' },
+  { id: 'kim', label: 'KIM 국지 강수예상' },
   { id: 'accum', label: '누적강수량' },
+  { id: 'kim-global', label: 'KIM 전구' },
+  { id: 'ifs', label: 'ECMWF IFS' },
+  { id: 'aifs', label: 'ECMWF AIFS' },
+  { id: 'gfs', label: 'NOAA GFS' },
+  { id: 'compare', label: '전구모델 비교' },
   { id: 'temperature', label: '기온변화' },
 ];
 
@@ -32,6 +37,11 @@ const TARGET_URLS = {
   satellite: '/?view=radar&mode=record&videoTarget=satellite',
   kim: '/?view=radar&mode=record&videoTarget=kim',
   accum: '/?view=radar&mode=record&videoTarget=accum',
+  'kim-global': '/?view=radar&mode=record&videoTarget=kim-global',
+  ifs: '/?view=radar&mode=record&videoTarget=ifs',
+  aifs: '/?view=radar&mode=record&videoTarget=aifs',
+  gfs: '/?view=radar&mode=record&videoTarget=gfs',
+  compare: '/?view=radar&mode=record&videoTarget=compare',
   temperature: '/?view=heatwave&mode=record&temperatureMode=change',
 };
 

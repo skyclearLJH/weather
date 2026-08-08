@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
 import TerrainRainOverlay from './TerrainRainOverlay.jsx';
+import GlobalModelView from './GlobalModelView.jsx';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import VideoExportMenu from './VideoExportMenu.jsx';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
@@ -96,8 +97,22 @@ const ACCUM_MIN_FRAME_INTERVAL_MS = 60;
 
 const getInitialBroadcastView = () => {
   const target = new URLSearchParams(window.location.search).get('videoTarget');
-  return ['radar', 'tracking', 'terrain', 'kim', 'accum', 'satellite'].includes(target) ? target : 'radar';
+  return [
+    'radar',
+    'tracking',
+    'terrain',
+    'kim',
+    'accum',
+    'satellite',
+    'kim-global',
+    'ifs',
+    'aifs',
+    'gfs',
+    'compare',
+  ].includes(target) ? target : 'radar';
 };
+
+const GLOBAL_MODEL_VIEWS = new Set(['kim-global', 'ifs', 'aifs', 'gfs', 'compare']);
 
 const findTimelineRange = (dates, startInput, endInput) => {
   if (dates.length === 0) return null;
@@ -1580,7 +1595,7 @@ const RadarMapView = ({
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
-  const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView); // 'radar' | 'tracking' | 'terrain' | 'kim' | 'accum' | 'satellite'
+  const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView);
   const [kimFrames, setKimFrames] = useState([]);
   const [kimIndex, setKimIndex] = useState(0);
   const [kimStatus, setKimStatus] = useState('idle'); // idle | loading | ready | error
@@ -1620,6 +1635,7 @@ const RadarMapView = ({
   const isRadarView = isBroadcast && broadcastView === 'radar';
   const isTrackingView = isBroadcast && broadcastView === 'tracking';
   const isTerrainView = isBroadcast && broadcastView === 'terrain';
+  const isGlobalModelView = isBroadcast && GLOBAL_MODEL_VIEWS.has(broadcastView);
   const isRadarDataView = isRadarView || isTrackingView || isTerrainView;
   const [trackingPoint, setTrackingPoint] = useState(TRACKING_DEFAULT_POINT);
   const [trackingStations, setTrackingStations] = useState([]);
@@ -2531,7 +2547,7 @@ const RadarMapView = ({
 
   // 현재 프레임 렌더링 (누적/KIM 뷰에서는 레이더 렌더를 중단)
   useEffect(() => {
-    if (isAccumView || isKimView) {
+    if (isAccumView || isKimView || isGlobalModelView) {
       return;
     }
     const frameDef = frames[frameIndex];
@@ -2547,7 +2563,7 @@ const RadarMapView = ({
         }
       })
       .catch(() => {});
-  }, [frames, frameIndex, status, renderFrame, loadFrameData, isAccumView, isKimView]);
+  }, [frames, frameIndex, status, renderFrame, loadFrameData, isAccumView, isKimView, isGlobalModelView]);
 
   useEffect(() => {
     if (!isKimView || kimStatus !== 'ready') return undefined;
@@ -4670,8 +4686,16 @@ const RadarMapView = ({
   };
 
   const handleWorkspaceSectionChange = (nextSection) => {
-    if (nextSection === 'rain') return;
-    window.location.href = `/?view=heatwave&mode=${workspaceMode}&temperatureMode=heat`;
+    if (nextSection === 'heat') {
+      window.location.href = `/?view=heatwave&mode=${workspaceMode}&temperatureMode=heat`;
+      return;
+    }
+    const nextView = nextSection === 'forecast'
+      ? 'kim-global'
+      : nextSection === 'analysis'
+        ? 'tracking'
+        : 'radar';
+    handleWorkspaceViewChange(nextView);
   };
 
   const handleWorkspaceViewChange = (nextView) => {
@@ -4687,7 +4711,13 @@ const RadarMapView = ({
     <WeatherWorkspaceMenu
       workspaceMode={workspaceMode}
       onWorkspaceModeChange={handleWorkspaceModeChange}
-      section="rain"
+      section={
+        isGlobalModelView
+          ? 'forecast'
+          : isTrackingView || isTerrainView
+            ? 'analysis'
+            : 'rain'
+      }
       onSectionChange={handleWorkspaceSectionChange}
       activeView={broadcastView}
       onViewChange={handleWorkspaceViewChange}
@@ -4756,12 +4786,12 @@ const RadarMapView = ({
           } ${isBroadcast && !isBroadcastMapReady ? 'opacity-0' : 'opacity-100'}`}
           style={{ backgroundColor: isBroadcast ? MAP_COLOR_THEMES.broadcast.sea : undefined }}
         />
-        {!isAccumView && !isKimView && !isSatelliteView && status === 'loading' && frames.length === 0 ? (
+        {!isAccumView && !isKimView && !isSatelliteView && !isGlobalModelView && status === 'loading' && frames.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-sm font-medium text-slate-500">
             레이더 자료를 불러오는 중입니다…
           </div>
         ) : null}
-        {!isAccumView && !isKimView && !isSatelliteView && status === 'error' ? (
+        {!isAccumView && !isKimView && !isSatelliteView && !isGlobalModelView && status === 'error' ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/80 px-6 text-center text-sm font-medium text-red-500">
             {statusMessage || '레이더 자료를 불러오지 못했습니다.'}
           </div>
@@ -4796,7 +4826,17 @@ const RadarMapView = ({
           />
         ) : null}
 
-        {isBroadcast && !isSatelliteView ? (
+        {isGlobalModelView ? (
+          <GlobalModelView
+            activeView={broadcastView}
+            workspaceMode={workspaceMode}
+            showPlaceLabels={showPlaceLabels}
+            menuSlot={workspaceMenu}
+            onBeforeScreenShare={handleBeforeVideoScreenShare}
+          />
+        ) : null}
+
+        {isBroadcast && !isSatelliteView && !isGlobalModelView ? (
           <>
             {workspaceMode === 'record' ? (
               <VideoExportMenu

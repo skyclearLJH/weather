@@ -36,6 +36,10 @@ import {
   onRequestGet as terrainRainGet,
   onRequestOptions as terrainRainOptions,
 } from './functions/api/terrain-rain.js';
+import {
+  onRequestGet as globalModelRainGet,
+  onRequestOptions as globalModelRainOptions,
+} from './functions/api/global-model-rain.js';
 
 const sendFunctionResponse = async (response, res) => {
   res.statusCode = response.status;
@@ -97,6 +101,14 @@ const localFunctionsPlugin = (env) => ({
       };
 
       try {
+        if (requestUrl.pathname === '/api/global-model-rain') {
+          const response = req.method === 'OPTIONS'
+            ? await globalModelRainOptions(context)
+            : await globalModelRainGet(context);
+          await sendFunctionResponse(response, res);
+          return;
+        }
+
         if (requestUrl.pathname === '/api/kim-rain') {
           const response = req.method === 'OPTIONS'
             ? await kimRainOptions(context)
