@@ -13,6 +13,7 @@ const SECTION_ITEMS = [
 
 const RAIN_ITEMS = [
   { id: 'radar', label: '레이더' },
+  { id: 'tracking', label: '호우추적' },
   { id: 'kim', label: '강수예상' },
   { id: 'accum', label: '강수량' },
   { id: 'satellite', label: '위성' },

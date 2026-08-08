@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarClock, Maximize2, Minimize2, MonitorPlay, RefreshCw } from 'lucide-react';
+import {
+  CalendarClock,
+  Crosshair,
+  LocateFixed,
+  Map as MapIcon,
+  Maximize2,
+  Minimize2,
+  MonitorPlay,
+  Navigation2,
+  RefreshCw,
+} from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import VideoExportMenu from './VideoExportMenu.jsx';
@@ -85,7 +95,7 @@ const ACCUM_MIN_FRAME_INTERVAL_MS = 60;
 
 const getInitialBroadcastView = () => {
   const target = new URLSearchParams(window.location.search).get('videoTarget');
-  return ['radar', 'kim', 'accum', 'satellite'].includes(target) ? target : 'radar';
+  return ['radar', 'tracking', 'kim', 'accum', 'satellite'].includes(target) ? target : 'radar';
 };
 
 const findTimelineRange = (dates, startInput, endInput) => {
@@ -644,6 +654,231 @@ const buildPixelMappings = (width, height) => {
   return { radarMap, qpfMap };
 };
 
+const TRACKING_PAST_MINUTES = 180;
+const TRACKING_FUTURE_MINUTES = 120;
+const TRACKING_DEFAULT_POINT = {
+  lon: 126.978,
+  lat: 37.5665,
+  label: '서울',
+};
+const EMPTY_FEATURE_COLLECTION = { type: 'FeatureCollection', features: [] };
+const TRACKING_LAYER_IDS = [
+  'tracking-observed-track',
+  'tracking-forecast-track',
+  'tracking-core-points',
+  'tracking-selected-halo',
+  'tracking-selected-point',
+  'tracking-selected-label',
+];
+
+const lonLatToCanvasPoint = (lon, lat, width, height) => {
+  if (
+    lon < VIEW_BOUNDS.lonMin || lon > VIEW_BOUNDS.lonMax ||
+    lat < VIEW_BOUNDS.latMin || lat > VIEW_BOUNDS.latMax
+  ) {
+    return null;
+  }
+  const x = Math.floor(((lon - VIEW_BOUNDS.lonMin) / (VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin)) * width);
+  const yTop = mercatorY(VIEW_BOUNDS.latMax);
+  const yBottom = mercatorY(VIEW_BOUNDS.latMin);
+  const y = Math.floor(((yTop - mercatorY(lat)) / (yTop - yBottom)) * height);
+  if (x < 0 || x >= width || y < 0 || y >= height) return null;
+  return { x, y };
+};
+
+const canvasPointToLonLat = (x, y, width, height) => {
+  const lon = VIEW_BOUNDS.lonMin + ((x + 0.5) / width) * (VIEW_BOUNDS.lonMax - VIEW_BOUNDS.lonMin);
+  const yTop = mercatorY(VIEW_BOUNDS.latMax);
+  const yBottom = mercatorY(VIEW_BOUNDS.latMin);
+  const lat = mercatorYToLat(yTop - ((y + 0.5) / height) * (yTop - yBottom));
+  return [lon, lat];
+};
+
+const sampleTrackingBucket = (frame, buckets, point, mappings, radius = 2) => {
+  if (!frame || !buckets || !point || !mappings) return 0;
+  const canvasPoint = lonLatToCanvasPoint(point.lon, point.lat, CANVAS_WIDTH, mappings.radarMap.length / CANVAS_WIDTH);
+  if (!canvasPoint) return 0;
+  const height = mappings.radarMap.length / CANVAS_WIDTH;
+  const dataMap = frame.kind === 'obs' ? mappings.radarMap : mappings.qpfMap;
+  let strongest = 0;
+  for (let dy = -radius; dy <= radius; dy += 1) {
+    const y = canvasPoint.y + dy;
+    if (y < 0 || y >= height) continue;
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      const x = canvasPoint.x + dx;
+      if (x < 0 || x >= CANVAS_WIDTH) continue;
+      const sourceIndex = dataMap[y * CANVAS_WIDTH + x];
+      if (sourceIndex >= 0) strongest = Math.max(strongest, buckets[sourceIndex] ?? 0);
+    }
+  }
+  return strongest;
+};
+
+const bucketLowerValue = (bucket) => (bucket > 0 ? RAIN_PALETTE[bucket - 1]?.min ?? 0 : 0);
+
+const formatBucketRange = (bucket) => {
+  if (!bucket) return '강수 없음';
+  const lower = bucketLowerValue(bucket);
+  const upper = RAIN_PALETTE[bucket]?.min;
+  return upper ? `${lower}~${upper} mm/h` : `${lower} mm/h 이상`;
+};
+
+const bucketColor = (bucket) => {
+  const color = bucket > 0 ? RAIN_PALETTE[bucket - 1]?.color : null;
+  return color ? `rgb(${color[0]},${color[1]},${color[2]})` : 'rgba(148,163,184,0.22)';
+};
+
+const distanceKm = (first, second) => {
+  const toRadians = (value) => (value * Math.PI) / 180;
+  const lat1 = toRadians(first.lat);
+  const lat2 = toRadians(second.lat);
+  const deltaLat = lat2 - lat1;
+  const deltaLon = toRadians(second.lon - first.lon);
+  const value =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+};
+
+const findNearestStation = (point, stations, maxDistanceKm = 25) => {
+  let nearest = null;
+  let nearestDistance = maxDistanceKm;
+  stations.forEach((station) => {
+    const distance = distanceKm(point, station);
+    if (distance < nearestDistance) {
+      nearest = station;
+      nearestDistance = distance;
+    }
+  });
+  return nearest ? { station: nearest, distance: nearestDistance } : null;
+};
+
+const calculateTrackingCore = (frame, buckets, point, mappings) => {
+  if (!frame || !buckets || !point || !mappings) return null;
+  const height = mappings.radarMap.length / CANVAS_WIDTH;
+  const center = lonLatToCanvasPoint(point.lon, point.lat, CANVAS_WIDTH, height);
+  if (!center) return null;
+  const dataMap = frame.kind === 'obs' ? mappings.radarMap : mappings.qpfMap;
+  const radius = 145;
+  const step = 7;
+  let totalWeight = 0;
+  let weightedX = 0;
+  let weightedY = 0;
+  let sampleCount = 0;
+  for (let y = Math.max(0, center.y - radius); y <= Math.min(height - 1, center.y + radius); y += step) {
+    for (let x = Math.max(0, center.x - radius); x <= Math.min(CANVAS_WIDTH - 1, center.x + radius); x += step) {
+      if ((x - center.x) ** 2 + (y - center.y) ** 2 > radius ** 2) continue;
+      const sourceIndex = dataMap[y * CANVAS_WIDTH + x];
+      const bucket = sourceIndex >= 0 ? buckets[sourceIndex] ?? 0 : 0;
+      if (bucket < 2) continue;
+      const weight = Math.max(1, bucketLowerValue(bucket)) ** 1.35;
+      weightedX += x * weight;
+      weightedY += y * weight;
+      totalWeight += weight;
+      sampleCount += 1;
+    }
+  }
+  if (sampleCount < 3 || totalWeight === 0) return null;
+  return canvasPointToLonLat(weightedX / totalWeight, weightedY / totalWeight, CANVAS_WIDTH, height);
+};
+
+const formatTrackingDirection = (points) => {
+  if (points.length < 2) return '분석 중';
+  const first = points[0];
+  const last = points.at(-1);
+  const meanLat = ((first[1] + last[1]) / 2) * (Math.PI / 180);
+  const east = (last[0] - first[0]) * Math.cos(meanLat);
+  const north = last[1] - first[1];
+  if (Math.hypot(east, north) < 0.08) return '정체';
+  const bearing = (Math.atan2(east, north) * 180) / Math.PI;
+  const normalized = (bearing + 360) % 360;
+  const labels = ['북', '북동', '동', '남동', '남', '남서', '서', '북서'];
+  return `${labels[Math.round(normalized / 45) % 8]}쪽`;
+};
+
+const ensureTrackingLayers = (map) => {
+  if (!map.getSource('tracking-path')) {
+    map.addSource('tracking-path', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION });
+  }
+  if (!map.getSource('tracking-selected')) {
+    map.addSource('tracking-selected', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION });
+  }
+  const layers = [
+    {
+      id: 'tracking-observed-track',
+      type: 'line',
+      source: 'tracking-path',
+      filter: ['==', ['get', 'phase'], 'observed'],
+      paint: { 'line-color': '#22d3ee', 'line-width': 5, 'line-opacity': 0.92 },
+    },
+    {
+      id: 'tracking-forecast-track',
+      type: 'line',
+      source: 'tracking-path',
+      filter: ['==', ['get', 'phase'], 'forecast'],
+      paint: { 'line-color': '#facc15', 'line-width': 4, 'line-opacity': 0.9, 'line-dasharray': [2, 1.5] },
+    },
+    {
+      id: 'tracking-core-points',
+      type: 'circle',
+      source: 'tracking-path',
+      filter: ['==', ['geometry-type'], 'Point'],
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 3, 9, 6],
+        'circle-color': ['match', ['get', 'phase'], 'forecast', '#facc15', '#22d3ee'],
+        'circle-stroke-color': '#0f172a',
+        'circle-stroke-width': 1.2,
+      },
+    },
+    {
+      id: 'tracking-selected-halo',
+      type: 'circle',
+      source: 'tracking-selected',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 10, 9, 17],
+        'circle-color': 'rgba(255,255,255,0.15)',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+      },
+    },
+    {
+      id: 'tracking-selected-point',
+      type: 'circle',
+      source: 'tracking-selected',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 4, 9, 7],
+        'circle-color': '#0f172a',
+        'circle-stroke-color': '#f8fafc',
+        'circle-stroke-width': 2,
+      },
+    },
+    {
+      id: 'tracking-selected-label',
+      type: 'symbol',
+      source: 'tracking-selected',
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': ['Open Sans Bold'],
+        'text-size': 14,
+        'text-offset': [0, 1.25],
+        'text-anchor': 'top',
+        'text-allow-overlap': true,
+      },
+      paint: { 'text-color': '#0f172a', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
+    },
+  ];
+  layers.forEach((layer) => {
+    if (!map.getLayer(layer.id)) map.addLayer({ ...layer, layout: { visibility: 'visible', ...layer.layout } });
+  });
+};
+
+const setTrackingLayerVisibility = (map, visible) => {
+  if (visible) ensureTrackingLayers(map);
+  TRACKING_LAYER_IDS.forEach((id) => {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+  });
+};
+
 // KIM 국지 격자는 (126E, 38N) 원점 좌표가 x0/y0로 주어지며 y축은 북쪽으로 증가한다.
 const buildKimPixelMapping = (width, height, meta) => {
   const { lonMin, lonMax, latMin, latMax } = KIM_VIEW_BOUNDS;
@@ -944,6 +1179,134 @@ const RadarLegend = () => (
   </div>
 );
 
+const TrackingAnalysisPanel = ({
+  point,
+  series,
+  currentFrameIndex,
+  latestObservationIndex,
+  direction,
+  isLoading,
+  onSelectFrame,
+  onReturnToCurrent,
+  onResetMap,
+}) => {
+  const selected = series.find((item) => item.frameIndex === currentFrameIndex) ?? null;
+  const latestObserved = series.find((item) => item.frameIndex === latestObservationIndex) ?? null;
+  const forecast = series.filter((item) => item.kind === 'fct');
+  const arrival = forecast.find((item) => item.bucket > 0) ?? null;
+  const peak = forecast.reduce(
+    (strongest, item) => (item.bucket > (strongest?.bucket ?? 0) ? item : strongest),
+    null,
+  );
+  const nowMs = latestObserved?.validTime?.getTime?.() ?? null;
+  const arrivalMinutes = arrival && nowMs !== null
+    ? Math.max(0, Math.round((arrival.validTime.getTime() - nowMs) / 60000))
+    : null;
+  const arrivalLabel = latestObserved?.bucket > 0
+    ? '지나는 중'
+    : arrivalMinutes !== null
+      ? `${arrivalMinutes}분 후`
+      : '2시간 내 없음';
+  const maxChartValue = 150;
+
+  return (
+    <aside
+      className="absolute z-20 w-[390px] max-w-[calc(100vw-7rem)] overflow-hidden rounded-md border border-white/15 bg-slate-950/78 text-white shadow-2xl backdrop-blur-md"
+      style={{ left: '6.5%', top: '25%' }}
+      aria-label="호우 추적 지점 분석"
+    >
+      <div className="flex items-start gap-3 border-b border-white/10 px-4 py-3.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-400 text-slate-950">
+          <Crosshair size={19} aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-bold text-cyan-200">분석 지점</div>
+          <div className="truncate text-lg font-black">{point?.label ?? '선택 지점'}</div>
+        </div>
+        <div data-video-hide className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={onReturnToCurrent}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-white/15 bg-white/8 text-white transition hover:bg-white/15"
+            aria-label="현재 시각으로 이동"
+            title="현재 시각"
+          >
+            <LocateFixed size={17} />
+          </button>
+          <button
+            type="button"
+            onClick={onResetMap}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-white/15 bg-white/8 text-white transition hover:bg-white/15"
+            aria-label="전국 화면으로 이동"
+            title="전국 화면"
+          >
+            <MapIcon size={17} />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-px bg-white/10">
+        {[
+          ['선택 강도', selected ? formatBucketRange(selected.bucket) : '-'],
+          ['비 도달', isLoading ? '분석 중' : arrivalLabel],
+          ['향후 2시간 최고', peak?.bucket ? formatBucketRange(peak.bucket) : '강수 없음'],
+          ['주변 강수대 이동', direction],
+        ].map(([label, value], index) => (
+          <div key={label} className="bg-slate-950/75 px-3.5 py-2.5">
+            <div className="text-[10px] font-bold text-white/55">{label}</div>
+            <div className={`mt-0.5 truncate text-sm font-black ${index === 1 ? 'text-yellow-300' : 'text-white'}`}>
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="px-4 pb-3 pt-3">
+        <div className="mb-2 flex items-center justify-between text-[10px] font-bold">
+          <span className="text-cyan-200">관측 3시간</span>
+          <span className="text-white/55">레이더 강도 변화</span>
+          <span className="text-yellow-200">예측 2시간</span>
+        </div>
+        <div className="relative flex h-20 items-end gap-[2px] border-b border-white/25">
+          {series.map((item) => {
+            const value = bucketLowerValue(item.bucket);
+            const height = item.bucket
+              ? Math.max(8, (Math.log1p(value) / Math.log1p(maxChartValue)) * 100)
+              : 3;
+            const isSelected = item.frameIndex === currentFrameIndex;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => onSelectFrame(item.frameIndex)}
+                className={`relative min-w-0 flex-1 rounded-t-[2px] transition ${
+                  isSelected ? 'ring-2 ring-white ring-offset-1 ring-offset-slate-950' : 'opacity-85 hover:opacity-100'
+                }`}
+                style={{ height: `${height}%`, backgroundColor: bucketColor(item.bucket) }}
+                aria-label={`${formatHourMinute(item.validTime)} ${item.kind === 'obs' ? '관측' : '예측'} ${formatBucketRange(item.bucket)}`}
+                title={`${formatHourMinute(item.validTime)} · ${formatBucketRange(item.bucket)}`}
+              />
+            );
+          })}
+          {isLoading ? (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/35 text-xs font-bold text-white/75">
+              분석 중
+            </div>
+          ) : null}
+        </div>
+        <div className="mt-1.5 flex justify-between text-[10px] font-semibold tabular-nums text-white/55">
+          <span>{series[0] ? formatHourMinute(series[0].validTime) : '--:--'}</span>
+          <span className="flex items-center gap-1 text-white/75">
+            <Navigation2 size={11} aria-hidden="true" />
+            현재
+          </span>
+          <span>{series.at(-1) ? formatHourMinute(series.at(-1).validTime) : '--:--'}</span>
+        </div>
+      </div>
+    </aside>
+  );
+};
+
 const RadarMapView = ({
   refreshToken = 0,
   initialBroadcast = false,
@@ -985,7 +1348,7 @@ const RadarMapView = ({
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
-  const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView); // 'radar' | 'kim' | 'accum' | 'satellite'
+  const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView); // 'radar' | 'tracking' | 'kim' | 'accum' | 'satellite'
   const [kimFrames, setKimFrames] = useState([]);
   const [kimIndex, setKimIndex] = useState(0);
   const [kimStatus, setKimStatus] = useState('idle'); // idle | loading | ready | error
@@ -1023,6 +1386,15 @@ const RadarMapView = ({
   const isKimView = isBroadcast && broadcastView === 'kim';
   const isSatelliteView = isBroadcast && broadcastView === 'satellite';
   const isRadarView = isBroadcast && broadcastView === 'radar';
+  const isTrackingView = isBroadcast && broadcastView === 'tracking';
+  const isRadarDataView = isRadarView || isTrackingView;
+  const [trackingPoint, setTrackingPoint] = useState(TRACKING_DEFAULT_POINT);
+  const [trackingStations, setTrackingStations] = useState([]);
+  const [trackingSeries, setTrackingSeries] = useState([]);
+  const [trackingPathData, setTrackingPathData] = useState(EMPTY_FEATURE_COLLECTION);
+  const [trackingDirection, setTrackingDirection] = useState('분석 중');
+  const [trackingLoading, setTrackingLoading] = useState(false);
+  const [trackingAnalysisTick, setTrackingAnalysisTick] = useState(0);
   const [playRangeVersion, setPlayRangeVersion] = useState(0);
 
   useEffect(() => {
@@ -1251,6 +1623,71 @@ const RadarMapView = ({
       navControlAddedRef.current = false;
     };
   }, [canvasHeight]);
+
+  useEffect(() => {
+    if (!isTrackingView || trackingStations.length > 0) return undefined;
+    let isActive = true;
+    fetchAwsStationCoords()
+      .then((stations) => {
+        if (isActive) setTrackingStations(stations);
+      })
+      .catch(() => {});
+    return () => {
+      isActive = false;
+    };
+  }, [isTrackingView, trackingStations.length]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return undefined;
+    const apply = () => {
+      setTrackingLayerVisibility(map, isTrackingView);
+      const selectedSource = map.getSource('tracking-selected');
+      selectedSource?.setData(
+        isTrackingView && trackingPoint
+          ? {
+              type: 'FeatureCollection',
+              features: [
+                {
+                  type: 'Feature',
+                  properties: { label: trackingPoint.label },
+                  geometry: { type: 'Point', coordinates: [trackingPoint.lon, trackingPoint.lat] },
+                },
+              ],
+            }
+          : EMPTY_FEATURE_COLLECTION,
+      );
+      map.getSource('tracking-path')?.setData(
+        isTrackingView ? trackingPathData : EMPTY_FEATURE_COLLECTION,
+      );
+    };
+    if (map.isStyleLoaded()) apply();
+    else map.once('load', apply);
+    return () => map.off('load', apply);
+  }, [isTrackingView, trackingPathData, trackingPoint]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isTrackingView) return undefined;
+    const canvas = map.getCanvas();
+    const previousCursor = canvas.style.cursor;
+    canvas.style.cursor = 'crosshair';
+    const handleMapClick = (event) => {
+      const point = { lon: event.lngLat.lng, lat: event.lngLat.lat };
+      const nearest = findNearestStation(point, trackingStations, 18);
+      const label = nearest
+        ? `${formatStationLabel(nearest.station)} 부근`
+        : `${point.lat.toFixed(2)}°N, ${point.lon.toFixed(2)}°E`;
+      setIsPlaying(false);
+      setTrackingPoint({ ...point, label });
+      map.easeTo({ center: [point.lon, point.lat], zoom: Math.max(7.2, map.getZoom()), duration: 650 });
+    };
+    map.on('click', handleMapClick);
+    return () => {
+      map.off('click', handleMapClick);
+      canvas.style.cursor = previousCursor;
+    };
+  }, [isTrackingView, trackingStations]);
 
   // KIM 캔버스는 국지모델이 제공하는 한반도 전체 영역에 맞춘다.
   useEffect(() => {
@@ -1707,6 +2144,123 @@ const RadarMapView = ({
     radarHistoryEnd,
   ]);
 
+  useEffect(() => {
+    if (!isTrackingView || status !== 'ready' || frames.length === 0 || !trackingPoint) {
+      return undefined;
+    }
+    const mappings = mappingsRef.current;
+    if (!mappings) {
+      const timer = window.setTimeout(
+        () => setTrackingAnalysisTick((value) => value + 1),
+        180,
+      );
+      return () => window.clearTimeout(timer);
+    }
+
+    const latestObservation = frames.filter((frame) => frame.kind === 'obs').at(-1);
+    if (!latestObservation) return undefined;
+    const baseMs = latestObservation.validTime.getTime();
+    const targets = frames
+      .map((frame, frameIndexValue) => ({ frame, frameIndex: frameIndexValue }))
+      .filter(({ frame }) => {
+        const offsetMinutes = (frame.validTime.getTime() - baseMs) / 60000;
+        return offsetMinutes >= -TRACKING_PAST_MINUTES && offsetMinutes <= TRACKING_FUTURE_MINUTES;
+      });
+
+    let isActive = true;
+    setTrackingLoading(true);
+    setTrackingSeries([]);
+    setTrackingDirection('분석 중');
+    const results = new Array(targets.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (isActive && cursor < targets.length) {
+        const resultIndex = cursor;
+        cursor += 1;
+        const { frame, frameIndex: targetFrameIndex } = targets[resultIndex];
+        try {
+          const buckets = await loadFrameData(frame);
+          const offsetMinutes = Math.round((frame.validTime.getTime() - baseMs) / 60000);
+          results[resultIndex] = {
+            key: frame.key,
+            kind: frame.kind,
+            validTime: frame.validTime,
+            frameIndex: targetFrameIndex,
+            bucket: sampleTrackingBucket(frame, buckets, trackingPoint, mappings),
+            core:
+              offsetMinutes >= -30 && offsetMinutes <= 60
+                ? calculateTrackingCore(frame, buckets, trackingPoint, mappings)
+                : null,
+          };
+        } catch {
+          results[resultIndex] = null;
+        }
+      }
+    };
+
+    Promise.all([worker(), worker(), worker(), worker()]).then(() => {
+      if (!isActive) return;
+      const loadedSeries = results.filter(Boolean);
+      const observedCore = loadedSeries
+        .filter((item) => item.kind === 'obs' && item.core)
+        .map((item) => item.core);
+      const forecastCore = loadedSeries
+        .filter((item) => item.kind === 'fct' && item.core)
+        .map((item) => item.core);
+      const features = [];
+      if (observedCore.length >= 2) {
+        features.push({
+          type: 'Feature',
+          properties: { phase: 'observed' },
+          geometry: { type: 'LineString', coordinates: observedCore },
+        });
+      }
+      const forecastLine = observedCore.length > 0
+        ? [observedCore.at(-1), ...forecastCore]
+        : forecastCore;
+      if (forecastLine.length >= 2) {
+        features.push({
+          type: 'Feature',
+          properties: { phase: 'forecast' },
+          geometry: { type: 'LineString', coordinates: forecastLine },
+        });
+      }
+      observedCore.forEach((coordinates, index) => {
+        if (index === observedCore.length - 1 || index % 2 === 0) {
+          features.push({
+            type: 'Feature',
+            properties: { phase: 'observed' },
+            geometry: { type: 'Point', coordinates },
+          });
+        }
+      });
+      forecastCore.forEach((coordinates, index) => {
+        if (index % 2 === 1 || index === forecastCore.length - 1) {
+          features.push({
+            type: 'Feature',
+            properties: { phase: 'forecast' },
+            geometry: { type: 'Point', coordinates },
+          });
+        }
+      });
+      setTrackingSeries(loadedSeries);
+      setTrackingPathData({ type: 'FeatureCollection', features });
+      setTrackingDirection(formatTrackingDirection(observedCore));
+      setTrackingLoading(false);
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    frames,
+    isTrackingView,
+    loadFrameData,
+    status,
+    trackingAnalysisTick,
+    trackingPoint,
+  ]);
+
   // 시간이 흐르면 '현재'와 눈금도 따라가야 하므로 주기적으로 최신 발표를 확인한다.
   // 모바일은 화면이 꺼지면 타이머가 멈추므로, 탭 복귀 시에도 즉시 확인한다.
   useEffect(() => {
@@ -1956,16 +2510,16 @@ const RadarMapView = ({
         current: kimIndex,
       };
     }
-    if (isRadarView) {
+    if (isRadarDataView) {
       return {
-        viewId: 'radar:radar',
+        viewId: isTrackingView ? 'radar:tracking' : 'radar:radar',
         frames,
         keyOf: (frame) => String(frame?.validTime?.getTime?.() ?? ''),
         current: frameIndex,
       };
     }
     return null;
-  }, [isAccumView, isKimView, isRadarView, accumHours, kimFrames, frames, accumIndex, kimIndex, frameIndex]);
+  }, [isAccumView, isKimView, isRadarDataView, isTrackingView, accumHours, kimFrames, frames, accumIndex, kimIndex, frameIndex]);
 
   const activePlayRange = useMemo(
     () =>
@@ -2193,6 +2747,28 @@ const RadarMapView = ({
   }, [broadcastView]);
 
   const currentFrame = frames[frameIndex];
+  const latestObservationIndex = useMemo(
+    () => frames.findLastIndex((frame) => frame.kind === 'obs'),
+    [frames],
+  );
+  const handleTrackingReturnToCurrent = useCallback(() => {
+    if (latestObservationIndex < 0) return;
+    setIsPlaying(false);
+    setPlayTarget(null);
+    setPlaybackFinished(false);
+    setFrameIndex(latestObservationIndex);
+  }, [latestObservationIndex]);
+  const handleTrackingResetMap = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    fitBroadcastFlatView(map, 650);
+  }, []);
+  const handleTrackingFrameSelect = useCallback((nextFrameIndex) => {
+    setIsPlaying(false);
+    setPlayTarget(null);
+    setPlaybackFinished(false);
+    setFrameIndex(nextFrameIndex);
+  }, []);
 
   // 타임라인은 프레임 개수가 아니라 시간에 비례한다. 왼쪽은 관측 6시간,
   // 오른쪽은 기상청이 실제 제공한 마지막 예측시각까지만 표시한다.
@@ -2221,7 +2797,7 @@ const RadarMapView = ({
   const playRangePercents = useMemo(() => {
     if (!activePlayRange || !playRangeContext) return null;
     const { startIndex, endIndex } = activePlayRange;
-    if (isRadarView) {
+    if (isRadarDataView) {
       const span = timelineSpan || 1;
       return {
         start: ((frameOffsets[startIndex] - timelineMinOffset) / span) * 100,
@@ -2230,7 +2806,7 @@ const RadarMapView = ({
     }
     const max = Math.max(1, playRangeContext.frames.length - 1);
     return { start: (startIndex / max) * 100, end: (endIndex / max) * 100 };
-  }, [activePlayRange, playRangeContext, isRadarView, frameOffsets, timelineMinOffset, timelineSpan]);
+  }, [activePlayRange, playRangeContext, isRadarDataView, frameOffsets, timelineMinOffset, timelineSpan]);
 
   const handleTimelineChange = (offsetMinutes) => {
     if (frameOffsets.length === 0) {
@@ -3567,7 +4143,7 @@ const RadarMapView = ({
 
   // 방송모드에서는 끊김 없는 재생을 위해 전 구간 프레임을 미리 받아 둔다.
   useEffect(() => {
-    if (!isBroadcast || broadcastView !== 'radar' || status !== 'ready') {
+    if (!isBroadcast || !isRadarDataView || status !== 'ready') {
       return undefined;
     }
     cacheLimitRef.current = BROADCAST_CACHE_LIMIT;
@@ -3592,7 +4168,7 @@ const RadarMapView = ({
       isCancelled = true;
       cacheLimitRef.current = FRAME_CACHE_LIMIT;
     };
-  }, [broadcastView, isBroadcast, status, frames, loadFrameData]);
+  }, [broadcastView, isBroadcast, isRadarDataView, status, frames, loadFrameData]);
 
   // 컨트롤바(재생 버튼 + 슬라이더 + 눈금). 방송모드에서는 어두운 배경 위에 얹는다.
   const renderTimeline = (broadcast) => (
@@ -3971,7 +4547,7 @@ const RadarMapView = ({
           <>
             {workspaceMode === 'record' ? (
               <VideoExportMenu
-                currentTarget={isAccumView ? 'accum' : isKimView ? 'kim' : 'radar'}
+                currentTarget={isAccumView ? 'accum' : isKimView ? 'kim' : isTrackingView ? 'tracking' : 'radar'}
                 mapRef={mapRef}
                 defaultStart={videoDefaultStart}
                 defaultEnd={videoDefaultEnd}
@@ -4023,7 +4599,13 @@ const RadarMapView = ({
                     textShadow: '0 2px 6px rgba(0,0,0,0.35)',
                   }}
                 >
-                  {isAccumView ? '누적 강수량' : isKimView ? '강수 예상도' : '레이더 영상'}
+                  {isAccumView
+                    ? '누적 강수량'
+                    : isKimView
+                      ? '강수 예상도'
+                      : isTrackingView
+                        ? '호우 추적'
+                        : '레이더 영상'}
                 </span>
                 {(isAccumView ? currentAccumHour : isKimView ? currentKimFrame : currentFrame) ? (
                   <div
@@ -4063,6 +4645,20 @@ const RadarMapView = ({
                 <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
               </div>
             </div>
+
+            {isTrackingView ? (
+              <TrackingAnalysisPanel
+                point={trackingPoint}
+                series={trackingSeries}
+                currentFrameIndex={frameIndex}
+                latestObservationIndex={latestObservationIndex}
+                direction={trackingDirection}
+                isLoading={trackingLoading}
+                onSelectFrame={handleTrackingFrameSelect}
+                onReturnToCurrent={handleTrackingReturnToCurrent}
+                onResetMap={handleTrackingResetMap}
+              />
+            ) : null}
 
             {/* 누적 강수량: 기간 최다 강수 5개 지점 */}
             {isAccumView ? (
@@ -4253,7 +4849,7 @@ const RadarMapView = ({
               {workspaceMenu}
               {workspaceMode !== 'broadcast' ? (
                 <>
-                  {isRadarView ? renderRadarHistoryControls(true) : null}
+                  {isRadarDataView ? renderRadarHistoryControls(true) : null}
                   <div className="flex items-center gap-2">
                 {isAccumView ? (
                   <>
