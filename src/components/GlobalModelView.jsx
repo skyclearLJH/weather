@@ -4,7 +4,6 @@ import {
   Columns2,
   Gauge,
   Globe2,
-  Grid2X2,
   Layers3,
   LoaderCircle,
   MapPin,
@@ -15,7 +14,6 @@ import {
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  fetchGlobalModelBundle,
   fetchGlobalModelMetadata,
   fetchGlobalModelTile,
   fetchKimPressure,
@@ -31,10 +29,29 @@ const MODEL_META = {
   aifs: { label: 'ECMWF AIFS', short: 'AIFS', color: '#f472b6' },
   gfs: { label: 'NOAA GFS', short: 'GFS', color: '#4ade80' },
 };
-const BASE_STYLE = 'https://demotiles.maplibre.org/style.json';
+const BASE_STYLE = {
+  version: 8,
+  projection: { type: 'mercator' },
+  sources: {
+    land: { type: 'geojson', data: '/data/map/land-50m-world.geojson' },
+    sido: { type: 'geojson', data: '/data/map/kr-sido-20260701.geojson' },
+  },
+  layers: [
+    { id: 'bg', type: 'background', paint: { 'background-color': '#0a1522' } },
+    { id: 'land', type: 'fill', source: 'land', paint: { 'fill-color': '#2f3945' } },
+    { id: 'korea-land', type: 'fill', source: 'sido', paint: { 'fill-color': '#2f3945' } },
+    { id: 'sido', type: 'line', source: 'sido', paint: { 'line-color': '#647d97', 'line-width': 1 } },
+  ],
+};
 const CANVAS_WIDTH = 1024;
 const MISSING_VALUE = 65535;
-const WORLD_VIEWPORT = [-179.5, -79.5, 179.5, 79.5];
+const EAST_ASIA_VIEWPORT = [75, 5, 170, 65];
+const MODEL_MIN_STEP = {
+  'kim-global': 1 / 12,
+  ifs: 1 / 12,
+  aifs: 0.25,
+  gfs: 0.25,
+};
 const PLAY_DURATIONS = [5, 8, 10, 12, 15, 20, 30];
 const EMPTY_FEATURES = { type: 'FeatureCollection', features: [] };
 const PALETTE = [
@@ -57,48 +74,32 @@ const formatDate = (date) => `${date.getMonth() + 1}/${date.getDate()} (${['일'
 const round = (value, precision = 2) => Number(value.toFixed(precision));
 
 const stepForZoom = (zoom) => {
-  if (zoom < 2) return 5;
   if (zoom < 2.8) return 2.5;
   if (zoom < 3.8) return 1;
   if (zoom < 4.8) return 0.5;
   if (zoom < 6.2) return 0.25;
-  return 0.125;
+  return 1 / 12;
 };
+
+const requestStepForModel = (model, viewportStep) =>
+  Math.max(MODEL_MIN_STEP[model] ?? viewportStep, viewportStep);
 
 const viewportForMap = (map) => {
   const bounds = map.getBounds();
   const zoom = map.getZoom();
   const step = stepForZoom(zoom);
-  if (zoom < 2) {
-    return {
-      bbox: WORLD_VIEWPORT,
-      step,
-      zoom: round(zoom, 1),
-      key: `${WORLD_VIEWPORT.join(',')}@${step}`,
-    };
-  }
-  const rawSpan = bounds.getEast() - bounds.getWest();
-  let lonMin;
-  let lonMax;
-  if (rawSpan >= 350) {
-    lonMin = -179.5;
-    lonMax = 179.5;
-  } else {
-    lonMin = Math.max(-179.5, bounds.getWest() - step * 2);
-    lonMax = Math.min(179.5, bounds.getEast() + step * 2);
-    if (lonMax <= lonMin) {
-      lonMin = -179.5;
-      lonMax = 179.5;
-    }
-  }
-  const latMin = Math.max(-79.5, bounds.getSouth() - step * 2);
-  const latMax = Math.min(79.5, bounds.getNorth() + step * 2);
+  const lonMin = Math.max(EAST_ASIA_VIEWPORT[0], bounds.getWest() - step * 2);
+  const lonMax = Math.min(EAST_ASIA_VIEWPORT[2], bounds.getEast() + step * 2);
+  const latMin = Math.max(EAST_ASIA_VIEWPORT[1], bounds.getSouth() - step * 2);
+  const latMax = Math.min(EAST_ASIA_VIEWPORT[3], bounds.getNorth() + step * 2);
   const bbox = [
     Math.floor(lonMin / step) * step,
     Math.floor(latMin / step) * step,
     Math.ceil(lonMax / step) * step,
     Math.ceil(latMax / step) * step,
-  ].map((value, index) => round(index < 2 ? Math.max(index ? -80 : -180, value) : Math.min(index === 2 ? 180 : 80, value), 3));
+  ].map((value, index) => round(index < 2
+    ? Math.max(EAST_ASIA_VIEWPORT[index], value)
+    : Math.min(EAST_ASIA_VIEWPORT[index], value), 3));
   return { bbox, step, zoom: round(zoom, 1), key: `${bbox.join(',')}@${step}` };
 };
 
@@ -112,9 +113,9 @@ const colorForEncoded = (encoded) => {
   return color;
 };
 
-const buildCanvasMapping = (width, height, grid) => {
-  const yTop = mercatorY(grid.latMax);
-  const yBottom = mercatorY(grid.latMin);
+const buildCanvasMapping = (width, height, grid, canvasBounds) => {
+  const yTop = mercatorY(canvasBounds.latMax);
+  const yBottom = mercatorY(canvasBounds.latMin);
   const baseIndex = new Int32Array(width * height).fill(-1);
   const fractionX = new Uint8Array(width * height);
   const fractionY = new Uint8Array(width * height);
@@ -124,7 +125,7 @@ const buildCanvasMapping = (width, height, grid) => {
     const top = Math.floor(gridY);
     if (top < 0 || top + 1 >= grid.height) continue;
     for (let x = 0; x < width; x += 1) {
-      const longitude = grid.lonMin + ((x + 0.5) / width) * (grid.lonMax - grid.lonMin);
+      const longitude = canvasBounds.lonMin + ((x + 0.5) / width) * (canvasBounds.lonMax - canvasBounds.lonMin);
       const gridX = (longitude - grid.lonMin) / grid.step;
       const left = Math.floor(gridX);
       if (left < 0 || left + 1 >= grid.width) continue;
@@ -156,13 +157,8 @@ const nearestGridIndex = (point, grid) => {
   return column < 0 || column >= grid.width || row < 0 || row >= grid.height ? -1 : row * grid.width + column;
 };
 
-const modelForPixel = (layout, x, y, width, height, splitPercent, leftModel, rightModel) => {
-  if (layout === 'split') return x < (width * splitPercent) / 100 ? leftModel : rightModel;
-  if (x < width / 2 && y < height / 2) return 'kim-global';
-  if (x >= width / 2 && y < height / 2) return 'ifs';
-  if (x < width / 2) return 'aifs';
-  return 'gfs';
-};
+const modelForPixel = (x, width, splitPercent, leftModel, rightModel) =>
+  x < (width * splitPercent) / 100 ? leftModel : rightModel;
 
 function ModelPointChart({ tiles, times, frameIndex, point }) {
   const chart = useMemo(() => {
@@ -230,7 +226,6 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [rangeStart, setRangeStart] = useState(0);
   const [rangeEnd, setRangeEnd] = useState(39);
-  const [compareLayout, setCompareLayout] = useState('split');
   const [leftModel, setLeftModel] = useState('kim-global');
   const [rightModel, setRightModel] = useState('ifs');
   const [splitPercent, setSplitPercent] = useState(50);
@@ -244,8 +239,13 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const [refreshTick, setRefreshTick] = useState(0);
   const isCompare = activeView === 'compare';
   const times = metadata?.times ?? [];
-  const visibleModels = useMemo(() => isCompare ? MODEL_IDS : [activeView], [activeView, isCompare]);
-  const contourModel = isCompare ? pressureModel : activeView;
+  const visibleModels = useMemo(
+    () => isCompare ? [...new Set([leftModel, rightModel])] : [activeView],
+    [activeView, isCompare, leftModel, rightModel],
+  );
+  const contourModel = isCompare
+    ? visibleModels.includes(pressureModel) ? pressureModel : leftModel
+    : activeView;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -269,9 +269,9 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: BASE_STYLE,
-      center: [126, 33],
-      zoom: 1.7,
-      minZoom: 0.7,
+      center: [122.5, 35],
+      zoom: 2.5,
+      minZoom: 2,
       maxZoom: 8,
       attributionControl: false,
       localIdeographFontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
@@ -281,7 +281,12 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     mapRef.current = map;
     const updateViewport = () => setViewport(viewportForMap(map));
     map.on('load', () => {
-      map.setProjection({ type: 'globe' });
+      map.setProjection({ type: 'mercator' });
+      map.setMaxBounds([[EAST_ASIA_VIEWPORT[0], EAST_ASIA_VIEWPORT[1]], [EAST_ASIA_VIEWPORT[2], EAST_ASIA_VIEWPORT[3]]]);
+      map.fitBounds([[EAST_ASIA_VIEWPORT[0], EAST_ASIA_VIEWPORT[1]], [EAST_ASIA_VIEWPORT[2], EAST_ASIA_VIEWPORT[3]]], {
+        padding: { top: 24, right: 24, bottom: 76, left: 24 },
+        duration: 0,
+      });
       baseLabelLayersRef.current = (map.getStyle().layers ?? []).filter((layer) => layer.type === 'symbol').map((layer) => layer.id);
       const beforeId = baseLabelLayersRef.current[0];
       map.addSource('global-isobars', { type: 'geojson', data: EMPTY_FEATURES });
@@ -340,23 +345,14 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     const timer = window.setTimeout(() => {
       setTileLoading(true);
       setError('');
-      const requests = isCompare
-        ? fetchGlobalModelBundle({
-            bbox: viewport.bbox,
-            step: viewport.step,
-            cycle: metadata.cycle,
-            signal: controller.signal,
-          }).then((bundle) => MODEL_IDS.map((model) => [model, bundle.models[model]]))
-        : Promise.all(visibleModels.map(async (model) => [model, await fetchGlobalModelTile({
+      const requests = Promise.allSettled(visibleModels.map(async (model) => [model, await fetchGlobalModelTile({
             model,
             bbox: viewport.bbox,
-            step: viewport.step,
+            step: requestStepForModel(model, viewport.step),
             cycle: metadata.cycle,
             signal: controller.signal,
           })]));
       requests
-        .then((entries) => entries.map((entry) => ({ status: 'fulfilled', value: entry })))
-        .catch((reason) => visibleModels.map(() => ({ status: 'rejected', reason })))
         .then((results) => {
           if (controller.signal.aborted) return;
           const nextTiles = {};
@@ -418,8 +414,11 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     canvas.width = CANVAS_WIDTH;
     canvas.height = canvasHeight;
     canvasRef.current = canvas;
-    mappingRef.current = buildCanvasMapping(CANVAS_WIDTH, canvasHeight, primaryTile.grid);
-    const beforeId = baseLabelLayersRef.current.find((layerId) => map.getLayer(layerId));
+    mappingRef.current = Object.fromEntries(Object.entries(tiles).map(([model, tile]) => [
+      model,
+      buildCanvasMapping(CANVAS_WIDTH, canvasHeight, tile.grid, primaryTile.grid),
+    ]));
+    const beforeId = map.getLayer('sido') ? 'sido' : baseLabelLayersRef.current.find((layerId) => map.getLayer(layerId));
     map.addSource('global-model-overlay', {
       type: 'canvas', canvas, animate: false,
       coordinates: [
@@ -437,28 +436,28 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       canvasRef.current = null;
       mappingRef.current = null;
     };
-  }, [canvasHeight, primaryTile]);
+  }, [canvasHeight, primaryTile, tiles]);
 
   const drawFrame = useCallback(() => {
     const canvas = canvasRef.current;
-    const mapping = mappingRef.current;
+    const mappings = mappingRef.current;
     const map = mapRef.current;
-    if (!canvas || !mapping || !map || !primaryTile) return;
+    if (!canvas || !mappings || !map || !primaryTile) return;
     const context = canvas.getContext('2d');
     const image = context.createImageData(canvas.width, canvas.height);
     const pixels = image.data;
-    const pointCount = primaryTile.grid.width * primaryTile.grid.height;
-    const frameOffset = frameIndex * pointCount;
-    const allReady = MODEL_IDS.every((model) => tiles[model]?.rain?.available);
-    for (let index = 0; index < mapping.baseIndex.length; index += 1) {
-      const sourceIndex = mapping.baseIndex[index];
-      if (sourceIndex < 0) continue;
+    const allReady = visibleModels.every((model) => tiles[model]?.rain?.available);
+    const pixelCount = canvas.width * canvas.height;
+    for (let index = 0; index < pixelCount; index += 1) {
       const x = index % canvas.width;
-      const y = Math.floor(index / canvas.width);
-      const model = isCompare ? modelForPixel(compareLayout, x, y, canvas.width, canvas.height, splitPercent, leftModel, rightModel) : activeView;
+      const model = isCompare ? modelForPixel(x, canvas.width, splitPercent, leftModel, rightModel) : activeView;
       const tile = tiles[model];
-      if (!tile?.rain?.available) continue;
-      const value = sampleGrid(tile.rain.values, frameOffset, sourceIndex, mapping.fractionX[index], mapping.fractionY[index], primaryTile.grid.width);
+      const mapping = mappings[model];
+      const sourceIndex = mapping?.baseIndex[index] ?? -1;
+      if (!tile?.rain?.available || sourceIndex < 0) continue;
+      const pointCount = tile.grid.width * tile.grid.height;
+      const frameOffset = frameIndex * pointCount;
+      const value = sampleGrid(tile.rain.values, frameOffset, sourceIndex, mapping.fractionX[index], mapping.fractionY[index], tile.grid.width);
       const color = value === MISSING_VALUE ? null : colorForEncoded(value);
       if (!color) continue;
       const pixelOffset = index * 4;
@@ -467,11 +466,22 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       pixels[pixelOffset + 2] = color[2];
       pixels[pixelOffset + 3] = 220;
       if (isCompare && showConsensus && allReady) {
-        const agreeing = MODEL_IDS.reduce((count, candidate) => {
-          const candidateValue = sampleGrid(tiles[candidate].rain.values, frameOffset, sourceIndex, mapping.fractionX[index], mapping.fractionY[index], primaryTile.grid.width);
+        const agreeing = visibleModels.reduce((count, candidate) => {
+          const candidateTile = tiles[candidate];
+          const candidateMapping = mappings[candidate];
+          const candidateSourceIndex = candidateMapping?.baseIndex[index] ?? -1;
+          const candidatePointCount = candidateTile.grid.width * candidateTile.grid.height;
+          const candidateValue = sampleGrid(
+            candidateTile.rain.values,
+            frameIndex * candidatePointCount,
+            candidateSourceIndex,
+            candidateMapping.fractionX[index],
+            candidateMapping.fractionY[index],
+            candidateTile.grid.width,
+          );
           return count + (candidateValue !== MISSING_VALUE && candidateValue >= 100 ? 1 : 0);
         }, 0);
-        if (agreeing >= 3) {
+        if (agreeing === visibleModels.length) {
           pixels[pixelOffset] = Math.round(pixels[pixelOffset] * 0.58 + 198 * 0.42);
           pixels[pixelOffset + 1] = Math.round(pixels[pixelOffset + 1] * 0.58 + 255 * 0.42);
           pixels[pixelOffset + 2] = Math.round(pixels[pixelOffset + 2] * 0.58 + 240 * 0.42);
@@ -483,7 +493,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     const source = map.getSource('global-model-overlay');
     source?.play();
     window.requestAnimationFrame(() => { source?.pause(); map.triggerRepaint(); });
-  }, [activeView, compareLayout, frameIndex, isCompare, leftModel, primaryTile, rightModel, showConsensus, splitPercent, tiles]);
+  }, [activeView, frameIndex, isCompare, leftModel, primaryTile, rightModel, showConsensus, splitPercent, tiles, visibleModels]);
 
   useEffect(() => { drawFrame(); }, [drawFrame]);
 
@@ -493,7 +503,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       fetchKimPressure({
-        bbox: viewport.bbox, step: viewport.step, cycle: metadata.cycle,
+        bbox: viewport.bbox, step: requestStepForModel('kim-global', viewport.step), cycle: metadata.cycle,
         frameIndex, signal: controller.signal,
       }).then((result) => setKimPressure({
         key: `${viewport.key}:${frameIndex}`,
@@ -585,8 +595,8 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       </div>
 
       {isCompare && primaryTile ? <>
-        {compareLayout === 'split' ? <div className="absolute inset-y-0 z-20 w-11 -translate-x-1/2 cursor-ew-resize touch-none" style={{ left: `${splitPercent}%` }} role="separator" aria-label="모델 비교 경계" aria-valuemin="12" aria-valuemax="88" aria-valuenow={Math.round(splitPercent)} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setIsDraggingSplit(true); }}><div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_8px_rgba(0,0,0,0.7)]" /><div className="absolute left-1/2 top-1/2 flex h-12 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-slate-900/85 shadow-xl"><Columns2 className="h-3.5 w-3.5" /></div></div> : <><div className="pointer-events-none absolute inset-y-0 left-1/2 z-20 w-px bg-white/80" /><div className="pointer-events-none absolute inset-x-0 top-1/2 z-20 h-px bg-white/80" /></>}
-        <div className="pointer-events-none absolute inset-x-0 top-3 z-20 text-xs font-black">{compareLayout === 'split' ? <><span className="absolute left-[25%] rounded-md bg-slate-950/70 px-3 py-1.5">{MODEL_META[leftModel].label}</span><span className="absolute left-[75%] rounded-md bg-slate-950/70 px-3 py-1.5">{MODEL_META[rightModel].label}</span></> : <><span className="absolute left-[25%] rounded-md bg-slate-950/70 px-3 py-1.5">KIM 전구</span><span className="absolute left-[75%] rounded-md bg-slate-950/70 px-3 py-1.5">ECMWF IFS</span><span className="absolute left-[25%] top-[43vh] rounded-md bg-slate-950/70 px-3 py-1.5">ECMWF AIFS</span><span className="absolute left-[75%] top-[43vh] rounded-md bg-slate-950/70 px-3 py-1.5">NOAA GFS</span></>}</div>
+        <div className="absolute inset-y-0 z-20 w-11 -translate-x-1/2 cursor-ew-resize touch-none" style={{ left: `${splitPercent}%` }} role="separator" aria-label="모델 비교 경계" aria-valuemin="12" aria-valuemax="88" aria-valuenow={Math.round(splitPercent)} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setIsDraggingSplit(true); }}><div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_8px_rgba(0,0,0,0.7)]" /><div className="absolute left-1/2 top-1/2 flex h-12 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/80 bg-slate-900/85 shadow-xl"><Columns2 className="h-3.5 w-3.5" /></div></div>
+        <div className="pointer-events-none absolute inset-x-0 top-3 z-20 text-xs font-black"><span className="absolute left-[25%] -translate-x-1/2 rounded-md bg-slate-950/70 px-3 py-1.5">{MODEL_META[leftModel].label}</span><span className="absolute left-[75%] -translate-x-1/2 rounded-md bg-slate-950/70 px-3 py-1.5">{MODEL_META[rightModel].label}</span></div>
       </> : null}
 
       {selectedPoint ? <ModelPointChart tiles={tiles} times={times} frameIndex={frameIndex} point={selectedPoint} /> : null}
@@ -594,14 +604,13 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       {workspaceMode !== 'broadcast' ? <div data-video-hide className="absolute bottom-[8.5rem] right-6 z-40 flex max-w-[72vw] flex-col items-end gap-2">
         {menuSlot}
         {isCompare ? <div className="flex h-10 items-center gap-2 rounded-md border border-white/20 bg-slate-950/90 p-1 shadow-xl backdrop-blur-md">
-          <button type="button" onClick={() => setCompareLayout('split')} aria-pressed={compareLayout === 'split'} className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-black ${compareLayout === 'split' ? 'bg-white text-slate-950' : 'text-white/65 hover:bg-white/10'}`}><Columns2 className="h-4 w-4" />2분할</button>
-          <button type="button" onClick={() => setCompareLayout('quad')} aria-pressed={compareLayout === 'quad'} className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-black ${compareLayout === 'quad' ? 'bg-white text-slate-950' : 'text-white/65 hover:bg-white/10'}`}><Grid2X2 className="h-4 w-4" />4분할</button>
-          {compareLayout === 'split' ? <><select value={leftModel} onChange={(event) => setLeftModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="왼쪽 비교 모델">{MODEL_IDS.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select><select value={rightModel} onChange={(event) => setRightModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="오른쪽 비교 모델">{MODEL_IDS.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select></> : null}
+          <Columns2 className="ml-1 h-4 w-4 text-white/60" aria-hidden="true" />
+          <select value={leftModel} onChange={(event) => setLeftModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="왼쪽 비교 모델">{MODEL_IDS.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select><select value={rightModel} onChange={(event) => setRightModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="오른쪽 비교 모델">{MODEL_IDS.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select>
           <button type="button" onClick={() => setShowConsensus((value) => !value)} aria-pressed={showConsensus} className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-black ${showConsensus ? 'bg-emerald-400 text-slate-950' : 'text-white/65 hover:bg-white/10'}`}><Layers3 className="h-4 w-4" />합의영역</button>
         </div> : null}
         <div className="flex h-10 items-center gap-2 rounded-md border border-white/20 bg-slate-950/90 px-3 shadow-xl backdrop-blur-md">
           <label className="flex cursor-pointer items-center gap-2 text-xs font-black"><input type="checkbox" checked={showPressure} onChange={(event) => setShowPressure(event.target.checked)} className="h-4 w-4 accent-cyan-400" /><Gauge className="h-4 w-4 text-cyan-300" />등압선·고저기압</label>
-          {isCompare && showPressure ? <><span className="h-5 w-px bg-white/20" /><span className="text-[10px] font-bold text-white/50">기준</span><select value={pressureModel} onChange={(event) => setPressureModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="등압선 기준 모델">{MODEL_IDS.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select></> : null}
+          {isCompare && showPressure ? <><span className="h-5 w-px bg-white/20" /><span className="text-[10px] font-bold text-white/50">기준</span><select value={contourModel} onChange={(event) => setPressureModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="등압선 기준 모델">{visibleModels.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select></> : null}
         </div>
         <div className="flex items-center gap-2"><select value={playDurationSec} onChange={(event) => setPlayDurationSec(Number(event.target.value))} className="h-10 rounded-full border border-white/25 bg-slate-900/80 px-3 text-xs font-black text-white" aria-label="재생 길이">{PLAY_DURATIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds}초</option>)}</select><button type="button" onClick={() => setRangeStart(Math.min(frameIndex, rangeEnd - 1))} className="h-10 rounded-full border border-emerald-300/45 bg-emerald-500/15 px-3 text-xs font-black text-emerald-100">시작으로 지정</button><button type="button" onClick={() => setRangeEnd(Math.max(frameIndex, rangeStart + 1))} className="h-10 rounded-full border border-rose-300/45 bg-rose-500/15 px-3 text-xs font-black text-rose-100">끝으로 지정</button><button type="button" onClick={() => { setStatus('loading'); setRefreshTick((value) => value + 1); }} disabled={status === 'loading' || tileLoading} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/80" aria-label="전구모델 새로고침" title="새로고침"><RefreshCw className={`h-4 w-4 ${status === 'loading' || tileLoading ? 'animate-spin' : ''}`} /></button></div>
       </div> : null}

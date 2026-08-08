@@ -6,29 +6,29 @@ const CORS_HEADERS = {
 
 const KIM_GRID_URL = 'https://apihub.kma.go.kr/api/typ06/cgi-bin/url/nph-kim_nc_xy_txt2_std';
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
-const CACHE_PREFIX = 'models/global/v3/';
+const CACHE_PREFIX = 'models/east-asia/v1/';
+const KIM_SOURCE_PREFIX = `${CACHE_PREFIX}kim/source/`;
 const HOUR_MS = 60 * 60 * 1000;
 const FRAME_STEP_HOURS = 6;
 const FRAME_COUNT = 40;
 const MISSING_VALUE = 65535;
-const MAX_GRID_POINTS = 550;
-const OPEN_METEO_CHUNK_SIZE = 140;
+const MAX_GRID_POINTS = 25000;
+const OPEN_METEO_CHUNK_SIZE = 120;
 const RUNTIME_CACHE_LIMIT = 10;
 const KIM_NATIVE_STEP = 1 / 12;
 const KIM_LAT_ORIGIN = -89.95882415771484;
 const KIM_GLOBAL_MISSING = 0xffffffff;
 const KIM_GLOBAL_GRID = {
-  lonMin: -180,
-  lonMax: 178,
-  latMin: -80,
-  latMax: 80,
-  lonStep: 2,
-  latStep: 4,
-  width: 180,
-  height: 41,
+  lonMin: 75,
+  lonMax: 170,
+  latMin: 5,
+  latMax: 65,
+  lonStep: 0.5,
+  latStep: 0.5,
+  width: 191,
+  height: 121,
 };
-const KOREA_PRECOMPUTE = { bbox: [123.4, 32, 133.2, 40], step: 0.16 };
-const WORLD_PRECOMPUTE = { bbox: [-179.5, -79.5, 179.5, 79.5], step: 5 };
+const EAST_ASIA_PRECOMPUTE = { bbox: [75, 5, 170, 65], step: 0.5 };
 const runtimePayloadCache = new Map();
 const inflightBuilds = new Map();
 
@@ -41,9 +41,9 @@ const MODEL_CONFIG = {
   },
   ifs: {
     label: 'ECMWF IFS',
-    providerModel: 'ecmwf_ifs025',
-    provider: 'ECMWF Open Data / Open-Meteo spatial normalization',
-    nativeResolution: '0.25°',
+    providerModel: 'ecmwf_ifs',
+    provider: 'ECMWF IFS HRES / Open-Meteo spatial normalization',
+    nativeResolution: '약 9 km',
   },
   aifs: {
     label: 'ECMWF AIFS',
@@ -55,7 +55,7 @@ const MODEL_CONFIG = {
     label: 'NOAA GFS',
     providerModel: 'ncep_gfs_global',
     provider: 'NOAA GFS / Open-Meteo spatial normalization',
-    nativeResolution: '0.25°',
+    nativeResolution: '0.25° (약 22~28 km)',
   },
 };
 const MODEL_IDS_WITHOUT_KIM = ['ifs', 'aifs', 'gfs'];
@@ -174,7 +174,7 @@ const normalizeBbox = (rawBbox) => {
 
 const buildGrid = (bbox, requestedStep) => {
   const [lonMin, latMin, lonMax, latMax] = bbox;
-  let step = Math.max(0.1, Math.min(10, Number(requestedStep) || 1));
+  let step = Math.max(0.08, Math.min(10, Number(requestedStep) || 1));
   const pointCountFor = (candidate) =>
     (Math.floor((lonMax - lonMin) / candidate) + 1) * (Math.floor((latMax - latMin) / candidate) + 1);
   if (pointCountFor(step) > MAX_GRID_POINTS) step *= Math.sqrt(pointCountFor(step) / MAX_GRID_POINTS);
@@ -259,11 +259,17 @@ const encodeField = (values, validCount, encoding, unit) => ({
   values: bytesToBase64(new Uint8Array(values.buffer)),
 });
 
-const encodeUnavailableField = (length, reason, cacheProgress = null) => {
+const encodeUnavailableField = (
+  length,
+  reason,
+  cacheProgress = null,
+  encoding = 'uint16-centimm-le',
+  unit = 'mm/6h',
+) => {
   const values = new Uint16Array(length);
   values.fill(MISSING_VALUE);
   return {
-    ...encodeField(values, 0, 'uint16-centimm-le', 'mm/6h'),
+    ...encodeField(values, 0, encoding, unit),
     reason,
     cacheProgress,
   };
@@ -359,9 +365,9 @@ const tileCacheKey = (cycle, model, bbox, step) =>
 const pressureCacheKey = (cycle, frame, bbox, step) =>
   `${CACHE_PREFIX}pressure/${cycle}/kim-global/${frame}/${bbox.map(stableNumber).join('_')}/${stableNumber(step)}.json`;
 const kimGlobalFrameKey = (cycle, frameIndex) =>
-  `${CACHE_PREFIX}kim-global/source/${cycle}/frame-${String(frameIndex).padStart(2, '0')}.json`;
-const kimGlobalManifestKey = (cycle) => `${CACHE_PREFIX}kim-global/source/${cycle}/manifest.json`;
-const kimGlobalBundleKey = (cycle) => `${CACHE_PREFIX}kim-global/source/${cycle}/bundle.json`;
+  `${KIM_SOURCE_PREFIX}${cycle}/frame-${String(frameIndex).padStart(2, '0')}.json`;
+const kimGlobalManifestKey = (cycle) => `${KIM_SOURCE_PREFIX}${cycle}/manifest.json`;
+const kimGlobalBundleKey = (cycle) => `${KIM_SOURCE_PREFIX}${cycle}/bundle-v2.json`;
 
 const readStoredJson = async (store, key) => {
   if (!store) return null;
@@ -389,25 +395,28 @@ const writeStoredJson = async (store, key, payload) => {
   });
 };
 
+const isCompleteKimSourceFrame = (frame) => {
+  if (!frame?.values) return false;
+  const values = base64ToUint32(frame.values);
+  if (values.length !== KIM_GLOBAL_GRID.width * KIM_GLOBAL_GRID.height) return false;
+  let validCount = 0;
+  values.forEach((value) => { if (value !== KIM_GLOBAL_MISSING) validCount += 1; });
+  return validCount / values.length >= 0.995;
+};
+
 const fetchKimGlobalCumulativeFrame = async (env, cycle, frameIndex) => {
   const leadHour = frameLeadHours()[frameIndex];
-  const groups = [
-    { bbox: [0, KIM_GLOBAL_GRID.latMin, 180, KIM_GLOBAL_GRID.latMax] },
-    { bbox: [182, KIM_GLOBAL_GRID.latMin, 358, KIM_GLOBAL_GRID.latMax] },
-  ].map((group) => ({ ...group, subset: kimSubsetForBbox(group.bbox) }));
-  const sources = await Promise.all(groups.map(({ subset }) =>
-    fetchKimField(env, cycle, leadHour, 'prec_acc', subset, 45000)));
+  const subset = kimSubsetForBbox(EAST_ASIA_PRECOMPUTE.bbox);
+  const source = await fetchKimField(env, cycle, leadHour, 'prec_acc', subset, 45000);
   const values = new Uint32Array(KIM_GLOBAL_GRID.width * KIM_GLOBAL_GRID.height);
   values.fill(KIM_GLOBAL_MISSING);
   for (let row = 0; row < KIM_GLOBAL_GRID.height; row += 1) {
     const latitude = KIM_GLOBAL_GRID.latMax - row * KIM_GLOBAL_GRID.latStep;
     for (let column = 0; column < KIM_GLOBAL_GRID.width; column += 1) {
       const longitude = KIM_GLOBAL_GRID.lonMin + column * KIM_GLOBAL_GRID.lonStep;
-      const normalizedLongitude = Math.max(KIM_NATIVE_STEP, longitude < 0 ? longitude + 360 : longitude);
-      const groupIndex = normalizedLongitude <= 180 ? 0 : 1;
-      const sourceIndex = sourceIndexForPoint({ lat: latitude, lon: normalizedLongitude }, groups[groupIndex].subset);
+      const sourceIndex = sourceIndexForPoint({ lat: latitude, lon: longitude }, subset);
       if (sourceIndex < 0) continue;
-      const value = sources[groupIndex].values[sourceIndex];
+      const value = source.values[sourceIndex];
       if (Number.isFinite(value) && value >= 0 && value < 100000) {
         values[row * KIM_GLOBAL_GRID.width + column] = Math.round(value * 100);
       }
@@ -426,12 +435,14 @@ const fetchKimGlobalCumulativeFrame = async (env, cycle, frameIndex) => {
 };
 
 const assembleKimGlobalBundle = async (store, cycle, manifest) => {
-  if (!store || !manifest.frames.every(Boolean)) return null;
+  if (!store || !manifest.frames.every(Boolean)) return { bundle: null, invalidFrameIndexes: [] };
   const existing = await readStoredJson(store, kimGlobalBundleKey(cycle));
-  if (existing) return existing;
+  if (existing) return { bundle: existing, invalidFrameIndexes: [] };
   const frames = await Promise.all(frameLeadHours().map((_, frameIndex) =>
     readStoredJson(store, kimGlobalFrameKey(cycle, frameIndex))));
-  if (frames.some((frame) => !frame?.values)) return null;
+  const invalidFrameIndexes = frames.flatMap((frame, frameIndex) =>
+    isCompleteKimSourceFrame(frame) ? [] : [frameIndex]);
+  if (invalidFrameIndexes.length) return { bundle: null, invalidFrameIndexes };
   const bundle = {
     generatedAt: new Date().toISOString(),
     cycle,
@@ -442,7 +453,7 @@ const assembleKimGlobalBundle = async (store, cycle, manifest) => {
     frames: frames.map((frame) => frame.values),
   };
   await writeStoredJson(store, kimGlobalBundleKey(cycle), bundle);
-  return bundle;
+  return { bundle, invalidFrameIndexes: [] };
 };
 
 const warmKimGlobalFrame = async (env, cycle, scheduledTime = Date.now()) => {
@@ -453,8 +464,10 @@ const warmKimGlobalFrame = async (env, cycle, scheduledTime = Date.now()) => {
     generatedAt: new Date().toISOString(), cycle, frames: Array(FRAME_COUNT).fill(false),
   };
   if (manifest.frames.every(Boolean)) {
-    await assembleKimGlobalBundle(store, cycle, manifest);
-    return { warmed: false, complete: true, count: FRAME_COUNT };
+    const assembled = await assembleKimGlobalBundle(store, cycle, manifest);
+    if (assembled.bundle) return { warmed: false, complete: true, count: FRAME_COUNT };
+    assembled.invalidFrameIndexes.forEach((frameIndex) => { manifest.frames[frameIndex] = false; });
+    await writeStoredJson(store, manifestKey, manifest);
   }
   const scheduledDate = new Date(scheduledTime);
   const preferredIndex = (scheduledDate.getUTCHours() * 60 + scheduledDate.getUTCMinutes()) % FRAME_COUNT;
@@ -464,8 +477,10 @@ const warmKimGlobalFrame = async (env, cycle, scheduledTime = Date.now()) => {
     if (!manifest.frames[candidate]) { frameIndex = candidate; break; }
   }
   const key = kimGlobalFrameKey(cycle, frameIndex);
-  if (!await hasStoredJson(store, key)) {
+  const storedFrame = await readStoredJson(store, key);
+  if (!isCompleteKimSourceFrame(storedFrame)) {
     const payload = await fetchKimGlobalCumulativeFrame(env, cycle, frameIndex);
+    if (!isCompleteKimSourceFrame(payload)) throw new KimNoDataError('KIM 전구 원자료에 결측 영역이 있어 다시 수집합니다.');
     await writeStoredJson(store, key, payload);
   }
   manifest.frames[frameIndex] = true;
@@ -476,15 +491,9 @@ const warmKimGlobalFrame = async (env, cycle, scheduledTime = Date.now()) => {
 };
 
 const kimCacheIndexForPoint = (point) => {
-  let longitude = point.lon;
-  while (longitude < -180) longitude += 360;
-  while (longitude >= 180) longitude -= 360;
-  const column = ((Math.round((longitude - KIM_GLOBAL_GRID.lonMin) / KIM_GLOBAL_GRID.lonStep)
-    % KIM_GLOBAL_GRID.width) + KIM_GLOBAL_GRID.width) % KIM_GLOBAL_GRID.width;
-  const row = Math.max(0, Math.min(
-    KIM_GLOBAL_GRID.height - 1,
-    Math.round((KIM_GLOBAL_GRID.latMax - point.lat) / KIM_GLOBAL_GRID.latStep),
-  ));
+  const column = Math.round((point.lon - KIM_GLOBAL_GRID.lonMin) / KIM_GLOBAL_GRID.lonStep);
+  const row = Math.round((KIM_GLOBAL_GRID.latMax - point.lat) / KIM_GLOBAL_GRID.latStep);
+  if (column < 0 || column >= KIM_GLOBAL_GRID.width || row < 0 || row >= KIM_GLOBAL_GRID.height) return -1;
   return row * KIM_GLOBAL_GRID.width + column;
 };
 
@@ -506,6 +515,7 @@ const buildCachedKimRain = async (env, cycle, grid, leadHours) => {
   bundle.frames.forEach((frameValue, frameIndex) => {
     const current = base64ToUint32(frameValue);
     sourceIndexes.forEach((sourceIndex, pointIndex) => {
+      if (sourceIndex < 0) return;
       const currentValue = current[sourceIndex];
       const previousValue = previous ? previous[sourceIndex] : 0;
       if (currentValue === KIM_GLOBAL_MISSING || previousValue === KIM_GLOBAL_MISSING) return;
@@ -566,8 +576,8 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
     models['kim-global'] = {
       rain: kimRain,
       pressure: null,
-      source: directKim ? 'KMA API Hub direct grid' : 'KMA API Hub cached global grid',
-      sourceMode: directKim ? 'native-subset' : kimRain.available ? 'official-global-cache' : 'cache-warming',
+      source: directKim ? 'KMA API Hub direct grid' : 'KMA API Hub cached East Asia grid',
+      sourceMode: directKim ? 'native-subset' : kimRain.available ? 'official-east-asia-cache' : 'cache-warming',
     };
     return {
       generatedAt: new Date().toISOString(), cycle, model: 'compare',
@@ -603,10 +613,10 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
     generatedAt: new Date().toISOString(), cycle, model, label: config.label,
     source: directKim
       ? 'KMA API Hub direct grid'
-      : model === 'kim-global' ? 'KMA API Hub cached global grid' : config.provider,
+      : model === 'kim-global' ? 'KMA API Hub cached East Asia grid' : config.provider,
     sourceMode: directKim
       ? 'native-subset'
-      : model === 'kim-global' ? rain.available ? 'official-global-cache' : 'cache-warming' : 'normalized-spatial-grid',
+      : model === 'kim-global' ? rain.available ? 'official-east-asia-cache' : 'cache-warming' : 'normalized-spatial-grid',
     grid: {
       lonMin: grid.lonMin, lonMax: grid.lonMax, latMin: grid.latMin, latMax: grid.latMax,
       step: grid.step, width: grid.width, height: grid.height, order: grid.order,
@@ -685,6 +695,10 @@ const rememberRuntimePayload = (key, payload) => {
   }
 };
 
+const isCompletePayload = (payload) => payload.model === 'compare'
+  ? Object.values(payload.models ?? {}).every((model) => model.rain?.available)
+  : payload.rain?.available !== false;
+
 const serveWithCache = async (env, executionCtx, key, builder) => {
   const runtimePayload = runtimePayloadCache.get(key);
   if (runtimePayload) {
@@ -713,6 +727,7 @@ const serveWithCache = async (env, executionCtx, key, builder) => {
   } finally {
     if (inflightBuilds.get(key) === build) inflightBuilds.delete(key);
   }
+  if (!isCompletePayload(payload)) return jsonResponse(payload, 200, 'no-store', { 'X-Global-Model-Source': 'live-incomplete' });
   rememberRuntimePayload(key, payload);
   const response = cacheableResponse(payload, 'live');
   if (store) executionCtx.waitUntil(writeStoredJson(store, key, payload));
@@ -722,7 +737,7 @@ const serveWithCache = async (env, executionCtx, key, builder) => {
 
 const handleMetadata = async (env, executionCtx) => {
   const edgeCache = getEdgeCache();
-  const cacheKey = new Request('https://model-cache.invalid/metadata/v3');
+  const cacheKey = new Request('https://model-cache.invalid/metadata/v4');
   if (edgeCache) { const cached = await edgeCache.match(cacheKey); if (cached) return cached; }
   const response = jsonResponse(await buildMetadata(env), 200, 'public, max-age=120, s-maxage=300');
   if (edgeCache) executionCtx.waitUntil(edgeCache.put(cacheKey, response.clone()));
@@ -753,8 +768,6 @@ const handleStatus = async (env) => {
   const kimManifest = store ? await readStoredJson(store, kimGlobalManifestKey(metadata.cycle)) : null;
   const kimFrameCount = kimManifest?.frames?.filter(Boolean).length || 0;
   const warmed = {
-    worldCompare: await hasStoredJson(store, tileCacheKey(metadata.cycle, 'compare', WORLD_PRECOMPUTE.bbox, WORLD_PRECOMPUTE.step)),
-    koreaCompare: await hasStoredJson(store, tileCacheKey(metadata.cycle, 'compare', KOREA_PRECOMPUTE.bbox, KOREA_PRECOMPUTE.step)),
     kimGlobal: {
       complete: await hasStoredJson(store, kimGlobalBundleKey(metadata.cycle)),
       frames: kimFrameCount,
@@ -803,19 +816,7 @@ const routeRequest = async (request, env, executionCtx) => {
 
 const precompute = async (env, scheduledTime = Date.now()) => {
   const metadata = await buildMetadata(env);
-  const kimWarmup = await warmKimGlobalFrame(env, metadata.cycle, scheduledTime);
-  if (kimWarmup.warmed || !kimWarmup.complete) return;
-  const target = Math.floor(new Date(scheduledTime).getUTCMinutes() / 15) % 2
-    ? KOREA_PRECOMPUTE
-    : WORLD_PRECOMPUTE;
-  const key = tileCacheKey(metadata.cycle, 'compare', target.bbox, target.step);
-  const store = getStore(env);
-  if (await hasStoredJson(store, key)) return;
-  const payload = await buildTile(env, {
-    model: 'compare', cycle: metadata.cycle, bbox: target.bbox,
-    requestedStep: target.step,
-  });
-  if (store) await writeStoredJson(store, key, payload);
+  await warmKimGlobalFrame(env, metadata.cycle, scheduledTime);
 };
 
 export default {
