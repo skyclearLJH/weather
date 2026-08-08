@@ -8,6 +8,7 @@ const KIM_GRID_URL = 'https://apihub.kma.go.kr/api/typ06/cgi-bin/url/nph-kim_nc_
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
 const CACHE_PREFIX = 'models/east-asia/v1/';
 const KIM_SOURCE_PREFIX = `${CACHE_PREFIX}kim/source/`;
+const LEGACY_KIM_SOURCE_PREFIX = 'models/global/v3/kim-global/source/';
 const HOUR_MS = 60 * 60 * 1000;
 const FRAME_STEP_HOURS = 6;
 const FRAME_COUNT = 40;
@@ -368,6 +369,7 @@ const kimGlobalFrameKey = (cycle, frameIndex) =>
   `${KIM_SOURCE_PREFIX}${cycle}/frame-${String(frameIndex).padStart(2, '0')}.json`;
 const kimGlobalManifestKey = (cycle) => `${KIM_SOURCE_PREFIX}${cycle}/manifest.json`;
 const kimGlobalBundleKey = (cycle) => `${KIM_SOURCE_PREFIX}${cycle}/bundle-v2.json`;
+const legacyKimGlobalBundleKey = (cycle) => `${LEGACY_KIM_SOURCE_PREFIX}${cycle}/bundle.json`;
 
 const readStoredJson = async (store, key) => {
   if (!store) return null;
@@ -490,24 +492,40 @@ const warmKimGlobalFrame = async (env, cycle, scheduledTime = Date.now()) => {
   return { warmed: true, complete: count === FRAME_COUNT, count };
 };
 
-const kimCacheIndexForPoint = (point) => {
-  const column = Math.round((point.lon - KIM_GLOBAL_GRID.lonMin) / KIM_GLOBAL_GRID.lonStep);
-  const row = Math.round((KIM_GLOBAL_GRID.latMax - point.lat) / KIM_GLOBAL_GRID.latStep);
-  if (column < 0 || column >= KIM_GLOBAL_GRID.width || row < 0 || row >= KIM_GLOBAL_GRID.height) return -1;
-  return row * KIM_GLOBAL_GRID.width + column;
+const kimCacheIndexForPoint = (point, sourceGrid) => {
+  let longitude = point.lon;
+  const wrapsGlobe = sourceGrid.lonMax - sourceGrid.lonMin >= 350;
+  if (wrapsGlobe) {
+    while (longitude < sourceGrid.lonMin) longitude += 360;
+    while (longitude > sourceGrid.lonMax) longitude -= 360;
+  }
+  let column = Math.round((longitude - sourceGrid.lonMin) / sourceGrid.lonStep);
+  if (wrapsGlobe) column = ((column % sourceGrid.width) + sourceGrid.width) % sourceGrid.width;
+  const row = Math.round((sourceGrid.latMax - point.lat) / sourceGrid.latStep);
+  if (column < 0 || column >= sourceGrid.width || row < 0 || row >= sourceGrid.height) return -1;
+  return row * sourceGrid.width + column;
 };
 
 const buildCachedKimRain = async (env, cycle, grid, leadHours) => {
   const store = getStore(env);
   const valueCount = leadHours.length * grid.points.length;
   if (!store) return encodeUnavailableField(valueCount, 'KIM global cache storage is not configured.');
-  const bundle = await readStoredJson(store, kimGlobalBundleKey(cycle));
+  let bundle = await readStoredJson(store, kimGlobalBundleKey(cycle));
+  let fallbackResolution = null;
+  if (!bundle?.frames || bundle.frames.length !== leadHours.length) {
+    const legacyBundle = await readStoredJson(store, legacyKimGlobalBundleKey(cycle));
+    if (legacyBundle?.frames?.length === leadHours.length && legacyBundle.grid) {
+      bundle = legacyBundle;
+      fallbackResolution = 'legacy-global-grid';
+    }
+  }
   if (!bundle?.frames || bundle.frames.length !== leadHours.length) {
     const manifest = await readStoredJson(store, kimGlobalManifestKey(cycle));
     const count = manifest?.frames?.filter(Boolean).length || 0;
     return encodeUnavailableField(valueCount, 'KIM global cache is warming.', { count, total: FRAME_COUNT });
   }
-  const sourceIndexes = grid.points.map(kimCacheIndexForPoint);
+  const sourceGrid = bundle.grid ?? KIM_GLOBAL_GRID;
+  const sourceIndexes = grid.points.map((point) => kimCacheIndexForPoint(point, sourceGrid));
   const encoded = new Uint16Array(valueCount);
   encoded.fill(MISSING_VALUE);
   let validCount = 0;
@@ -527,7 +545,10 @@ const buildCachedKimRain = async (env, cycle, grid, leadHours) => {
     });
     previous = current;
   });
-  return encodeField(encoded, validCount, 'uint16-centimm-le', 'mm/6h');
+  return {
+    ...encodeField(encoded, validCount, 'uint16-centimm-le', 'mm/6h'),
+    fallbackResolution,
+  };
 };
 
 const buildMetadata = async (env) => {
@@ -577,7 +598,9 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
       rain: kimRain,
       pressure: null,
       source: directKim ? 'KMA API Hub direct grid' : 'KMA API Hub cached East Asia grid',
-      sourceMode: directKim ? 'native-subset' : kimRain.available ? 'official-east-asia-cache' : 'cache-warming',
+      sourceMode: directKim
+        ? 'native-subset'
+        : kimRain.fallbackResolution ?? (kimRain.available ? 'official-east-asia-cache' : 'cache-warming'),
     };
     return {
       generatedAt: new Date().toISOString(), cycle, model: 'compare',
@@ -616,7 +639,9 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
       : model === 'kim-global' ? 'KMA API Hub cached East Asia grid' : config.provider,
     sourceMode: directKim
       ? 'native-subset'
-      : model === 'kim-global' ? rain.available ? 'official-east-asia-cache' : 'cache-warming' : 'normalized-spatial-grid',
+      : model === 'kim-global'
+        ? rain.fallbackResolution ?? (rain.available ? 'official-east-asia-cache' : 'cache-warming')
+        : 'normalized-spatial-grid',
     grid: {
       lonMin: grid.lonMin, lonMax: grid.lonMax, latMin: grid.latMin, latMax: grid.latMax,
       step: grid.step, width: grid.width, height: grid.height, order: grid.order,
