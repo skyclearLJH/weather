@@ -19,6 +19,7 @@ import WindParticleOverlay from './WindParticleOverlay.jsx';
 const TERRAIN_SOURCE_ID = 'terrain-dem';
 const TERRAIN_HILLSHADE_LAYER_ID = 'terrain-hillshade';
 const BASIN_SOURCE_ID = 'terrain-basins';
+const BASIN_LABEL_SOURCE_ID = 'terrain-basin-label-points';
 const BASIN_SELECTED_SOURCE_ID = 'terrain-basin-selected';
 const RIVER_SOURCE_ID = 'terrain-national-rivers';
 const BASIN_LAYER_IDS = [
@@ -73,6 +74,97 @@ const pointInFeature = (point, feature) => {
   return false;
 };
 
+const ringArea = (ring) => {
+  let twiceArea = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const [x1, y1] = ring[index];
+    const [x2, y2] = ring[(index + 1) % ring.length];
+    twiceArea += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(twiceArea / 2);
+};
+
+const ringCentroid = (ring) => {
+  let twiceArea = 0;
+  let xTotal = 0;
+  let yTotal = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const [x1, y1] = ring[index];
+    const [x2, y2] = ring[(index + 1) % ring.length];
+    const cross = x1 * y2 - x2 * y1;
+    twiceArea += cross;
+    xTotal += (x1 + x2) * cross;
+    yTotal += (y1 + y2) * cross;
+  }
+  if (Math.abs(twiceArea) < 1e-12) return null;
+  return [xTotal / (3 * twiceArea), yTotal / (3 * twiceArea)];
+};
+
+const findPolygonLabelPoint = (polygon) => {
+  const outerRing = polygon?.[0];
+  if (!outerRing?.length) return null;
+
+  const xs = outerRing.map(([x]) => x);
+  const ys = outerRing.map(([, y]) => y);
+  const bounds = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  const center = [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2];
+  const centroid = ringCentroid(outerRing);
+
+  if (centroid && pointInPolygon(centroid, polygon)) return centroid;
+  if (pointInPolygon(center, polygon)) return center;
+
+  const target = centroid ?? center;
+  let bestPoint = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  const gridSize = 16;
+  for (let row = 1; row < gridSize; row += 1) {
+    for (let column = 1; column < gridSize; column += 1) {
+      const point = [
+        bounds[0] + ((bounds[2] - bounds[0]) * column) / gridSize,
+        bounds[1] + ((bounds[3] - bounds[1]) * row) / gridSize,
+      ];
+      if (!pointInPolygon(point, polygon)) continue;
+      const distance = (point[0] - target[0]) ** 2 + (point[1] - target[1]) ** 2;
+      if (distance < bestDistance) {
+        bestPoint = point;
+        bestDistance = distance;
+      }
+    }
+  }
+  return bestPoint ?? outerRing[0];
+};
+
+const buildBasinLabelPoints = (basins) => {
+  const seenCodes = new Set();
+  const features = (basins?.features ?? []).flatMap((feature) => {
+    const code = feature?.properties?.mbsncd;
+    if (code != null && seenCodes.has(String(code))) return [];
+
+    const geometry = feature?.geometry;
+    const polygons = geometry?.type === 'Polygon'
+      ? [geometry.coordinates]
+      : geometry?.type === 'MultiPolygon'
+        ? geometry.coordinates
+        : [];
+    if (polygons.length === 0) return [];
+
+    const mainPolygon = polygons.reduce((largest, polygon) => (
+      ringArea(polygon?.[0] ?? []) > ringArea(largest?.[0] ?? []) ? polygon : largest
+    ));
+    const point = findPolygonLabelPoint(mainPolygon);
+    if (!point) return [];
+    if (code != null) seenCodes.add(String(code));
+
+    return [{
+      type: 'Feature',
+      properties: { ...feature.properties },
+      geometry: { type: 'Point', coordinates: point },
+    }];
+  });
+
+  return { type: 'FeatureCollection', features };
+};
+
 const summarizeStations = (rows) => {
   if (rows.length === 0) return null;
   const total = rows.reduce((sum, row) => sum + row.mm, 0);
@@ -81,6 +173,7 @@ const summarizeStations = (rows) => {
 };
 
 const addTerrainLayers = (map, basins, rivers) => {
+  const basinLabelPoints = buildBasinLabelPoints(basins);
   if (!map.getSource(TERRAIN_SOURCE_ID)) {
     map.addSource(TERRAIN_SOURCE_ID, {
       type: 'raster-dem',
@@ -94,6 +187,9 @@ const addTerrainLayers = (map, basins, rivers) => {
   }
   if (!map.getSource(BASIN_SOURCE_ID)) {
     map.addSource(BASIN_SOURCE_ID, { type: 'geojson', data: basins });
+  }
+  if (!map.getSource(BASIN_LABEL_SOURCE_ID)) {
+    map.addSource(BASIN_LABEL_SOURCE_ID, { type: 'geojson', data: basinLabelPoints });
   }
   if (!map.getSource(BASIN_SELECTED_SOURCE_ID)) {
     map.addSource(BASIN_SELECTED_SOURCE_ID, {
@@ -202,7 +298,7 @@ const addTerrainLayers = (map, basins, rivers) => {
     map.addLayer({
       id: 'terrain-basin-label',
       type: 'symbol',
-      source: BASIN_SOURCE_ID,
+      source: BASIN_LABEL_SOURCE_ID,
       minzoom: 7.2,
       layout: {
         visibility: 'none',
