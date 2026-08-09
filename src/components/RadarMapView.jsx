@@ -13,6 +13,7 @@ import {
 import SatelliteView from './SatelliteView.jsx';
 import TerrainRainOverlay from './TerrainRainOverlay.jsx';
 import GlobalModelView from './GlobalModelView.jsx';
+import HistoricalCaseComparison from './HistoricalCaseComparison.jsx';
 import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import VideoExportMenu from './VideoExportMenu.jsx';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
@@ -101,6 +102,7 @@ const getInitialBroadcastView = () => {
     'radar',
     'tracking',
     'terrain',
+    'history',
     'kim',
     'accum',
     'satellite',
@@ -1634,6 +1636,7 @@ const RadarMapView = ({
   const isRadarView = isBroadcast && broadcastView === 'radar';
   const isTrackingView = isBroadcast && broadcastView === 'tracking';
   const isTerrainView = isBroadcast && broadcastView === 'terrain';
+  const isHistoricalView = isBroadcast && broadcastView === 'history';
   const isGlobalModelView = isBroadcast && GLOBAL_MODEL_VIEWS.has(broadcastView);
   const isRadarDataView = isRadarView || isTrackingView || isTerrainView;
   const [trackingPoint, setTrackingPoint] = useState(TRACKING_DEFAULT_POINT);
@@ -4713,7 +4716,7 @@ const RadarMapView = ({
       section={
         isGlobalModelView
           ? 'forecast'
-          : isTrackingView || isTerrainView
+          : isTrackingView || isTerrainView || isHistoricalView
             ? 'analysis'
             : 'rain'
       }
@@ -4785,12 +4788,12 @@ const RadarMapView = ({
           } ${isBroadcast && !isBroadcastMapReady ? 'opacity-0' : 'opacity-100'}`}
           style={{ backgroundColor: isBroadcast ? MAP_COLOR_THEMES.broadcast.sea : undefined }}
         />
-        {!isAccumView && !isKimView && !isSatelliteView && !isGlobalModelView && status === 'loading' && frames.length === 0 ? (
+        {!isAccumView && !isKimView && !isSatelliteView && !isGlobalModelView && !isHistoricalView && status === 'loading' && frames.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/70 text-sm font-medium text-slate-500">
             레이더 자료를 불러오는 중입니다…
           </div>
         ) : null}
-        {!isAccumView && !isKimView && !isSatelliteView && !isGlobalModelView && status === 'error' ? (
+        {!isAccumView && !isKimView && !isSatelliteView && !isGlobalModelView && !isHistoricalView && status === 'error' ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/80 px-6 text-center text-sm font-medium text-red-500">
             {statusMessage || '레이더 자료를 불러오지 못했습니다.'}
           </div>
@@ -4835,7 +4838,16 @@ const RadarMapView = ({
           />
         ) : null}
 
-        {isBroadcast && !isSatelliteView && !isGlobalModelView ? (
+        {isHistoricalView ? (
+          <HistoricalCaseComparison
+            workspaceMode={workspaceMode}
+            showPlaceLabels={showPlaceLabels}
+            menuSlot={workspaceMenu}
+            onBeforeScreenShare={handleBeforeVideoScreenShare}
+          />
+        ) : null}
+
+        {isBroadcast && !isSatelliteView && !isGlobalModelView && !isHistoricalView ? (
           <>
             {workspaceMode === 'record' ? (
               <VideoExportMenu

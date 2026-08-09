@@ -36,6 +36,7 @@ const FORECAST_ITEMS = [
 const ANALYSIS_ITEMS = [
   { id: 'tracking', label: '호우추적' },
   { id: 'terrain', label: '지형호우' },
+  { id: 'history', label: '과거비교' },
 ];
 
 const SECTION_VIEW_ITEMS = {
@@ -69,7 +70,7 @@ const SECTION_LABELS = {
 function SegmentedControl({ label, items, value, onChange, activeClassName }) {
   return (
     <div
-      className="flex h-10 items-center rounded-lg border border-white/20 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md"
+      className="flex h-10 shrink-0 items-center rounded-lg border border-white/20 bg-slate-950/85 p-1 shadow-xl backdrop-blur-md"
       role="group"
       aria-label={label}
     >
@@ -111,8 +112,8 @@ function WeatherWorkspaceMenu({
   const viewItems = SECTION_VIEW_ITEMS[section] ?? RAIN_ITEMS;
 
   return (
-    <div className="flex flex-col items-end gap-2">
-      <div className="flex items-center gap-2">
+    <div className="flex w-[calc(100vw-3rem)] flex-col items-end gap-2 sm:w-auto">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <SegmentedControl
           label="작업 모드"
           items={MODE_ITEMS}
@@ -130,7 +131,7 @@ function WeatherWorkspaceMenu({
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <SegmentedControl
           label="기상 분야"
           items={SECTION_ITEMS}
