@@ -80,9 +80,6 @@ const stepForZoom = (zoom) => {
   return 1 / 12;
 };
 
-const requestStepForModel = (model, viewportStep) =>
-  Math.max(MODEL_MIN_STEP[model] ?? viewportStep, viewportStep);
-
 const viewportForMap = (map) => {
   const bounds = map.getBounds();
   const zoom = map.getZoom();
@@ -352,7 +349,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   }, [showPlaceLabels, viewport]);
 
   useEffect(() => {
-    if (!metadata || !viewport) return undefined;
+    if (!metadata) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       if (!providerModels.length) {
@@ -366,8 +363,8 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       setError('');
       Promise.allSettled(providerModels.map(async (model) => [model, await fetchGlobalModelTile({
         model,
-        bbox: viewport.bbox,
-        step: requestStepForModel(model, viewport.step),
+        bbox: EAST_ASIA_VIEWPORT,
+        step: MODEL_MIN_STEP[model],
         cycle: metadata.cycle,
         signal: controller.signal,
       })]))
@@ -377,7 +374,17 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
           const failures = [];
           results.forEach((result, index) => {
             if (result.status === 'fulfilled') entries.push(result.value);
-            else failures.push(`${MODEL_META[providerModels[index]].short}: ${result.reason.message}`);
+            else {
+              const model = providerModels[index];
+              console.warn('Global model tile request failed', JSON.stringify({
+                model,
+                bbox: EAST_ASIA_VIEWPORT,
+                step: MODEL_MIN_STEP[model],
+                cycle: metadata.cycle,
+                error: result.reason.message,
+              }));
+              failures.push(`${MODEL_META[model].short}: ${result.reason.message}`);
+            }
           });
           setTiles((current) => {
             const next = Object.fromEntries(Object.entries(current).filter(([model]) =>
@@ -393,7 +400,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [metadata, providerModels, refreshTick, viewport, visibleModels]);
+  }, [metadata, providerModels, refreshTick, visibleModels]);
 
   useEffect(() => {
     if (!metadata) return undefined;

@@ -1093,6 +1093,7 @@ const handleTile = async (request, env, executionCtx) => {
   const cycle = parsed.cycle || (await buildMetadata(env)).cycle;
   const params = {
     ...parsed,
+    bbox: parsed.model === 'kim-global' ? parsed.bbox : EAST_ASIA_PRECOMPUTE.bbox,
     requestedStep: parsed.model === 'kim-global'
       ? parsed.requestedStep
       : Math.max(OPEN_METEO_MIN_GRID_STEP, parsed.requestedStep),
