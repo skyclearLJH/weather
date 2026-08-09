@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   Columns2,
   Gauge,
-  Globe2,
   Layers3,
   LoaderCircle,
   MapPin,
@@ -26,9 +27,9 @@ import VideoExportMenu from './VideoExportMenu.jsx';
 // AIFS는 0.25° 원본 격자가 공개되지 않아 방송에 쓸 해상도를 못 내서 제외했다.
 const MODEL_IDS = ['kim-global', 'ifs', 'gfs'];
 const MODEL_META = {
-  'kim-global': { label: 'KIM 전구', short: 'KIM', color: '#22d3ee' },
-  ifs: { label: 'ECMWF IFS', short: 'IFS', color: '#facc15' },
-  gfs: { label: 'NOAA GFS', short: 'GFS', color: '#4ade80' },
+  'kim-global': { label: 'KIM 전구', short: 'KIM', band: 'KIM', color: '#22d3ee' },
+  ifs: { label: 'ECMWF IFS', short: 'IFS', band: 'ECMWF', color: '#facc15' },
+  gfs: { label: 'NOAA GFS', short: 'GFS', band: 'GFS', color: '#4ade80' },
 };
 const BASE_STYLE = {
   version: 8,
@@ -69,6 +70,21 @@ const PALETTE = [
 
 const mercatorY = (latitude) => Math.log(Math.tan(Math.PI / 4 + (latitude * Math.PI) / 360));
 const mercatorYToLat = (value) => ((2 * Math.atan(Math.exp(value)) - Math.PI / 2) * 180) / Math.PI;
+// 예보 초기장(모델 기준시각). cycle은 UTC YYYYMMDDHH이므로 KST로 바꿔 보여준다.
+const formatCycleInit = (cycle) => {
+  if (!/^\d{10}$/.test(cycle ?? '')) return null;
+  const kst = new Date(Date.UTC(
+    Number(cycle.slice(0, 4)),
+    Number(cycle.slice(4, 6)) - 1,
+    Number(cycle.slice(6, 8)),
+    Number(cycle.slice(8, 10)),
+  ) + 9 * 3600 * 1000);
+  return {
+    date: `${kst.getUTCMonth() + 1}/${kst.getUTCDate()}`,
+    hour: `${String(kst.getUTCHours()).padStart(2, '0')}시 예측`,
+  };
+};
+
 const formatTime = (date) => `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 const formatDate = (date) => `${date.getMonth() + 1}/${date.getDate()} (${['일', '월', '화', '수', '목', '금', '토'][date.getDay()]})`;
 const round = (value, precision = 2) => Number(value.toFixed(precision));
@@ -332,7 +348,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
           'text-allow-overlap': true,
         },
         paint: {
-          'text-color': ['case', ['==', ['get', 'kind'], 'H'], '#ff4d61', '#4cc9ff'],
+          'text-color': ['case', ['==', ['get', 'kind'], 'H'], '#4cc9ff', '#ff4d61'],
           'text-halo-color': 'rgba(10,20,36,0.94)', 'text-halo-width': 2.2,
         },
       });
@@ -453,6 +469,23 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       controller.abort();
     };
   }, [frameIndex, metadata, nativeModels, refreshTick]);
+
+  // 재생·스크럽 중 강수가 비어 보이지 않도록 전 구간을 배경에서 미리 받아 둔다.
+  // 캐시가 채워지면 프레임 전환이 네트워크를 기다리지 않는다.
+  useEffect(() => {
+    if (!metadata || !nativeModels.length) return undefined;
+    let active = true;
+    (async () => {
+      for (const model of nativeModels) {
+        for (let index = 0; index < metadata.times.length; index += 1) {
+          if (!active) return;
+          // 아직 적재 안 된 프레임(404)은 조용히 건너뛴다.
+          await fetchNativeModelFrame({ model, frameIndex: index }).catch(() => null);
+        }
+      }
+    })();
+    return () => { active = false; };
+  }, [metadata, nativeModels, refreshTick]);
 
   useEffect(() => {
     if (!metadata) return undefined;
@@ -595,10 +628,11 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     const map = mapRef.current;
     if (!map?.getSource('global-isobars')) return;
     const tile = tiles[contourModel];
-    // 프레임 단위로 오는 타일(KIM·네이티브 0.25°)은 현재 프레임 것이 도착한 뒤 그린다.
-    if (tile && !tileMatchesFrame(tile, frameIndex)) return;
-    const features = showPressure && tile
-      ? buildPressureFeatures(tile, frameIndex)
+    // 프레임 단위 타일(KIM·네이티브 0.25°)이 아직 현재 프레임이 아니면 등압선을
+    // 지운다. 예전에는 그대로 두어, 강수는 비었는데 이전 프레임 등압선만 남았다.
+    const usable = tile && tileMatchesFrame(tile, frameIndex) ? tile : null;
+    const features = showPressure && usable
+      ? buildPressureFeatures(usable, frameIndex)
       : { contours: EMPTY_FEATURES, centers: EMPTY_FEATURES };
     map.getSource('global-isobars').setData(features.contours);
     map.getSource('global-pressure-centers').setData(features.centers);
@@ -653,7 +687,11 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const staleNotice = staleModels.length
     ? `${staleModels.map((model) => MODEL_META[model].short).join(' · ')} 최신 갱신 지연으로 최근 성공 자료를 표시 중입니다.`
     : '';
-  const title = isCompare ? '전구모델 비교' : `${MODEL_META[activeView]?.label ?? ''} 강수예측`;
+  const title = isCompare ? '전구모델 비교' : `${MODEL_META[activeView]?.band ?? ''} 강수예측`;
+  // 초기장은 현재 보고 있는 모델의 주기를 쓴다(모델마다 발표 주기가 다르다).
+  const cycleInit = formatCycleInit(
+    (isCompare ? tiles[contourModel] : tiles[activeView])?.cycle ?? metadata?.cycle,
+  );
   const startPlayback = () => {
     if (!times.length) return;
     if (frameIndex < rangeStart || frameIndex >= rangeEnd) setFrameIndex(rangeStart);
@@ -670,6 +708,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
         <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
           <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
           <span className="whitespace-nowrap text-3xl font-black">{title}</span>
+          {cycleInit ? <div className="flex shrink-0 flex-col items-end leading-tight text-[#bdd6fb]"><span className="text-[11px] font-bold tabular-nums">{cycleInit.date}</span><span className="text-[11px] font-bold tabular-nums">{cycleInit.hour}</span></div> : null}
           {currentTime ? <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap border-l border-white/30 pl-4"><span className="text-2xl font-black tabular-nums">{formatTime(currentTime)}</span><span className="text-sm font-bold text-[#bdd6fb]">{formatDate(currentTime)}</span></div> : null}
           <div className="absolute inset-x-0 bottom-0 h-[3px] bg-[#8ec2ff]" />
         </div>
@@ -687,7 +726,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
 
       {selectedPoint ? <ModelPointChart tiles={tiles} times={times} frameIndex={frameIndex} point={selectedPoint} /> : null}
 
-      {workspaceMode !== 'broadcast' ? <div data-video-hide className="absolute bottom-[8.5rem] right-6 z-40 flex max-w-[72vw] flex-col items-end gap-2">
+      {workspaceMode !== 'broadcast' ? <div data-video-hide className="absolute bottom-24 right-6 z-40 flex max-w-[72vw] flex-col items-end gap-2">
         {menuSlot}
         {isCompare ? <div className="flex h-10 items-center gap-2 rounded-md border border-white/20 bg-slate-950/90 p-1 shadow-xl backdrop-blur-md">
           <Columns2 className="ml-1 h-4 w-4 text-white/60" aria-hidden="true" />
@@ -702,10 +741,14 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       </div> : null}
 
       <div data-video-hide className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-slate-950/80 via-slate-950/45 to-transparent px-[7%] pb-4 pt-12">
-        <div className="flex items-center gap-5"><button type="button" onClick={() => isPlaying ? setIsPlaying(false) : startPlayback()} disabled={status !== 'ready' || !currentModelAvailable} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white shadow-xl disabled:opacity-40" aria-label={isPlaying ? '일시정지' : '재생'}>{isPlaying ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5 fill-current" />}</button><div className="min-w-0 flex-1"><div className="relative"><input type="range" min="0" max={Math.max(1, times.length - 1)} step="1" value={frameIndex} onChange={(event) => { setIsPlaying(false); setFrameIndex(Number(event.target.value)); }} className="h-2 w-full cursor-pointer accent-blue-500" aria-label="전구모델 예측 시각" />{times.length ? <><span className="pointer-events-none absolute top-0 h-3 w-1 -translate-x-1/2 rounded-full bg-emerald-300" style={{ left: `${(rangeStart / (times.length - 1)) * 100}%` }} /><span className="pointer-events-none absolute top-0 h-3 w-1 -translate-x-1/2 rounded-full bg-rose-300" style={{ left: `${(rangeEnd / (times.length - 1)) * 100}%` }} /></> : null}</div><div className="relative mt-2 h-4 text-[10px] font-bold tabular-nums text-white/65">{[6, 24, 48, 72, 120, 168, 240].map((hour, index, hours) => <span key={hour} className="absolute whitespace-nowrap" style={{ left: `${((hour - 6) / 234) * 100}%`, transform: index === 0 ? 'none' : index === hours.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)' }}>+{hour}h</span>)}</div></div></div>
+        <div className="flex items-center gap-5">
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={() => { setIsPlaying(false); setFrameIndex((value) => Math.max(0, value - 1)); }} disabled={status !== 'ready' || frameIndex <= 0} className="flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-slate-900/80 text-white shadow-lg disabled:opacity-30" aria-label="이전 예측 시각" title="이전 시각"><ChevronLeft className="h-5 w-5" /></button>
+            <button type="button" onClick={() => isPlaying ? setIsPlaying(false) : startPlayback()} disabled={status !== 'ready' || !currentModelAvailable} className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-white shadow-xl disabled:opacity-40" aria-label={isPlaying ? '일시정지' : '재생'}>{isPlaying ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5 fill-current" />}</button>
+            <button type="button" onClick={() => { setIsPlaying(false); setFrameIndex((value) => Math.min(times.length - 1, value + 1)); }} disabled={status !== 'ready' || frameIndex >= times.length - 1} className="flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-slate-900/80 text-white shadow-lg disabled:opacity-30" aria-label="다음 예측 시각" title="다음 시각"><ChevronRight className="h-5 w-5" /></button>
+          </div><div className="min-w-0 flex-1"><div className="relative"><input type="range" min="0" max={Math.max(1, times.length - 1)} step="1" value={frameIndex} onChange={(event) => { setIsPlaying(false); setFrameIndex(Number(event.target.value)); }} className="h-2 w-full cursor-pointer accent-blue-500" aria-label="전구모델 예측 시각" />{times.length ? <><span className="pointer-events-none absolute top-0 h-3 w-1 -translate-x-1/2 rounded-full bg-emerald-300" style={{ left: `${(rangeStart / (times.length - 1)) * 100}%` }} /><span className="pointer-events-none absolute top-0 h-3 w-1 -translate-x-1/2 rounded-full bg-rose-300" style={{ left: `${(rangeEnd / (times.length - 1)) * 100}%` }} /></> : null}</div><div className="relative mt-2 h-4 text-[10px] font-bold tabular-nums text-white/65">{[6, 24, 48, 72, 120, 168, 240].map((hour, index, hours) => <span key={hour} className="absolute whitespace-nowrap" style={{ left: `${((hour - 6) / 234) * 100}%`, transform: index === 0 ? 'none' : index === hours.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)' }}>+{hour}h</span>)}</div></div></div>
       </div>
 
-      <div data-video-hide className="pointer-events-none absolute bottom-24 right-5 z-20 flex items-center gap-2 rounded-md bg-slate-950/55 px-2 py-1 text-[10px] font-semibold text-white/65"><Globe2 className="h-3 w-3" />KMA · ECMWF · NOAA · Open-Meteo</div>
       {unavailableNotice ? <div className="pointer-events-none absolute left-1/2 top-28 z-40 flex -translate-x-1/2 items-center gap-2 rounded-md border border-amber-300/35 bg-slate-950/88 px-4 py-2 text-xs font-black text-amber-100 shadow-xl"><AlertTriangle className="h-4 w-4 text-amber-300" />{unavailableNotice}</div> : null}
       {workspaceMode === 'edit' && staleNotice ? <div data-video-hide className="pointer-events-none absolute left-1/2 top-28 z-40 flex -translate-x-1/2 items-center gap-2 rounded-md border border-amber-300/35 bg-slate-950/88 px-4 py-2 text-xs font-black text-amber-100 shadow-xl"><AlertTriangle className="h-4 w-4 text-amber-300" />{staleNotice}</div> : null}
       {tileLoading && Object.keys(tiles).length ? <div className="pointer-events-none absolute right-5 top-5 z-30 flex items-center gap-2 rounded-md bg-slate-950/75 px-3 py-2 text-xs font-bold"><LoaderCircle className="h-4 w-4 animate-spin text-cyan-300" />확대 영역 자료 갱신 중</div> : null}

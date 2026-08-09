@@ -27,8 +27,8 @@ const HEAT_ITEMS = [
 ];
 
 const FORECAST_ITEMS = [
-  { id: 'kim-global', label: 'KIM 전구' },
-  { id: 'ifs', label: 'ECMWF IFS' },
+  { id: 'kim-global', label: 'KIM' },
+  { id: 'ifs', label: 'ECMWF' },
   { id: 'gfs', label: 'GFS' },
   { id: 'compare', label: '비교분석' },
 ];

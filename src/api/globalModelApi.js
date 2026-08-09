@@ -165,6 +165,21 @@ const NATIVE_MODEL_IDS = { ifs: 'ecmwf', gfs: 'gfs' };
 
 export const isNativeModel = (model) => Boolean(NATIVE_MODEL_IDS[model]);
 
+// 프레임 단위로 받으므로 캐시가 없으면 슬라이더를 옮길 때마다(재생 중에는 매
+// 프레임) 약 368KB를 새로 받는다. 그동안 강수 캔버스는 빈 화면이 되므로
+// 받아둔 프레임은 메모리에 보관하고, 배경에서 미리 채운다.
+const NATIVE_FRAME_CACHE = new Map();
+const NATIVE_FRAME_CACHE_LIMIT = 120;
+
+const rememberNativeFrame = (key, promise) => {
+  NATIVE_FRAME_CACHE.set(key, promise);
+  promise.catch(() => NATIVE_FRAME_CACHE.delete(key));
+  while (NATIVE_FRAME_CACHE.size > NATIVE_FRAME_CACHE_LIMIT) {
+    NATIVE_FRAME_CACHE.delete(NATIVE_FRAME_CACHE.keys().next().value);
+  }
+  return promise;
+};
+
 export const fetchNativeModelMeta = ({ model, signal }) =>
   withTimeout(async (timeoutSignal) => {
     const nativeId = NATIVE_MODEL_IDS[model];
@@ -181,7 +196,15 @@ export const fetchNativeModelMeta = ({ model, signal }) =>
 
 // 프레임 하나를 기존 타일과 같은 모양({grid, times, rain:{values}})으로 만들어
 // 렌더러가 분기 없이 그대로 그릴 수 있게 한다.
-export const fetchNativeModelFrame = ({ model, cycle, frameIndex, signal }) =>
+export const fetchNativeModelFrame = ({ model, cycle, frameIndex, signal }) => {
+  // 캐시는 시각(cycle)까지 포함해 구분한다. 새 예보 주기가 나오면 자연히 무효화된다.
+  const cacheKey = `${model}:${cycle ?? 'latest'}:${frameIndex}`;
+  const cached = NATIVE_FRAME_CACHE.get(cacheKey);
+  if (cached) return cached;
+  return rememberNativeFrame(cacheKey, loadNativeModelFrame({ model, cycle, frameIndex, signal }));
+};
+
+const loadNativeModelFrame = ({ model, cycle, frameIndex, signal }) =>
   withTimeout(async (timeoutSignal) => {
     const nativeId = NATIVE_MODEL_IDS[model];
     if (!nativeId) throw new Error(`${model}은 네이티브 격자를 제공하지 않습니다.`);
