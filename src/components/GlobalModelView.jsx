@@ -396,7 +396,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   }, [metadata, providerModels, refreshTick, viewport, visibleModels]);
 
   useEffect(() => {
-    if (!metadata || !viewport) return undefined;
+    if (!metadata) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       if (!visibleModels.includes('kim-global')) {
@@ -411,7 +411,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       setKimFrameLoading(true);
       setError('');
       fetchGlobalModelFrame({
-        bbox: viewport.bbox,
+        bbox: EAST_ASIA_VIEWPORT,
         cycle: metadata.cycle,
         frameIndex,
         signal: controller.signal,
@@ -429,7 +429,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [frameIndex, metadata, refreshTick, viewport, visibleModels]);
+  }, [frameIndex, metadata, refreshTick, visibleModels]);
 
   const primaryTile = tiles[visibleModels.find((model) => tiles[model])] ?? null;
   const canvasHeight = useMemo(() => {

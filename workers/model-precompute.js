@@ -13,7 +13,8 @@ const FRAME_STEP_HOURS = 6;
 const FRAME_COUNT = 40;
 const MISSING_VALUE = 65535;
 const MAX_GRID_POINTS = 25000;
-const OPEN_METEO_CHUNK_SIZE = 120;
+const OPEN_METEO_DEFAULT_CHUNK_SIZE = 80;
+const OPEN_METEO_HEAVY_CHUNK_SIZE = 40;
 const RUNTIME_CACHE_LIMIT = 10;
 const KIM_NATIVE_STEP = 1 / 12;
 const KIM_LAT_ORIGIN = -89.95882415771484;
@@ -227,7 +228,30 @@ const openMeteoEndpointFor = (providerModels) => {
   return `${OPEN_METEO_BASE_URL}/forecast`;
 };
 
-const fetchOpenMeteoChunk = async (points, providerModels) => {
+const sha256Hex = async (value) => {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
+const openMeteoChunkCacheKey = async (cycle, providerModels, points) => {
+  const models = [].concat(providerModels).join(',');
+  const coordinates = points.map((point) => `${point.lat.toFixed(3)},${point.lon.toFixed(3)}`).join(';');
+  return `${CACHE_PREFIX}open-meteo/${cycle}/${models}/${await sha256Hex(coordinates)}.json`;
+};
+
+const openMeteoChunkSizeFor = (providerModels) => [].concat(providerModels).some((model) =>
+  model.includes('aifs') || model.startsWith('ncep_'))
+  ? OPEN_METEO_HEAVY_CHUNK_SIZE
+  : OPEN_METEO_DEFAULT_CHUNK_SIZE;
+
+const fetchOpenMeteoChunk = async (env, points, providerModels, cycle) => {
+  const store = getStore(env);
+  const cacheKey = await openMeteoChunkCacheKey(cycle, providerModels, points);
+  const cached = await readStoredJson(store, cacheKey);
+  if (Array.isArray(cached?.rows) && cached.rows.length === points.length) {
+    return { rows: cached.rows, fromCache: true };
+  }
   const query = new URLSearchParams({
     latitude: points.map((point) => point.lat.toFixed(3)).join(','),
     longitude: points.map((point) => point.lon.toFixed(3)).join(','),
@@ -239,7 +263,14 @@ const fetchOpenMeteoChunk = async (points, providerModels) => {
     const response = await fetch(`${endpoint}?${query}`, { signal: AbortSignal.timeout(45000) });
     if (response.ok) {
       const payload = await response.json();
-      return Array.isArray(payload) ? payload : [payload];
+      const rows = Array.isArray(payload) ? payload : [payload];
+      if (rows.length !== points.length) throw new Error(`전구모델 좌표 응답 수가 일치하지 않습니다. (${rows.length}/${points.length})`);
+      try {
+        await writeStoredJson(store, cacheKey, { generatedAt: new Date().toISOString(), rows });
+      } catch {
+        // The live response remains usable even when cache storage is temporarily unavailable.
+      }
+      return { rows, fromCache: false };
     }
     if (response.status !== 429 || attempt === 2) {
       throw new Error(`전구모델 정규화 요청 실패 (${response.status})`);
@@ -250,6 +281,17 @@ const fetchOpenMeteoChunk = async (points, providerModels) => {
       : [8000, 22000][attempt]);
   }
   throw new Error('전구모델 정규화 요청을 완료하지 못했습니다.');
+};
+
+const fetchOpenMeteoRows = async (env, points, providerModels, cycle) => {
+  const chunks = splitIntoChunks(points, openMeteoChunkSizeFor(providerModels));
+  const rows = [];
+  for (let index = 0; index < chunks.length; index += 1) {
+    const result = await fetchOpenMeteoChunk(env, chunks[index], providerModels, cycle);
+    rows.push(...result.rows);
+    if (!result.fromCache && index < chunks.length - 1) await delay(2000);
+  }
+  return rows;
 };
 
 const bytesToBase64 = (bytes) => {
@@ -288,6 +330,13 @@ const base64ToUint32 = (value) => {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return new Uint32Array(bytes.buffer);
+};
+
+const base64ToFloat32 = (value) => {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Float32Array(bytes.buffer);
 };
 
 const encodeOpenMeteo = (rows, targetTimes, providerModel, pointCount) => {
@@ -374,6 +423,8 @@ const pressureCacheKey = (cycle, frame, bbox, step) =>
   `${CACHE_PREFIX}pressure/${cycle}/kim-global/${frame}/${bbox.map(stableNumber).join('_')}/${stableNumber(step)}.json`;
 const kimNativeFrameCacheKey = (cycle, frame, bbox) =>
   `${CACHE_PREFIX}native-frame/${cycle}/kim-global/${frame}/${bbox.map(stableNumber).join('_')}.json`;
+const kimNativeSourceFieldCacheKey = (cycle, leadHour, name, subset) =>
+  `${CACHE_PREFIX}kim/native-fields/${cycle}/${name}/${leadHour}/${subset.xMin}_${subset.yMin}_${subset.xMax}_${subset.yMax}.json`;
 const kimGlobalFrameKey = (cycle, frameIndex) =>
   `${KIM_SOURCE_PREFIX}${cycle}/frame-${String(frameIndex).padStart(2, '0')}.json`;
 const kimGlobalManifestKey = (cycle) => `${KIM_SOURCE_PREFIX}${cycle}/manifest.json`;
@@ -405,6 +456,29 @@ const writeStoredJson = async (store, key, payload) => {
   });
 };
 
+const fetchCachedKimNativeField = async (env, cycle, leadHour, name, subset, timeoutMs = 60000) => {
+  const store = getStore(env);
+  const cacheKey = kimNativeSourceFieldCacheKey(cycle, leadHour, name, subset);
+  const cached = await readStoredJson(store, cacheKey);
+  if (cached?.width === subset.width && cached?.height === subset.height && cached?.values) {
+    const values = base64ToFloat32(cached.values);
+    if (values.length === subset.width * subset.height) return { width: cached.width, height: cached.height, values };
+  }
+  const source = await fetchKimField(env, cycle, leadHour, name, subset, timeoutMs);
+  try {
+    await writeStoredJson(store, cacheKey, {
+      generatedAt: new Date().toISOString(),
+      width: source.width,
+      height: source.height,
+      encoding: 'float32-le',
+      values: bytesToBase64(new Uint8Array(source.values.buffer)),
+    });
+  } catch {
+    // Do not discard a successful KMA response because the cache write failed.
+  }
+  return source;
+};
+
 const isCompleteKimSourceFrame = (frame) => {
   if (!frame?.values) return false;
   const values = base64ToUint32(frame.values);
@@ -417,7 +491,7 @@ const isCompleteKimSourceFrame = (frame) => {
 const fetchKimGlobalCumulativeFrame = async (env, cycle, frameIndex) => {
   const leadHour = frameLeadHours()[frameIndex];
   const subset = kimSubsetForBbox(EAST_ASIA_PRECOMPUTE.bbox);
-  const source = await fetchKimField(env, cycle, leadHour, 'prec_acc', subset, 45000);
+  const source = await fetchCachedKimNativeField(env, cycle, leadHour, 'prec_acc', subset, 45000);
   const values = new Uint32Array(KIM_GLOBAL_GRID.width * KIM_GLOBAL_GRID.height);
   values.fill(KIM_GLOBAL_MISSING);
   for (let row = 0; row < KIM_GLOBAL_GRID.height; row += 1) {
@@ -549,11 +623,18 @@ const buildCachedKimRain = async (env, cycle, grid, leadHours) => {
 };
 
 const buildMetadata = async (env) => {
-  const cycle = await findKimCycle(env);
+  let cycle;
+  let kimCycleVerified = true;
+  try {
+    cycle = await findKimCycle(env);
+  } catch {
+    cycle = buildCycleCandidates()[0];
+    kimCycleVerified = false;
+  }
   const cycleMs = parseUtcCycle(cycle);
   const leadHours = frameLeadHours();
   return {
-    generatedAt: new Date().toISOString(), cycle, horizonHours: 240,
+    generatedAt: new Date().toISOString(), cycle, kimCycleVerified, horizonHours: 240,
     stepHours: FRAME_STEP_HOURS, accumulationHours: FRAME_STEP_HOURS, leadHours,
     times: leadHours.map((hour) => new Date(cycleMs + hour * HOUR_MS).toISOString()),
     temporalPolicy: 'common-6-hour-valid-window',
@@ -572,12 +653,11 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
     const directKim = shouldUseDirectKim(bbox);
     const normalizedModels = MODEL_IDS_WITHOUT_KIM;
     const providerModels = normalizedModels.map((modelId) => MODEL_CONFIG[modelId].providerModel);
-    const chunks = splitIntoChunks(grid.points, OPEN_METEO_CHUNK_SIZE);
     const [kimRain, chunkRows] = await Promise.all([
       directKim
         ? buildDirectKimRain(env, cycle, grid, bbox, leadHours)
         : buildCachedKimRain(env, cycle, grid, leadHours),
-      fetchInBatches(chunks, 4, (points) => fetchOpenMeteoChunk(points, providerModels)),
+      fetchOpenMeteoRows(env, grid.points, providerModels, cycle),
     ]);
     const rows = chunkRows.flat();
     if (rows.length !== grid.points.length) throw new Error(`전구모델 격자 수가 일치하지 않습니다. (${rows.length}/${grid.points.length})`);
@@ -622,8 +702,7 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
   } else if (model === 'kim-global') {
     rain = await buildCachedKimRain(env, cycle, grid, leadHours);
   } else {
-    const chunks = splitIntoChunks(grid.points, OPEN_METEO_CHUNK_SIZE);
-    const rows = (await fetchInBatches(chunks, 4, (points) => fetchOpenMeteoChunk(points, config.providerModel))).flat();
+    const rows = await fetchOpenMeteoRows(env, grid.points, config.providerModel, cycle);
     if (rows.length !== grid.points.length) throw new Error(`전구모델 격자 수가 일치하지 않습니다. (${rows.length}/${grid.points.length})`);
     ({ rain, pressure } = encodeOpenMeteo(rows, targetTimes, config.providerModel, grid.points.length));
   }
@@ -697,11 +776,11 @@ const buildKimNativeFrame = async (env, { bbox, cycle, frameIndex }) => {
   const leadHour = frameLeadHours()[frameIndex];
   const previousLeadHour = frameIndex > 0 ? frameLeadHours()[frameIndex - 1] : null;
   const [currentRain, previousRain, pressureSource] = await Promise.all([
-    fetchKimField(env, cycle, leadHour, 'prec_acc', subset, 60000),
+    fetchCachedKimNativeField(env, cycle, leadHour, 'prec_acc', subset, 60000),
     previousLeadHour == null
       ? Promise.resolve(null)
-      : fetchKimField(env, cycle, previousLeadHour, 'prec_acc', subset, 60000),
-    fetchKimField(env, cycle, leadHour, 'psl', subset, 60000),
+      : fetchCachedKimNativeField(env, cycle, previousLeadHour, 'prec_acc', subset, 60000),
+    fetchCachedKimNativeField(env, cycle, leadHour, 'psl', subset, 60000),
   ]);
 
   const rainValues = new Uint16Array(subset.width * subset.height);

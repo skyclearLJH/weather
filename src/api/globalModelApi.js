@@ -1,5 +1,5 @@
 const PAGE_ENDPOINT = '/api/global-model-tile';
-const REQUEST_TIMEOUT_MS = 90000;
+const REQUEST_TIMEOUT_MS = 180000;
 
 const configuredEndpoint = String(import.meta.env.VITE_MODEL_WORKER_URL || '').replace(/\/$/, '');
 
