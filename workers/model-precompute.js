@@ -30,8 +30,13 @@ const KIM_GLOBAL_GRID = {
   height: 121,
 };
 const EAST_ASIA_PRECOMPUTE = { bbox: [75, 5, 170, 65], step: 0.5 };
+const MODEL_RETENTION_MS = 3 * 24 * HOUR_MS;
+const MODEL_MAINTENANCE_INTERVAL_MS = 6 * HOUR_MS;
+const MODEL_MAINTENANCE_KEY = `${CACHE_PREFIX}maintenance.json`;
+const SATELLITE_CACHE_PREFIX = 'satellite/gk2a-ir/v2/';
 const runtimePayloadCache = new Map();
 const inflightBuilds = new Map();
+let storageMaintenancePromise = null;
 
 const MODEL_CONFIG = {
   'kim-global': {
@@ -454,6 +459,79 @@ const writeStoredJson = async (store, key, payload) => {
     httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'public, max-age=86400' },
     customMetadata: { generatedAt: payload.generatedAt ?? new Date().toISOString() },
   });
+};
+
+const storageCategoryForKey = (key) => {
+  if (key.startsWith(CACHE_PREFIX)) return 'models';
+  if (key.startsWith(SATELLITE_CACHE_PREFIX)) return 'satellite';
+  return 'other';
+};
+
+const summarizeR2Storage = async (store) => {
+  if (!store || isKvStore(store) || typeof store.list !== 'function') return null;
+  const categories = {
+    models: { objects: 0, bytes: 0 },
+    satellite: { objects: 0, bytes: 0 },
+    other: { objects: 0, bytes: 0 },
+  };
+  let cursor;
+  do {
+    const page = await store.list({ cursor, limit: 1000 });
+    for (const object of page.objects ?? []) {
+      const category = categories[storageCategoryForKey(object.key)];
+      category.objects += 1;
+      category.bytes += Number(object.size) || 0;
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return {
+    objects: Object.values(categories).reduce((sum, category) => sum + category.objects, 0),
+    bytes: Object.values(categories).reduce((sum, category) => sum + category.bytes, 0),
+    categories,
+  };
+};
+
+const pruneExpiredModelObjects = async (env, nowMs = Date.now()) => {
+  const store = getStore(env);
+  if (!store || isKvStore(store) || typeof store.list !== 'function' || typeof store.delete !== 'function') {
+    return { skipped: true, reason: 'r2-unavailable' };
+  }
+  const previous = await readStoredJson(store, MODEL_MAINTENANCE_KEY);
+  const previousMs = Date.parse(previous?.generatedAt || '');
+  if (Number.isFinite(previousMs) && nowMs - previousMs < MODEL_MAINTENANCE_INTERVAL_MS) {
+    return { skipped: true, reason: 'recently-completed', deletedObjects: previous.deletedObjects || 0 };
+  }
+
+  const cutoff = nowMs - MODEL_RETENTION_MS;
+  const expiredKeys = [];
+  let cursor;
+  do {
+    const page = await store.list({ prefix: CACHE_PREFIX, cursor, limit: 1000 });
+    for (const object of page.objects ?? []) {
+      const cycle = object.key.match(/\/(20\d{8})(?:\/|$)/)?.[1];
+      if (cycle && parseUtcCycle(cycle) < cutoff) expiredKeys.push(object.key);
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  for (let index = 0; index < expiredKeys.length; index += 1000) {
+    await store.delete(expiredKeys.slice(index, index + 1000));
+  }
+  const result = {
+    generatedAt: new Date(nowMs).toISOString(),
+    retentionHours: MODEL_RETENTION_MS / HOUR_MS,
+    deletedObjects: expiredKeys.length,
+  };
+  await writeStoredJson(store, MODEL_MAINTENANCE_KEY, result);
+  return result;
+};
+
+const maintainModelStorage = (env, nowMs = Date.now()) => {
+  if (!storageMaintenancePromise) {
+    storageMaintenancePromise = pruneExpiredModelObjects(env, nowMs)
+      .finally(() => { storageMaintenancePromise = null; });
+  }
+  return storageMaintenancePromise;
 };
 
 const fetchCachedKimNativeField = async (env, cycle, leadHour, name, subset, timeoutMs = 60000) => {
@@ -916,6 +994,9 @@ const serveWithCache = async (env, executionCtx, key, builder) => {
 };
 
 const handleMetadata = async (env, executionCtx) => {
+  if (typeof executionCtx?.waitUntil === 'function') {
+    executionCtx.waitUntil(maintainModelStorage(env));
+  }
   const edgeCache = getEdgeCache();
   const cacheKey = new Request('https://model-cache.invalid/metadata/v4');
   if (edgeCache) { const cached = await edgeCache.match(cacheKey); if (cached) return cached; }
@@ -961,6 +1042,7 @@ const handleKimFrame = async (request, env, executionCtx) => {
 const handleStatus = async (env) => {
   const metadata = await buildMetadata(env);
   const store = getStore(env);
+  const storageUsage = await summarizeR2Storage(store);
   const kimManifest = store ? await readStoredJson(store, kimGlobalManifestKey(metadata.cycle)) : null;
   const kimFrameCount = kimManifest?.frames?.filter(Boolean).length || 0;
   const warmed = {
@@ -971,7 +1053,7 @@ const handleStatus = async (env) => {
     },
   };
   return jsonResponse({
-    ready: true, cycle: metadata.cycle, warmed,
+    ready: true, cycle: metadata.cycle, warmed, storageUsage,
     storage: env.MODEL_R2
       ? 'model-r2'
       : env.SATELLITE_R2
@@ -1013,6 +1095,7 @@ const routeRequest = async (request, env, executionCtx) => {
 
 const precompute = async (env, scheduledTime = Date.now()) => {
   const metadata = await buildMetadata(env);
+  await maintainModelStorage(env, scheduledTime);
   await warmKimGlobalFrame(env, metadata.cycle, scheduledTime);
 };
 
