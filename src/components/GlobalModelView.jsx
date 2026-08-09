@@ -588,6 +588,11 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
         return `${MODEL_META[model].short} 자료 준비 중${suffix}`;
       }).join(' · ')
     : '';
+  const staleModels = visibleModels.filter((model) =>
+    tiles[model]?.sourceMode === 'normalized-spatial-grid-stale');
+  const staleNotice = staleModels.length
+    ? `${staleModels.map((model) => MODEL_META[model].short).join(' · ')} 최신 갱신 지연으로 최근 성공 자료를 표시 중입니다.`
+    : '';
   const title = isCompare ? '전구모델 비교' : `${MODEL_META[activeView]?.label ?? ''} 강수예측`;
   const startPlayback = () => {
     if (!times.length) return;
@@ -642,6 +647,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
 
       <div data-video-hide className="pointer-events-none absolute bottom-24 right-5 z-20 flex items-center gap-2 rounded-md bg-slate-950/55 px-2 py-1 text-[10px] font-semibold text-white/65"><Globe2 className="h-3 w-3" />KMA · ECMWF · NOAA · Open-Meteo</div>
       {unavailableNotice ? <div className="pointer-events-none absolute left-1/2 top-28 z-40 flex -translate-x-1/2 items-center gap-2 rounded-md border border-amber-300/35 bg-slate-950/88 px-4 py-2 text-xs font-black text-amber-100 shadow-xl"><AlertTriangle className="h-4 w-4 text-amber-300" />{unavailableNotice}</div> : null}
+      {workspaceMode === 'edit' && staleNotice ? <div data-video-hide className="pointer-events-none absolute left-1/2 top-28 z-40 flex -translate-x-1/2 items-center gap-2 rounded-md border border-amber-300/35 bg-slate-950/88 px-4 py-2 text-xs font-black text-amber-100 shadow-xl"><AlertTriangle className="h-4 w-4 text-amber-300" />{staleNotice}</div> : null}
       {tileLoading && Object.keys(tiles).length ? <div className="pointer-events-none absolute right-5 top-5 z-30 flex items-center gap-2 rounded-md bg-slate-950/75 px-3 py-2 text-xs font-bold"><LoaderCircle className="h-4 w-4 animate-spin text-cyan-300" />확대 영역 자료 갱신 중</div> : null}
       {(status === 'loading' || (tileLoading && !Object.keys(tiles).length)) ? <div className="pointer-events-none absolute left-1/2 top-28 z-50 -translate-x-1/2"><div className="flex items-center gap-3 rounded-md bg-slate-950/88 px-5 py-3 text-sm font-black shadow-2xl"><LoaderCircle className="h-5 w-5 animate-spin text-cyan-300" />240시간 전구모델 자료를 불러오는 중입니다</div></div> : null}
       {status === 'error' ? <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-slate-950/40"><div className="max-w-xl rounded-md bg-slate-950/92 px-6 py-5 text-center text-sm font-black shadow-2xl">{error}</div></div> : null}

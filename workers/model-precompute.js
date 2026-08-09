@@ -15,6 +15,9 @@ const MISSING_VALUE = 65535;
 const MAX_GRID_POINTS = 25000;
 const OPEN_METEO_DEFAULT_CHUNK_SIZE = 80;
 const OPEN_METEO_HEAVY_CHUNK_SIZE = 40;
+const OPEN_METEO_CACHE_FRESH_MS = 8 * HOUR_MS;
+const OPEN_METEO_CACHE_MAX_STALE_MS = 14 * HOUR_MS;
+const OPEN_METEO_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
 const RUNTIME_CACHE_LIMIT = 10;
 const KIM_NATIVE_STEP = 1 / 12;
 const KIM_LAT_ORIGIN = -89.95882415771484;
@@ -37,6 +40,7 @@ const SATELLITE_CACHE_PREFIX = 'satellite/gk2a-ir/v2/';
 const runtimePayloadCache = new Map();
 const inflightBuilds = new Map();
 let storageMaintenancePromise = null;
+let openMeteoRateLimitedUntil = 0;
 
 const MODEL_CONFIG = {
   'kim-global': {
@@ -239,10 +243,20 @@ const sha256Hex = async (value) => {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-const openMeteoChunkCacheKey = async (cycle, providerModels, points) => {
+const openMeteoChunkHash = async (providerModels, points) => {
   const models = [].concat(providerModels).join(',');
   const coordinates = points.map((point) => `${point.lat.toFixed(3)},${point.lon.toFixed(3)}`).join(';');
-  return `${CACHE_PREFIX}open-meteo/${cycle}/${models}/${await sha256Hex(coordinates)}.json`;
+  return { models, hash: await sha256Hex(coordinates) };
+};
+
+const openMeteoChunkCacheKey = async (providerModels, points) => {
+  const { models, hash } = await openMeteoChunkHash(providerModels, points);
+  return `${CACHE_PREFIX}open-meteo-latest/${models}/${hash}.json`;
+};
+
+const openMeteoLegacyChunkCacheKey = async (cycle, providerModels, points) => {
+  const { models, hash } = await openMeteoChunkHash(providerModels, points);
+  return `${CACHE_PREFIX}open-meteo/${cycle}/${models}/${hash}.json`;
 };
 
 const openMeteoChunkSizeFor = (providerModels) => [].concat(providerModels).some((model) =>
@@ -250,12 +264,44 @@ const openMeteoChunkSizeFor = (providerModels) => [].concat(providerModels).some
   ? OPEN_METEO_HEAVY_CHUNK_SIZE
   : OPEN_METEO_DEFAULT_CHUNK_SIZE;
 
+const validOpenMeteoCache = (payload, expectedRows) =>
+  Array.isArray(payload?.rows) && payload.rows.length === expectedRows;
+
+const openMeteoCacheAge = (payload, nowMs = Date.now()) => {
+  const generatedMs = Date.parse(payload?.generatedAt || '');
+  return Number.isFinite(generatedMs) ? Math.max(0, nowMs - generatedMs) : Number.POSITIVE_INFINITY;
+};
+
+const readOpenMeteoCache = async (store, cycle, providerModels, points) => {
+  const latestKey = await openMeteoChunkCacheKey(providerModels, points);
+  const latest = await readStoredJson(store, latestKey);
+  if (validOpenMeteoCache(latest, points.length)) return { key: latestKey, payload: latest };
+
+  const cycleMs = parseUtcCycle(cycle);
+  for (const offsetHours of [0, -12, -24, -36]) {
+    const candidateCycle = formatUtcCycle(new Date(cycleMs + offsetHours * HOUR_MS));
+    const legacyKey = await openMeteoLegacyChunkCacheKey(candidateCycle, providerModels, points);
+    const legacy = await readStoredJson(store, legacyKey);
+    if (validOpenMeteoCache(legacy, points.length)) {
+      try { await writeStoredJson(store, latestKey, legacy); } catch { /* Keep serving the legacy cache. */ }
+      return { key: latestKey, payload: legacy };
+    }
+  }
+  return { key: latestKey, payload: null };
+};
+
 const fetchOpenMeteoChunk = async (env, points, providerModels, cycle) => {
   const store = getStore(env);
-  const cacheKey = await openMeteoChunkCacheKey(cycle, providerModels, points);
-  const cached = await readStoredJson(store, cacheKey);
-  if (Array.isArray(cached?.rows) && cached.rows.length === points.length) {
-    return { rows: cached.rows, fromCache: true };
+  const { key: cacheKey, payload: cached } = await readOpenMeteoCache(store, cycle, providerModels, points);
+  const cacheAge = openMeteoCacheAge(cached);
+  const staleCache = validOpenMeteoCache(cached, points.length) && cacheAge <= OPEN_METEO_CACHE_MAX_STALE_MS
+    ? cached
+    : null;
+  if (cached && cacheAge <= OPEN_METEO_CACHE_FRESH_MS) {
+    return { rows: cached.rows, fromCache: true, stale: false, generatedAt: cached.generatedAt };
+  }
+  if (staleCache && Date.now() < openMeteoRateLimitedUntil) {
+    return { rows: staleCache.rows, fromCache: true, stale: true, generatedAt: staleCache.generatedAt };
   }
   const query = new URLSearchParams({
     latitude: points.map((point) => point.lat.toFixed(3)).join(','),
@@ -264,26 +310,39 @@ const fetchOpenMeteoChunk = async (env, points, providerModels, cycle) => {
     past_hours: '36', forecast_hours: '276', timezone: 'UTC', cell_selection: 'nearest',
   });
   const endpoint = openMeteoEndpointFor(providerModels);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await fetch(`${endpoint}?${query}`, { signal: AbortSignal.timeout(45000) });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(`${endpoint}?${query}`, { signal: AbortSignal.timeout(45000) });
+    } catch (error) {
+      if (staleCache) {
+        return { rows: staleCache.rows, fromCache: true, stale: true, generatedAt: staleCache.generatedAt };
+      }
+      throw error;
+    }
     if (response.ok) {
       const payload = await response.json();
       const rows = Array.isArray(payload) ? payload : [payload];
       if (rows.length !== points.length) throw new Error(`전구모델 좌표 응답 수가 일치하지 않습니다. (${rows.length}/${points.length})`);
+      const generatedAt = new Date().toISOString();
       try {
-        await writeStoredJson(store, cacheKey, { generatedAt: new Date().toISOString(), rows });
+        await writeStoredJson(store, cacheKey, { generatedAt, rows });
       } catch {
         // The live response remains usable even when cache storage is temporarily unavailable.
       }
-      return { rows, fromCache: false };
+      return { rows, fromCache: false, stale: false, generatedAt };
     }
-    if (response.status !== 429 || attempt === 2) {
+    if (response.status === 429) openMeteoRateLimitedUntil = Date.now() + OPEN_METEO_RATE_LIMIT_COOLDOWN_MS;
+    if (staleCache) {
+      return { rows: staleCache.rows, fromCache: true, stale: true, generatedAt: staleCache.generatedAt };
+    }
+    if (response.status !== 429 || attempt === 1) {
       throw new Error(`전구모델 정규화 요청 실패 (${response.status})`);
     }
     const retryAfter = Number(response.headers.get('Retry-After'));
     await delay(Number.isFinite(retryAfter) && retryAfter > 0
       ? Math.min(30000, retryAfter * 1000)
-      : [8000, 22000][attempt]);
+      : 8000);
   }
   throw new Error('전구모델 정규화 요청을 완료하지 못했습니다.');
 };
@@ -291,12 +350,21 @@ const fetchOpenMeteoChunk = async (env, points, providerModels, cycle) => {
 const fetchOpenMeteoRows = async (env, points, providerModels, cycle) => {
   const chunks = splitIntoChunks(points, openMeteoChunkSizeFor(providerModels));
   const rows = [];
+  let stale = false;
+  let oldestGeneratedMs = Number.POSITIVE_INFINITY;
   for (let index = 0; index < chunks.length; index += 1) {
     const result = await fetchOpenMeteoChunk(env, chunks[index], providerModels, cycle);
     rows.push(...result.rows);
+    stale ||= result.stale;
+    const generatedMs = Date.parse(result.generatedAt || '');
+    if (Number.isFinite(generatedMs)) oldestGeneratedMs = Math.min(oldestGeneratedMs, generatedMs);
     if (!result.fromCache && index < chunks.length - 1) await delay(2000);
   }
-  return rows;
+  return {
+    rows,
+    stale,
+    generatedAt: Number.isFinite(oldestGeneratedMs) ? new Date(oldestGeneratedMs).toISOString() : null,
+  };
 };
 
 const bytesToBase64 = (bytes) => {
@@ -509,7 +577,14 @@ const pruneExpiredModelObjects = async (env, nowMs = Date.now()) => {
     const page = await store.list({ prefix: CACHE_PREFIX, cursor, limit: 1000 });
     for (const object of page.objects ?? []) {
       const cycle = object.key.match(/\/(20\d{8})(?:\/|$)/)?.[1];
-      if (cycle && parseUtcCycle(cycle) < cutoff) expiredKeys.push(object.key);
+      const uploadedMs = Date.parse(object.uploaded || '');
+      if (
+        (cycle && parseUtcCycle(cycle) < cutoff)
+        || (object.key.startsWith(`${CACHE_PREFIX}open-meteo-latest/`)
+          && Number.isFinite(uploadedMs) && uploadedMs < cutoff)
+      ) {
+        expiredKeys.push(object.key);
+      }
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
@@ -731,13 +806,13 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
     const directKim = shouldUseDirectKim(bbox);
     const normalizedModels = MODEL_IDS_WITHOUT_KIM;
     const providerModels = normalizedModels.map((modelId) => MODEL_CONFIG[modelId].providerModel);
-    const [kimRain, chunkRows] = await Promise.all([
+    const [kimRain, providerResult] = await Promise.all([
       directKim
         ? buildDirectKimRain(env, cycle, grid, bbox, leadHours)
         : buildCachedKimRain(env, cycle, grid, leadHours),
       fetchOpenMeteoRows(env, grid.points, providerModels, cycle),
     ]);
-    const rows = chunkRows.flat();
+    const rows = providerResult.rows;
     if (rows.length !== grid.points.length) throw new Error(`전구모델 격자 수가 일치하지 않습니다. (${rows.length}/${grid.points.length})`);
     const models = {};
     normalizedModels.forEach((modelId) => {
@@ -746,7 +821,8 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
       models[modelId] = {
         ...fields,
         source: config.provider,
-        sourceMode: 'normalized-spatial-grid',
+        sourceMode: providerResult.stale ? 'normalized-spatial-grid-stale' : 'normalized-spatial-grid',
+        sourceGeneratedAt: providerResult.generatedAt,
       };
     });
     models['kim-global'] = {
@@ -775,12 +851,14 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
   const directKim = model === 'kim-global' && shouldUseDirectKim(bbox);
   let rain;
   let pressure = null;
+  let providerResult = null;
   if (directKim) {
     rain = await buildDirectKimRain(env, cycle, grid, bbox, leadHours);
   } else if (model === 'kim-global') {
     rain = await buildCachedKimRain(env, cycle, grid, leadHours);
   } else {
-    const rows = await fetchOpenMeteoRows(env, grid.points, config.providerModel, cycle);
+    providerResult = await fetchOpenMeteoRows(env, grid.points, config.providerModel, cycle);
+    const { rows } = providerResult;
     if (rows.length !== grid.points.length) throw new Error(`전구모델 격자 수가 일치하지 않습니다. (${rows.length}/${grid.points.length})`);
     ({ rain, pressure } = encodeOpenMeteo(rows, targetTimes, config.providerModel, grid.points.length));
   }
@@ -791,7 +869,10 @@ const buildTile = async (env, { model, bbox, requestedStep, cycle }) => {
       : model === 'kim-global' ? 'KMA API Hub cached East Asia grid' : config.provider,
     sourceMode: directKim
       ? 'native-subset'
-      : model === 'kim-global' ? rain.available ? 'official-east-asia-cache' : 'cache-warming' : 'normalized-spatial-grid',
+      : model === 'kim-global'
+        ? rain.available ? 'official-east-asia-cache' : 'cache-warming'
+        : providerResult?.stale ? 'normalized-spatial-grid-stale' : 'normalized-spatial-grid',
+    sourceGeneratedAt: providerResult?.generatedAt ?? null,
     grid: {
       lonMin: grid.lonMin, lonMax: grid.lonMax, latMin: grid.latMin, latMax: grid.latMax,
       step: grid.step, width: grid.width, height: grid.height, order: grid.order,
@@ -954,8 +1035,9 @@ const rememberRuntimePayload = (key, payload) => {
 };
 
 const isCompletePayload = (payload) => payload.model === 'compare'
-  ? Object.values(payload.models ?? {}).every((model) => model.rain?.available)
-  : payload.rain?.available !== false;
+  ? Object.values(payload.models ?? {}).every((model) =>
+      model.rain?.available && model.sourceMode !== 'normalized-spatial-grid-stale')
+  : payload.rain?.available !== false && payload.sourceMode !== 'normalized-spatial-grid-stale';
 
 const serveWithCache = async (env, executionCtx, key, builder) => {
   const runtimePayload = runtimePayloadCache.get(key);
@@ -1106,4 +1188,4 @@ export default {
   },
 };
 
-export { buildMetadata, buildTile, routeRequest };
+export { buildMetadata, buildTile, fetchOpenMeteoRows, routeRequest };
