@@ -15,6 +15,8 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   fetchGlobalModelFrame,
+  fetchNativeModelFrame,
+  isNativeModel,
   fetchGlobalModelMetadata,
   fetchGlobalModelTile,
 } from '../api/globalModelApi.js';
@@ -247,8 +249,14 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     () => isCompare ? [...new Set([leftModel, rightModel])] : [activeView],
     [activeView, isCompare, leftModel, rightModel],
   );
+  // ifs·gfs는 R2에 적재된 네이티브 0.25° 격자를 프레임 단위로 읽는다(기존 2.5°의 약 100배).
+  // aifs는 아직 네이티브 소스가 없어 기존 정규화 경로를 그대로 쓴다.
+  const nativeModels = useMemo(
+    () => visibleModels.filter((model) => isNativeModel(model)),
+    [visibleModels],
+  );
   const providerModels = useMemo(
-    () => visibleModels.filter((model) => model !== 'kim-global'),
+    () => visibleModels.filter((model) => model !== 'kim-global' && !isNativeModel(model)),
     [visibleModels],
   );
   const tileLoading = providerLoading || kimFrameLoading;
@@ -401,6 +409,51 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       controller.abort();
     };
   }, [metadata, providerModels, refreshTick, visibleModels]);
+
+  // 네이티브 0.25° 격자(ifs·gfs)는 프레임 단위라 KIM과 같은 방식으로 현재 프레임만 받는다.
+  useEffect(() => {
+    if (!metadata) return undefined;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      if (!nativeModels.length) {
+        setTiles((current) => Object.fromEntries(
+          Object.entries(current).filter(([model]) => !isNativeModel(model)),
+        ));
+        return;
+      }
+      setProviderLoading(true);
+      Promise.allSettled(nativeModels.map(async (model) => [model, await fetchNativeModelFrame({
+        model,
+        frameIndex,
+        signal: controller.signal,
+      })]))
+        .then((results) => {
+          if (controller.signal.aborted) return;
+          const failures = [];
+          const entries = [];
+          results.forEach((result, index) => {
+            if (result.status === 'fulfilled') entries.push(result.value);
+            // 아직 적재되지 않은 프레임(404)은 흔한 상태라 조용히 넘긴다.
+            else if (!/준비|not ready|404/.test(result.reason.message)) {
+              failures.push(`${MODEL_META[nativeModels[index]].short}: ${result.reason.message}`);
+            }
+          });
+          if (entries.length) {
+            setTiles((current) => {
+              const next = { ...current };
+              entries.forEach(([model, tile]) => { next[model] = tile; });
+              return next;
+            });
+          }
+          if (failures.length) setError(failures.join(' / '));
+        })
+        .finally(() => { if (!controller.signal.aborted) setProviderLoading(false); });
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [frameIndex, metadata, nativeModels, refreshTick]);
 
   useEffect(() => {
     if (!metadata) return undefined;
