@@ -36,9 +36,12 @@ const connectSegments = (segments) => {
   return lines;
 };
 
-const smoothPressure = (values, width, height, offset) => {
-  const smoothed = new Float32Array(width * height);
-  smoothed.fill(Number.NaN);
+// 3x3 상자평활을 여러 번 겹치면 가우시안에 가까워진다. 0.25° 격자는 예전
+// 2.5° 격자보다 100배 조밀해 한 번만 돌리면 등압선이 잘게 꺾이고 작은 동심원이
+// 잔뜩 생긴다. 격자가 촘촘할수록 횟수를 늘려 실제 일기도처럼 완만하게 만든다.
+const boxBlurOnce = (source, width, height) => {
+  const output = new Float32Array(width * height);
+  output.fill(Number.NaN);
   for (let row = 0; row < height; row += 1) {
     for (let column = 0; column < width; column += 1) {
       let total = 0;
@@ -49,16 +52,31 @@ const smoothPressure = (values, width, height, offset) => {
         for (let dx = -1; dx <= 1; dx += 1) {
           const sourceColumn = column + dx;
           if (sourceColumn < 0 || sourceColumn >= width) continue;
-          const encoded = values[offset + sourceRow * width + sourceColumn];
-          if (encoded === MISSING_VALUE || !Number.isFinite(encoded)) continue;
-          total += encoded / 10;
+          const value = source[sourceRow * width + sourceColumn];
+          if (!Number.isFinite(value)) continue;
+          total += value;
           count += 1;
         }
       }
-      if (count >= 4) smoothed[row * width + column] = total / count;
+      if (count >= 4) output[row * width + column] = total / count;
     }
   }
-  return smoothed;
+  return output;
+};
+
+const smoothPressure = (values, width, height, offset, passes = 1) => {
+  let current = new Float32Array(width * height);
+  current.fill(Number.NaN);
+  for (let index = 0; index < width * height; index += 1) {
+    const encoded = values[offset + index];
+    if (encoded !== MISSING_VALUE && Number.isFinite(encoded)) {
+      current[index] = encoded / 10;
+    }
+  }
+  for (let pass = 0; pass < Math.max(1, passes); pass += 1) {
+    current = boxBlurOnce(current, width, height);
+  }
+  return current;
 };
 
 const interpolate = (a, b, level) => {
@@ -164,7 +182,9 @@ export const buildPressureFeatures = (tile, frameIndex, overridePressure = null)
   }
   const pointCount = grid.width * grid.height;
   const offset = pressure.values.length === pointCount ? 0 : frameIndex * pointCount;
-  const smoothed = smoothPressure(pressure.values, grid.width, grid.height, offset);
+  // 평활 반경을 약 1도로 맞춘다: 0.25° 격자면 4회, 0.5°면 2회, 성긴 격자면 1회.
+  const passes = Math.round(Math.min(6, Math.max(1, 1 / (grid.step || 1))));
+  const smoothed = smoothPressure(pressure.values, grid.width, grid.height, offset, passes);
   const finite = Array.from(smoothed).filter(Number.isFinite);
   if (!finite.length) {
     return {
@@ -175,8 +195,22 @@ export const buildPressureFeatures = (tile, frameIndex, overridePressure = null)
   const minimum = Math.max(880, Math.ceil(Math.min(...finite) / 4) * 4);
   const maximum = Math.min(1080, Math.floor(Math.max(...finite) / 4) * 4);
   const contourFeatures = [];
+  // 평활 후에도 남는 아주 작은 고리는 실제 기압계가 아니라 격자 잡음이다.
+  // 태풍처럼 작지만 실재하는 저기압을 지우지 않도록 임계를 낮게 잡는다.
+  const isMeaningful = (coordinates) => {
+    let minLon = Infinity; let maxLon = -Infinity;
+    let minLat = Infinity; let maxLat = -Infinity;
+    coordinates.forEach(([lon, lat]) => {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    });
+    return Math.max(maxLon - minLon, maxLat - minLat) >= 0.8;
+  };
   for (let level = minimum; level <= maximum; level += 4) {
-    const lines = connectSegments(contourSegmentsForLevel(smoothed, grid, level));
+    const lines = connectSegments(contourSegmentsForLevel(smoothed, grid, level))
+      .filter(isMeaningful);
     lines.forEach((coordinates, index) => {
       contourFeatures.push({
         type: 'Feature',

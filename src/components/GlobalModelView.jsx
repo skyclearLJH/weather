@@ -239,6 +239,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const baseLabelLayersRef = useRef([]);
   const [metadata, setMetadata] = useState(null);
   const [viewport, setViewport] = useState(null);
+  const [mapReady, setMapReady] = useState(false);
   const [tiles, setTiles] = useState({});
   const [status, setStatus] = useState('loading');
   const [providerLoading, setProviderLoading] = useState(false);
@@ -319,6 +320,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
         padding: { top: 24, right: 24, bottom: 76, left: 24 },
         duration: 0,
       });
+      setMapReady(true);
       baseLabelLayersRef.current = (map.getStyle().layers ?? []).filter((layer) => layer.type === 'symbol').map((layer) => layer.id);
       const beforeId = baseLabelLayersRef.current[0];
       map.addSource('global-isobars', { type: 'geojson', data: EMPTY_FEATURES });
@@ -513,6 +515,8 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
           setTiles((current) => ({ ...current, 'kim-global': tile }));
         })
         .catch((loadError) => {
+          // 오류에 모델을 표시해 둔다. KIM에서 난 오류가 GFS 화면에까지 남지
+          // 않도록, 배너는 해당 모델을 보고 있을 때만 렌더한다.
           if (!controller.signal.aborted) setError(`KIM: ${loadError.message}`);
         })
         .finally(() => { if (!controller.signal.aborted) setKimFrameLoading(false); });
@@ -531,9 +535,12 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     return Math.max(240, Math.min(1100, Math.round((CANVAS_WIDTH * ySpan) / xSpan)));
   }, [primaryTile]);
 
+  // mapReady가 없으면 지도 로드 전에 이 효과가 한 번 돌고 조용히 빠져나간 뒤
+  // 다시 실행될 계기가 없어 매핑이 만들어지지 않는다. 매핑이 없으면 강수는
+  // 한 픽셀도 그려지지 않는다(등압선은 격자 좌표로 직접 그려 매핑과 무관하다).
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.loaded() || !primaryTile) return undefined;
+    if (!mapReady || !map || !primaryTile) return undefined;
     if (map.getLayer('global-model-overlay')) map.removeLayer('global-model-overlay');
     if (map.getSource('global-model-overlay')) map.removeSource('global-model-overlay');
     const canvas = document.createElement('canvas');
@@ -562,7 +569,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       canvasRef.current = null;
       mappingRef.current = null;
     };
-  }, [canvasHeight, primaryTile, tiles]);
+  }, [canvasHeight, mapReady, primaryTile, tiles]);
 
   const drawFrame = useCallback(() => {
     const canvas = canvasRef.current;
@@ -687,6 +694,10 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const staleNotice = staleModels.length
     ? `${staleModels.map((model) => MODEL_META[model].short).join(' · ')} 최신 갱신 지연으로 최근 성공 자료를 표시 중입니다.`
     : '';
+  // 'KIM: ...' 처럼 특정 모델에서 난 오류는 그 모델을 보고 있을 때만 알린다.
+  // (예전에는 KIM 권한 오류가 GFS 화면에도 계속 떠 있었다.)
+  const errorOwner = MODEL_IDS.find((model) => error.startsWith(`${MODEL_META[model].short}:`));
+  const visibleError = errorOwner && !visibleModels.includes(errorOwner) ? '' : error;
   const title = isCompare ? '전구모델 비교' : `${MODEL_META[activeView]?.band ?? ''} 강수예측`;
   // 초기장은 현재 보고 있는 모델의 주기를 쓴다(모델마다 발표 주기가 다르다).
   const cycleInit = formatCycleInit(
@@ -708,7 +719,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
         <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
           <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
           <span className="whitespace-nowrap text-3xl font-black">{title}</span>
-          {cycleInit ? <div className="flex shrink-0 flex-col items-end leading-tight text-[#bdd6fb]"><span className="text-[11px] font-bold tabular-nums">{cycleInit.date}</span><span className="text-[11px] font-bold tabular-nums">{cycleInit.hour}</span></div> : null}
+          {cycleInit ? <div className="flex shrink-0 flex-col items-center leading-tight text-[#bdd6fb]"><span className="text-[11px] font-bold tabular-nums">{cycleInit.date}</span><span className="text-[11px] font-bold tabular-nums">{cycleInit.hour}</span></div> : null}
           {currentTime ? <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap border-l border-white/30 pl-4"><span className="text-2xl font-black tabular-nums">{formatTime(currentTime)}</span><span className="text-sm font-bold text-[#bdd6fb]">{formatDate(currentTime)}</span></div> : null}
           <div className="absolute inset-x-0 bottom-0 h-[3px] bg-[#8ec2ff]" />
         </div>
@@ -754,8 +765,8 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       {tileLoading && Object.keys(tiles).length ? <div className="pointer-events-none absolute right-5 top-5 z-30 flex items-center gap-2 rounded-md bg-slate-950/75 px-3 py-2 text-xs font-bold"><LoaderCircle className="h-4 w-4 animate-spin text-cyan-300" />확대 영역 자료 갱신 중</div> : null}
       {(status === 'loading' || (tileLoading && !Object.keys(tiles).length)) ? <div className="pointer-events-none absolute left-1/2 top-28 z-50 -translate-x-1/2"><div className="flex items-center gap-3 rounded-md bg-slate-950/88 px-5 py-3 text-sm font-black shadow-2xl"><LoaderCircle className="h-5 w-5 animate-spin text-cyan-300" />240시간 전구모델 자료를 불러오는 중입니다</div></div> : null}
       {status === 'error' ? <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-slate-950/40"><div className="max-w-xl rounded-md bg-slate-950/92 px-6 py-5 text-center text-sm font-black shadow-2xl">{error}</div></div> : null}
-      {status !== 'error' && error && !Object.keys(tiles).length ? <div data-video-hide className="pointer-events-none absolute left-1/2 top-28 z-50 flex max-w-[70vw] -translate-x-1/2 items-center gap-2 rounded-md border border-amber-300/30 bg-slate-950/90 px-4 py-3 text-xs font-bold text-amber-100 shadow-xl"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />{error}<span className="ml-1 text-white/60">다른 모델을 선택할 수 있습니다.</span></div> : null}
-      {error && Object.keys(tiles).length ? <div data-video-hide className="absolute left-1/2 top-4 z-40 -translate-x-1/2 rounded-md border border-amber-300/30 bg-slate-950/85 px-4 py-2 text-xs font-bold text-amber-100">{error}</div> : null}
+      {status !== 'error' && visibleError && !Object.keys(tiles).length ? <div data-video-hide className="pointer-events-none absolute left-1/2 top-28 z-50 flex max-w-[70vw] -translate-x-1/2 items-center gap-2 rounded-md border border-amber-300/30 bg-slate-950/90 px-4 py-3 text-xs font-bold text-amber-100 shadow-xl"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />{visibleError}<span className="ml-1 text-white/60">다른 모델을 선택할 수 있습니다.</span></div> : null}
+      {visibleError && Object.keys(tiles).length ? <div data-video-hide className="absolute left-1/2 top-4 z-40 -translate-x-1/2 rounded-md border border-amber-300/30 bg-slate-950/85 px-4 py-2 text-xs font-bold text-amber-100">{visibleError}</div> : null}
     </div>
   );
 }
