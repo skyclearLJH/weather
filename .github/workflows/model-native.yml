@@ -1,0 +1,58 @@
+name: Native model grids to R2
+
+# ECMWF IFS·NOAA GFS의 0.25° 원본 격자를 R2에 적재한다.
+# Cloudflare Worker에서는 GRIB2(complex packing/CCSDS)를 디코드할 수 없어
+# 여기(eccodes 사용 가능한 러너)에서 변환한 뒤 앱은 R2를 읽기만 한다.
+on:
+  schedule:
+    # 두 기관의 배포 지연(GFS 3~5h, ECMWF 7~8h)을 감안해 넉넉히 잡는다.
+    - cron: '40 5,11,17,23 * * *'
+  workflow_dispatch:
+    inputs:
+      models:
+        description: '적재할 모델 (ecmwf,gfs)'
+        default: 'ecmwf,gfs'
+      limit:
+        description: '이번 실행에서 새로 올릴 최대 프레임 수'
+        default: '12'
+      force:
+        description: '이미 있는 프레임도 다시 만들기'
+        type: boolean
+        default: false
+
+concurrency:
+  group: model-native
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # cfgrib은 ecCodes 바이너리를 필요로 한다. GFS의 complex packing과
+      # ECMWF의 CCSDS를 모두 풀 수 있는 유일한 실용 경로다.
+      - name: Install ecCodes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes0 libeccodes-tools
+
+      - name: Install Python deps
+        run: pip install --no-cache-dir cfgrib xarray numpy requests boto3 eccodes
+
+      - name: Fetch and upload native grids
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: weathernow-model-tiles
+        run: |
+          python tools/model-native/fetch_native_models.py \
+            --models "${{ github.event.inputs.models || 'ecmwf,gfs' }}" \
+            --limit "${{ github.event.inputs.limit || '12' }}" \
+            ${{ github.event.inputs.force == 'true' && '--force' || '' }}
