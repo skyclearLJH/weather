@@ -285,6 +285,47 @@ def object_exists(target: R2Target, key: str) -> bool:
         return False
 
 
+def prune_old_cycles(target: R2Target, model: str, keep: int = 3) -> list[str]:
+    """오래된 예보 주기를 지운다.
+
+    주기가 바뀔 때마다 40프레임이 새로 쌓이므로(모델당 약 7MB/주기, 하루 2~4주기)
+    정리하지 않으면 R2가 계속 증가한다. 최신 keep개만 남긴다.
+    """
+    client = target.client()
+    prefix = f"models/native/{SCHEMA_VERSION}/{model}/"
+    cycles: set[str] = set()
+    token = None
+    while True:
+        kwargs = {"Bucket": target.bucket, "Prefix": prefix, "MaxKeys": 1000}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = client.list_objects_v2(**kwargs)
+        for item in page.get("Contents", []):
+            part = item["Key"][len(prefix):].split("/")[0]
+            if len(part) == 10 and part.isdigit():
+                cycles.add(part)
+        if not page.get("IsTruncated"):
+            break
+        token = page.get("NextContinuationToken")
+
+    expired = sorted(cycles, reverse=True)[keep:]
+    for cycle in expired:
+        cycle_prefix = f"{prefix}{cycle}/"
+        token = None
+        while True:
+            kwargs = {"Bucket": target.bucket, "Prefix": cycle_prefix, "MaxKeys": 1000}
+            if token:
+                kwargs["ContinuationToken"] = token
+            page = client.list_objects_v2(**kwargs)
+            keys = [{"Key": item["Key"]} for item in page.get("Contents", [])]
+            if keys:
+                client.delete_objects(Bucket=target.bucket, Delete={"Objects": keys})
+            if not page.get("IsTruncated"):
+                break
+            token = page.get("NextContinuationToken")
+    return expired
+
+
 # --------------------------------------------------------------- run
 
 def run_model(model: str, target: R2Target, limit: int, force: bool) -> dict:
@@ -368,12 +409,21 @@ def run_model(model: str, target: R2Target, limit: int, force: bool) -> dict:
         upload(target, manifest_key(model, cycle), body, "application/json")
         upload(target, latest_key(model), body, "application/json")
 
+    pruned = []
+    try:
+        pruned = prune_old_cycles(target, model)
+        if pruned:
+            log(f"  pruned old cycles: {', '.join(pruned)}")
+    except Exception as error:  # 정리 실패가 적재 결과를 무효화하면 안 된다
+        log(f"  ! prune skipped: {type(error).__name__}: {error}")
+
     return {
         "model": model,
         "ok": True,
         "cycle": cycle,
         "uploaded": written,
         "ready": sum(1 for state in frames_state if state),
+        "pruned": pruned,
     }
 
 
