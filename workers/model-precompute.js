@@ -15,6 +15,7 @@ const MISSING_VALUE = 65535;
 const MAX_GRID_POINTS = 25000;
 const OPEN_METEO_DEFAULT_CHUNK_SIZE = 80;
 const OPEN_METEO_HEAVY_CHUNK_SIZE = 40;
+const OPEN_METEO_MIN_GRID_STEP = 2.5;
 const OPEN_METEO_CACHE_FRESH_MS = 8 * HOUR_MS;
 const OPEN_METEO_CACHE_MAX_STALE_MS = 14 * HOUR_MS;
 const OPEN_METEO_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
@@ -1090,7 +1091,13 @@ const handleMetadata = async (env, executionCtx) => {
 const handleTile = async (request, env, executionCtx) => {
   const parsed = parseTileRequest(new URL(request.url));
   const cycle = parsed.cycle || (await buildMetadata(env)).cycle;
-  const params = { ...parsed, cycle };
+  const params = {
+    ...parsed,
+    requestedStep: parsed.model === 'kim-global'
+      ? parsed.requestedStep
+      : Math.max(OPEN_METEO_MIN_GRID_STEP, parsed.requestedStep),
+    cycle,
+  };
   return serveWithCache(env, executionCtx, tileCacheKey(cycle, params.model, params.bbox, params.requestedStep), () => buildTile(env, params));
 };
 

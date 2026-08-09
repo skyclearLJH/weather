@@ -47,9 +47,9 @@ const MISSING_VALUE = 65535;
 const EAST_ASIA_VIEWPORT = [75, 5, 170, 65];
 const MODEL_MIN_STEP = {
   'kim-global': 1 / 12,
-  ifs: 1 / 12,
-  aifs: 0.25,
-  gfs: 0.25,
+  ifs: 2.5,
+  aifs: 2.5,
+  gfs: 2.5,
 };
 const PLAY_DURATIONS = [5, 8, 10, 12, 15, 20, 30];
 const EMPTY_FEATURES = { type: 'FeatureCollection', features: [] };
