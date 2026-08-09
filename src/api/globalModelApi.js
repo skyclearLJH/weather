@@ -192,17 +192,27 @@ export const fetchNativeModelFrame = ({ model, cycle, frameIndex, signal }) =>
       frame: String(frameIndex),
       cycle: targetCycle,
     });
-    const response = await fetch(`${NATIVE_ENDPOINT}?${query}`, { signal: timeoutSignal });
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.error || `네이티브 프레임 요청 실패 (${response.status})`);
-    }
-    const buffer = await response.arrayBuffer();
-    const values = new Uint16Array(buffer);
     const pointCount = meta.grid.width * meta.grid.height;
-    if (values.length !== pointCount) {
-      throw new Error('네이티브 격자 크기가 올바르지 않습니다.');
-    }
+    const loadField = async (field) => {
+      const fieldQuery = new URLSearchParams(query);
+      if (field) fieldQuery.set('field', field);
+      const response = await fetch(`${NATIVE_ENDPOINT}?${fieldQuery}`, { signal: timeoutSignal });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.error || `네이티브 프레임 요청 실패 (${response.status})`);
+      }
+      const decoded = new Uint16Array(await response.arrayBuffer());
+      if (decoded.length !== pointCount) {
+        throw new Error('네이티브 격자 크기가 올바르지 않습니다.');
+      }
+      return decoded;
+    };
+
+    // 등압선용 해면기압은 없을 수도 있으므로(적재 중) 실패해도 강수는 그린다.
+    const [values, pressureValues] = await Promise.all([
+      loadField(null),
+      loadField('pressure').catch(() => null),
+    ]);
     // 프레임 N의 예보시각 = cycle + (N+1) × stepHours
     const cycleMs = Date.UTC(
       Number(targetCycle.slice(0, 4)),
@@ -226,6 +236,15 @@ export const fetchNativeModelFrame = ({ model, cycle, frameIndex, signal }) =>
         missingValue: meta.missingValue,
         values,
       },
-      pressure: null,
+      pressure: pressureValues
+        ? {
+            available: true,
+            encoding: meta.pressureEncoding ?? 'uint16-decihpa-le',
+            unit: meta.pressureUnit ?? 'hPa',
+            missingValue: meta.missingValue,
+            grid: meta.grid,
+            values: pressureValues,
+          }
+        : null,
     };
   }, signal);

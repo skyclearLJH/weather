@@ -106,13 +106,12 @@ const getInitialBroadcastView = () => {
     'satellite',
     'kim-global',
     'ifs',
-    'aifs',
     'gfs',
     'compare',
   ].includes(target) ? target : 'radar';
 };
 
-const GLOBAL_MODEL_VIEWS = new Set(['kim-global', 'ifs', 'aifs', 'gfs', 'compare']);
+const GLOBAL_MODEL_VIEWS = new Set(['kim-global', 'ifs', 'gfs', 'compare']);
 
 const findTimelineRange = (dates, startInput, endInput) => {
   if (dates.length === 0) return null;

@@ -5,8 +5,9 @@
 // CCSDS)를 풀 수 없으므로 여기서 변환하지 않고 읽기만 한다.
 //
 // 라우트
-//   ?model=gfs&meta=1            → manifest(JSON): 격자·주기·프레임 준비 상태
-//   ?model=gfs&cycle=..&frame=3  → 프레임(uint16 centimm LE, 결측 65535)
+//   ?model=gfs&meta=1                  → manifest(JSON): 격자·주기·프레임 준비 상태
+//   ?model=gfs&cycle=..&frame=3        → 강수(uint16 centimm LE, 결측 65535)
+//   ?model=gfs&frame=3&field=pressure  → 해면기압(uint16 decihPa LE) — 등압선용
 // cycle 생략 시 latest.json이 가리키는 최신 주기를 쓴다.
 
 const corsHeaders = {
@@ -34,8 +35,9 @@ const jsonResponse = (payload, status = 200, cacheControl = 'no-store') =>
 const getStore = (env) => env?.MODEL_R2 || env?.SATELLITE_R2 || null;
 
 const latestKey = (model) => `models/native/${SCHEMA_VERSION}/${model}/latest.json`;
-const frameKey = (model, cycle, frame) =>
-  `models/native/${SCHEMA_VERSION}/${model}/${cycle}/frame-${String(frame).padStart(2, '0')}.bin`;
+const frameKey = (model, cycle, frame, field) =>
+  `models/native/${SCHEMA_VERSION}/${model}/${cycle}/`
+  + `${field === 'pressure' ? 'pressure' : 'frame'}-${String(frame).padStart(2, '0')}.bin`;
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders });
@@ -72,9 +74,10 @@ export async function onRequestGet(context) {
     return jsonResponse({ error: 'cycle must be YYYYMMDDHH' }, 400);
   }
 
-  const object = await store.get(frameKey(model, cycle, frame));
+  const field = url.searchParams.get('field') === 'pressure' ? 'pressure' : 'rain';
+  const object = await store.get(frameKey(model, cycle, frame, field));
   if (!object) {
-    return jsonResponse({ error: 'frame is not ready yet', model, cycle, frame }, 404);
+    return jsonResponse({ error: 'frame is not ready yet', model, cycle, frame, field }, 404);
   }
 
   return new Response(object.body, {

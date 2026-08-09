@@ -23,11 +23,11 @@ import {
 import { buildPressureFeatures } from '../utils/modelPressure.js';
 import VideoExportMenu from './VideoExportMenu.jsx';
 
-const MODEL_IDS = ['kim-global', 'ifs', 'aifs', 'gfs'];
+// AIFS는 0.25° 원본 격자가 공개되지 않아 방송에 쓸 해상도를 못 내서 제외했다.
+const MODEL_IDS = ['kim-global', 'ifs', 'gfs'];
 const MODEL_META = {
   'kim-global': { label: 'KIM 전구', short: 'KIM', color: '#22d3ee' },
   ifs: { label: 'ECMWF IFS', short: 'IFS', color: '#facc15' },
-  aifs: { label: 'ECMWF AIFS', short: 'AIFS', color: '#f472b6' },
   gfs: { label: 'NOAA GFS', short: 'GFS', color: '#4ade80' },
 };
 const BASE_STYLE = {
@@ -49,9 +49,8 @@ const MISSING_VALUE = 65535;
 const EAST_ASIA_VIEWPORT = [75, 5, 170, 65];
 const MODEL_MIN_STEP = {
   'kim-global': 1 / 12,
-  ifs: 2.5,
-  aifs: 2.5,
-  gfs: 2.5,
+  ifs: 0.25,
+  gfs: 0.25,
 };
 const PLAY_DURATIONS = [5, 8, 10, 12, 15, 20, 30];
 const EMPTY_FEATURES = { type: 'FeatureCollection', features: [] };
@@ -596,7 +595,8 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
     const map = mapRef.current;
     if (!map?.getSource('global-isobars')) return;
     const tile = tiles[contourModel];
-    if (contourModel === 'kim-global' && tile && !tileMatchesFrame(tile, frameIndex)) return;
+    // 프레임 단위로 오는 타일(KIM·네이티브 0.25°)은 현재 프레임 것이 도착한 뒤 그린다.
+    if (tile && !tileMatchesFrame(tile, frameIndex)) return;
     const features = showPressure && tile
       ? buildPressureFeatures(tile, frameIndex)
       : { contours: EMPTY_FEATURES, centers: EMPTY_FEATURES };

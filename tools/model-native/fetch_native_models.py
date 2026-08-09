@@ -135,6 +135,17 @@ def encode_centimm(values_mm: np.ndarray) -> bytes:
     return encoded.tobytes(order="C")
 
 
+def encode_decihpa(values_hpa: np.ndarray) -> bytes:
+    """hPa 실수 격자 → uint16 decihPa(hPa×10). 앱의 기존 기압 인코딩과 같다.
+
+    지상 해면기압의 현실적 범위(800~1200hPa)를 벗어나면 결측 처리한다.
+    """
+    encoded = np.full(values_hpa.shape, MISSING, dtype=np.uint16)
+    valid = np.isfinite(values_hpa) & (values_hpa > 800) & (values_hpa < 1200)
+    encoded[valid] = np.rint(values_hpa[valid] * 10.0).astype(np.uint16)
+    return encoded.tobytes(order="C")
+
+
 def open_grib_bytes(payload: bytes) -> xr.Dataset:
     """cfgrib은 파일 경로만 받으므로 임시 파일로 넘긴다."""
     with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as handle:
@@ -165,21 +176,16 @@ def gfs_frame_url(cycle: str, lead_hour: int) -> str:
     return f"{GFS_BASE}/gfs.{day}/{hour}/atmos/gfs.t{hour}z.pgrb2.0p25.f{lead_hour:03d}"
 
 
-def gfs_fetch_frame(cycle: str, lead_hour: int) -> np.ndarray | None:
-    """APCP 6시간 구간 누적을 바이트 범위로 받아 mm 격자로 만든다.
-
-    GFS는 '6-12 hour acc' 처럼 구간 누적을 직접 제공하므로 차분이 필요 없다.
-    """
+def gfs_fetch_field(cycle: str, lead_hour: int, match: str) -> np.ndarray | None:
+    """인덱스에서 match와 일치하는 레코드만 바이트 범위로 받아 격자로 만든다."""
     url = gfs_frame_url(cycle, lead_hour)
     index = request_with_retry("GET", f"{url}.idx", timeout=60)
     if index is None:
         return None
 
     lines = index.text.strip().split("\n")
-    window_start = lead_hour - STEP_HOURS
-    wanted = f"APCP:surface:{window_start}-{lead_hour} hour acc fcst"
     for position, line in enumerate(lines):
-        if wanted not in line:
+        if match not in line:
             continue
         start = int(line.split(":")[1])
         if position + 1 < len(lines):
@@ -193,9 +199,29 @@ def gfs_fetch_frame(cycle: str, lead_hour: int) -> np.ndarray | None:
         dataset = open_grib_bytes(message.content)
         field = dataset[list(dataset.data_vars)[0]]
         values, grid = crop_to_area(field)
-        gfs_fetch_frame.grid = grid  # type: ignore[attr-defined]
+        gfs_fetch_field.grid = grid  # type: ignore[attr-defined]
         return values
     return None
+
+
+def gfs_fetch_frame(cycle: str, lead_hour: int) -> np.ndarray | None:
+    """APCP 6시간 구간 누적을 mm 격자로 만든다.
+
+    GFS는 '6-12 hour acc' 처럼 구간 누적을 직접 제공하므로 차분이 필요 없다.
+    """
+    window_start = lead_hour - STEP_HOURS
+    values = gfs_fetch_field(
+        cycle, lead_hour, f"APCP:surface:{window_start}-{lead_hour} hour acc fcst"
+    )
+    if values is not None:
+        gfs_fetch_frame.grid = getattr(gfs_fetch_field, "grid", None)  # type: ignore[attr-defined]
+    return values
+
+
+def gfs_fetch_pressure(cycle: str, lead_hour: int) -> np.ndarray | None:
+    """해면기압(PRMSL, Pa)을 hPa 격자로 만든다. 등압선·고저기압 표시에 쓴다."""
+    values = gfs_fetch_field(cycle, lead_hour, "PRMSL:mean sea level")
+    return None if values is None else values / 100.0
 
 
 # ------------------------------------------------------------- ECMWF
@@ -214,8 +240,8 @@ def ecmwf_step_urls(cycle: str, step: int) -> tuple[str, str]:
     return f"{stem}.index", f"{stem}.grib2"
 
 
-def ecmwf_fetch_total(cycle: str, step: int) -> np.ndarray | None:
-    """해당 스텝의 tp(예보 시작부터의 총 누적, m 단위)를 mm 격자로 반환."""
+def ecmwf_fetch_param(cycle: str, step: int, param: str) -> np.ndarray | None:
+    """해당 스텝에서 param 레코드만 바이트 범위로 받아 격자로 만든다."""
     index_url, grib_url = ecmwf_step_urls(cycle, step)
     index = request_with_retry("GET", index_url, timeout=60)
     if index is None:
@@ -225,7 +251,7 @@ def ecmwf_fetch_total(cycle: str, step: int) -> np.ndarray | None:
         if not line.strip():
             continue
         entry = json.loads(line)
-        if entry.get("param") != "tp":
+        if entry.get("param") != param:
             continue
         start = int(entry["_offset"])
         end = start + int(entry["_length"]) - 1
@@ -235,9 +261,24 @@ def ecmwf_fetch_total(cycle: str, step: int) -> np.ndarray | None:
         dataset = open_grib_bytes(message.content)
         field = dataset[list(dataset.data_vars)[0]]
         values, grid = crop_to_area(field)
-        ecmwf_fetch_total.grid = grid  # type: ignore[attr-defined]
-        return values * 1000.0  # m → mm
+        ecmwf_fetch_param.grid = grid  # type: ignore[attr-defined]
+        return values
     return None
+
+
+def ecmwf_fetch_total(cycle: str, step: int) -> np.ndarray | None:
+    """해당 스텝의 tp(예보 시작부터의 총 누적, m 단위)를 mm 격자로 반환."""
+    values = ecmwf_fetch_param(cycle, step, "tp")
+    if values is None:
+        return None
+    ecmwf_fetch_total.grid = getattr(ecmwf_fetch_param, "grid", None)  # type: ignore[attr-defined]
+    return values * 1000.0  # m → mm
+
+
+def ecmwf_fetch_pressure(cycle: str, step: int) -> np.ndarray | None:
+    """해면기압(msl, Pa)을 hPa 격자로 반환."""
+    values = ecmwf_fetch_param(cycle, step, "msl")
+    return None if values is None else values / 100.0
 
 
 # --------------------------------------------------------------- R2
@@ -261,6 +302,10 @@ class R2Target:
 
 def frame_key(model: str, cycle: str, index: int) -> str:
     return f"models/native/{SCHEMA_VERSION}/{model}/{cycle}/frame-{index:02d}.bin"
+
+
+def pressure_key(model: str, cycle: str, index: int) -> str:
+    return f"models/native/{SCHEMA_VERSION}/{model}/{cycle}/pressure-{index:02d}.bin"
 
 
 def manifest_key(model: str, cycle: str) -> str:
@@ -387,6 +432,24 @@ def run_model(model: str, target: R2Target, limit: int, force: bool) -> dict:
             continue
 
         upload(target, key, encode_centimm(values), "application/octet-stream")
+
+        # 등압선·고저기압용 해면기압. 강수와 같은 격자·같은 시각이며, 없더라도
+        # 강수 프레임은 이미 올렸으므로 실패를 치명적으로 다루지 않는다.
+        pressure = (
+            gfs_fetch_pressure(cycle, lead_hour)
+            if model == "gfs"
+            else ecmwf_fetch_pressure(cycle, lead_hour)
+        )
+        if pressure is not None:
+            upload(
+                target,
+                pressure_key(model, cycle, index),
+                encode_decihpa(pressure),
+                "application/octet-stream",
+            )
+        else:
+            log(f"  {model} pressure {index:02d} unavailable")
+
         frames_state.append(True)
         written += 1
         log(f"  {model} frame {index:02d} (+{lead_hour}h) uploaded")
@@ -402,6 +465,8 @@ def run_model(model: str, target: R2Target, limit: int, force: bool) -> dict:
             "encoding": "uint16-centimm-le",
             "missingValue": MISSING,
             "unit": "mm/6h",
+            "pressureEncoding": "uint16-decihpa-le",
+            "pressureUnit": "hPa",
             "frames": frames_state + [False] * (FRAME_COUNT - len(frames_state)),
             "complete": all(frames_state) and len(frames_state) == FRAME_COUNT,
         }
