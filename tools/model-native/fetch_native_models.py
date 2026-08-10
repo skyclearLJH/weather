@@ -495,7 +495,9 @@ def run_model(model: str, target: R2Target, limit: int, force: bool) -> dict:
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", default="ecmwf,gfs")
-    parser.add_argument("--limit", type=int, default=12, help="이번 실행에서 새로 올릴 최대 프레임 수")
+    # 기본값이 12였을 때는 한 실행에서 +72h까지만 올라갔고, 다음 실행은 새 사이클을
+    # 잡기 때문에 +78h 이후가 영영 채워지지 않았다. 한 실행에서 전 구간을 채운다.
+    parser.add_argument("--limit", type=int, default=FRAME_COUNT, help="이번 실행에서 새로 올릴 최대 프레임 수")
     parser.add_argument("--force", action="store_true", help="이미 있는 프레임도 다시 만든다")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
