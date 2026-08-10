@@ -1,0 +1,46 @@
+name: Deploy Cloudflare Workers
+
+# 웹앱과 Pages Functions는 push하면 Cloudflare Pages가 알아서 배포하지만,
+# Workers는 wrangler deploy가 따로 필요해 그동안 수동으로 올리고 있었다.
+# workers/ 나 wrangler 설정이 바뀌면 여기서 자동으로 배포한다.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - 'wrangler.*.toml'
+      - '.github/workflows/deploy-workers.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-workers
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 변경된 워커만 골라 올리는 대신, 설정 파일이 몇 개 안 되므로 전부 배포한다.
+      # (내용이 같으면 Cloudflare가 새 버전을 만들지 않아 부담이 없다.)
+      - name: Deploy model precompute worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler@4 deploy --config wrangler.model-cache.toml
+
+      - name: Deploy KIM cache worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler@4 deploy --config wrangler.kim-cache.toml
+
+      - name: Deploy satellite precompute worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler@4 deploy --config wrangler.satellite-cache.toml
