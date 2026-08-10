@@ -55,17 +55,23 @@ const MODEL_MIN_STEP = {
 };
 const PLAY_DURATIONS = [5, 8, 10, 12, 15, 20, 30];
 const EMPTY_FEATURES = { type: 'FeatureCollection', features: [] };
+// 강수 색상 — 어두운 슬레이트 지도 위에서 읽히도록 OKLCH에서 설계한 시퀀셜 램프.
+// 무지개(청→녹→황→적→자) 대신 딥틸→시안→아쿠아민트에서 골드→앰버→코랄로 넘어가는
+// cool→warm 2단 구성이다. 명도를 0.45→0.87로 단조로 올려 약한 비가 배경에 묻히지
+// 않게 하고, 상위 3단계는 명도를 고원으로 두고 채도·난색으로 강도를 세운다.
+// 최대 채도를 OKLCH C 0.15로 눌러(순색은 0.25+) 방송 카메라에서 색번짐이 없고,
+// 순수 적색·자홍이 없어 저비트 인코딩에도 안전하다. 전 단계 sRGB 색역 내.
 const PALETTE = [
-  { min: 0.1, color: [65, 197, 255] },
-  { min: 0.5, color: [26, 151, 240] },
-  { min: 1, color: [22, 199, 132] },
-  { min: 3, color: [84, 210, 71] },
-  { min: 5, color: [241, 220, 50] },
-  { min: 10, color: [255, 147, 37] },
-  { min: 20, color: [245, 65, 54] },
-  { min: 30, color: [220, 52, 166] },
-  { min: 50, color: [155, 55, 212] },
-  { min: 70, color: [67, 42, 173] },
+  { min: 0.1, color: [38, 92, 117] },
+  { min: 0.5, color: [31, 116, 140] },
+  { min: 1, color: [24, 140, 159] },
+  { min: 3, color: [33, 165, 172] },
+  { min: 5, color: [58, 186, 179] },
+  { min: 10, color: [89, 207, 183] },
+  { min: 20, color: [129, 225, 189] },
+  { min: 30, color: [244, 208, 120] },
+  { min: 50, color: [254, 173, 85] },
+  { min: 70, color: [245, 131, 91] },
 ];
 
 const mercatorY = (latitude) => Math.log(Math.tan(Math.PI / 4 + (latitude * Math.PI) / 360));
