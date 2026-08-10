@@ -179,6 +179,72 @@ const nearestGridIndex = (point, grid) => {
 const modelForPixel = (x, width, splitPercent, leftModel, rightModel) =>
   x < (width * splitPercent) / 100 ? leftModel : rightModel;
 
+// 비교분석에서 등압선·고저기압을 강수와 같은 경계로 자른다. 경계는 화면 x 좌표
+// 기준이어야 한다 — 지도를 회전할 수 있어(dragRotate) 경도로 자르면 강수 분할과
+// 어긋나기 때문이다. 선은 경계에서 끊어 이어지는 조각만 남기고, 점은 해당 쪽만 둔다.
+const clipFeaturesToSide = (featureCollection, map, splitX, keepLeft) => {
+  const features = featureCollection?.features ?? [];
+  if (features.length === 0) return EMPTY_FEATURES;
+  const inside = (coordinate) => {
+    const { x } = map.project(coordinate);
+    return keepLeft ? x <= splitX : x >= splitX;
+  };
+  // 경계를 가로지르는 선분은 화면 x가 splitX가 되는 지점을 이분해 근사한다.
+  const boundaryPoint = (from, to) => {
+    let a = from;
+    let b = to;
+    for (let step = 0; step < 12; step += 1) {
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      if (inside(mid) === inside(a)) a = mid;
+      else b = mid;
+    }
+    return a;
+  };
+  const out = [];
+  features.forEach((feature) => {
+    if (feature.geometry?.type === 'Point') {
+      if (inside(feature.geometry.coordinates)) out.push(feature);
+      return;
+    }
+    if (feature.geometry?.type !== 'LineString') return;
+    const coordinates = feature.geometry.coordinates ?? [];
+    let piece = [];
+    let pieceIndex = 0;
+    const flush = () => {
+      if (piece.length >= 2) {
+        out.push({
+          ...feature,
+          properties: { ...feature.properties, id: `${feature.properties?.id ?? ''}-${keepLeft ? 'L' : 'R'}${pieceIndex}` },
+          geometry: { type: 'LineString', coordinates: piece },
+        });
+        pieceIndex += 1;
+      }
+      piece = [];
+    };
+    for (let index = 0; index < coordinates.length; index += 1) {
+      const point = coordinates[index];
+      const previous = coordinates[index - 1];
+      const isIn = inside(point);
+      if (isIn) {
+        if (previous && !inside(previous)) piece.push(boundaryPoint(point, previous));
+        piece.push(point);
+      } else {
+        if (previous && inside(previous)) {
+          piece.push(boundaryPoint(previous, point));
+          flush();
+        }
+      }
+    }
+    flush();
+  });
+  return { type: 'FeatureCollection', features: out };
+};
+
+const mergeFeatureCollections = (first, second) => ({
+  type: 'FeatureCollection',
+  features: [...(first?.features ?? []), ...(second?.features ?? [])],
+});
+
 const tileMatchesFrame = (tile, frameIndex) =>
   !Number.isInteger(tile?.frameIndex) || tile.frameIndex === frameIndex;
 
@@ -640,19 +706,47 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   useEffect(() => {
     const map = mapRef.current;
     if (!map?.getSource('global-isobars')) return;
-    const tile = tiles[contourModel];
     // 프레임 단위 타일(KIM·네이티브 0.25°)이 아직 현재 프레임이 아니면 등압선을
     // 지운다. 예전에는 그대로 두어, 강수는 비었는데 이전 프레임 등압선만 남았다.
-    const usable = tile && tileMatchesFrame(tile, frameIndex) ? tile : null;
-    const features = showPressure && usable
-      ? buildPressureFeatures(usable, frameIndex)
-      : { contours: EMPTY_FEATURES, centers: EMPTY_FEATURES };
+    const usableTile = (model) => {
+      const tile = tiles[model];
+      return tile && tileMatchesFrame(tile, frameIndex) ? tile : null;
+    };
+    const featuresFor = (model) => {
+      const tile = usableTile(model);
+      return tile ? buildPressureFeatures(tile, frameIndex) : { contours: EMPTY_FEATURES, centers: EMPTY_FEATURES };
+    };
+
+    let features;
+    if (!showPressure) {
+      features = { contours: EMPTY_FEATURES, centers: EMPTY_FEATURES };
+    } else if (isCompare && leftModel !== rightModel) {
+      // 강수와 같은 경계로 좌·우 모델의 등압선을 각각 잘라 합친다. 예전에는 한
+      // 모델(기준)만 화면 전체에 그려서, 경계를 옮겨도 등압선은 그대로였다.
+      const splitX = (map.getCanvas().clientWidth * splitPercent) / 100;
+      const left = featuresFor(leftModel);
+      const right = featuresFor(rightModel);
+      features = {
+        contours: mergeFeatureCollections(
+          clipFeaturesToSide(left.contours, map, splitX, true),
+          clipFeaturesToSide(right.contours, map, splitX, false),
+        ),
+        centers: mergeFeatureCollections(
+          clipFeaturesToSide(left.centers, map, splitX, true),
+          clipFeaturesToSide(right.centers, map, splitX, false),
+        ),
+      };
+    } else {
+      features = featuresFor(isCompare ? contourModel : activeView);
+    }
     map.getSource('global-isobars').setData(features.contours);
     map.getSource('global-pressure-centers').setData(features.centers);
     ['global-isobars-line', 'global-isobars-label', 'global-pressure-centers-label'].forEach((layerId) => {
       if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', showPressure ? 'visible' : 'none');
     });
-  }, [contourModel, frameIndex, showPressure, tiles]);
+    // viewport는 moveend마다 갱신된다 — 지도를 옮기거나 확대·회전해도 화면 기준
+    // 경계가 강수 분할과 계속 일치하도록 의존성에 넣는다.
+  }, [activeView, contourModel, frameIndex, isCompare, leftModel, rightModel, showPressure, splitPercent, tiles, viewport, mapReady]);
 
   useEffect(() => {
     markerRef.current?.remove();
@@ -752,7 +846,9 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
         </div> : null}
         <div className="flex h-10 items-center gap-2 rounded-md border border-white/20 bg-slate-950/90 px-3 shadow-xl backdrop-blur-md">
           <label className="flex cursor-pointer items-center gap-2 text-xs font-black"><input type="checkbox" checked={showPressure} onChange={(event) => setShowPressure(event.target.checked)} className="h-4 w-4 accent-cyan-400" /><Gauge className="h-4 w-4 text-cyan-300" />등압선·고저기압</label>
-          {isCompare && showPressure ? <><span className="h-5 w-px bg-white/20" /><span className="text-[10px] font-bold text-white/50">기준</span><select value={contourModel} onChange={(event) => setPressureModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="등압선 기준 모델">{visibleModels.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select></> : null}
+          {/* 좌·우가 다른 모델이면 등압선도 강수처럼 좌우로 나눠 그리므로 기준 선택이
+              필요 없다. 같은 모델을 양쪽에 둔 경우에만 기준 선택을 보여준다. */}
+          {isCompare && showPressure && leftModel === rightModel ? <><span className="h-5 w-px bg-white/20" /><span className="text-[10px] font-bold text-white/50">기준</span><select value={contourModel} onChange={(event) => setPressureModel(event.target.value)} className="h-8 rounded-md border border-white/15 bg-slate-800 px-2 text-xs font-bold text-white" aria-label="등압선 기준 모델">{visibleModels.map((model) => <option key={model} value={model}>{MODEL_META[model].short}</option>)}</select></> : null}
         </div>
         <div className="flex items-center gap-2"><select value={playDurationSec} onChange={(event) => setPlayDurationSec(Number(event.target.value))} className="h-10 rounded-full border border-white/25 bg-slate-900/80 px-3 text-xs font-black text-white" aria-label="재생 길이">{PLAY_DURATIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds}초</option>)}</select><button type="button" onClick={() => setRangeStart(Math.min(frameIndex, rangeEnd - 1))} className="h-10 rounded-full border border-emerald-300/45 bg-emerald-500/15 px-3 text-xs font-black text-emerald-100">시작으로 지정</button><button type="button" onClick={() => setRangeEnd(Math.max(frameIndex, rangeStart + 1))} className="h-10 rounded-full border border-rose-300/45 bg-rose-500/15 px-3 text-xs font-black text-rose-100">끝으로 지정</button><button type="button" onClick={() => { setStatus('loading'); setRefreshTick((value) => value + 1); }} disabled={status === 'loading' || tileLoading} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/25 bg-slate-900/80" aria-label="전구모델 새로고침" title="새로고침"><RefreshCw className={`h-4 w-4 ${status === 'loading' || tileLoading ? 'animate-spin' : ''}`} /></button></div>
       </div> : null}
