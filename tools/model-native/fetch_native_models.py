@@ -227,11 +227,16 @@ def gfs_fetch_pressure(cycle: str, lead_hour: int) -> np.ndarray | None:
 # ------------------------------------------------------------- ECMWF
 
 def ecmwf_cycle_candidates(now: dt.datetime) -> list[str]:
-    """ECMWF 오픈데이터는 00/12Z를 발표 후 약 7~8시간 뒤 공개한다."""
+    """ECMWF 오픈데이터는 00/06/12/18Z를 발표 후 약 7~8시간 뒤 공개한다.
+
+    예전에는 00/12Z만 있다고 보고 12시간 단위로 내렸는데, 실제로는 0.25° oper가
+    06/18Z도 공개하므로 최신 사이클을 최대 12시간까지 놓쳤다(예: 18Z가 이미 올라와
+    있는데 12Z를 계속 표출). 6시간 단위로 내리고 후보를 과거로 훑는다.
+    """
     anchor = now - dt.timedelta(hours=8)
     anchor = anchor.replace(minute=0, second=0, microsecond=0)
-    anchor = anchor.replace(hour=0 if anchor.hour < 12 else 12)
-    return [(anchor - dt.timedelta(hours=12 * index)).strftime("%Y%m%d%H") for index in range(4)]
+    anchor = anchor.replace(hour=(anchor.hour // 6) * 6)
+    return [(anchor - dt.timedelta(hours=6 * index)).strftime("%Y%m%d%H") for index in range(4)]
 
 
 def ecmwf_step_urls(cycle: str, step: int) -> tuple[str, str]:

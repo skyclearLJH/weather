@@ -106,12 +106,18 @@ const parseUtcCycle = (value) => Date.UTC(
 const frameLeadHours = () =>
   Array.from({ length: FRAME_COUNT }, (_, index) => (index + 1) * FRAME_STEP_HOURS);
 
+// KIM 전구모델은 00/06/12/18Z를 발표하고 배포까지 5시간 안팎 걸린다. 예전에는
+// 00/12Z만 쓰고(그것도 08시/20시 이후에야) 최신 사이클을 최대 12시간 놓쳤다
+// (예: 06Z UTC에 이미 00Z가 나와 있는데 전날 12Z를 계속 표출). 6시간 단위로
+// 내리고 후보를 과거로 훑는다 — 아직 안 올라온 사이클은 probe가 걸러 준다.
 const buildCycleCandidates = (nowMs = Date.now()) => {
-  const now = new Date(nowMs);
-  const availableHour = now.getUTCHours() >= 20 ? 12 : now.getUTCHours() >= 8 ? 0 : -12;
-  const firstMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), availableHour);
+  const anchor = new Date(nowMs - 5 * HOUR_MS);
+  const firstMs = Date.UTC(
+    anchor.getUTCFullYear(), anchor.getUTCMonth(), anchor.getUTCDate(),
+    Math.floor(anchor.getUTCHours() / 6) * 6,
+  );
   return Array.from({ length: 4 }, (_, index) =>
-    formatUtcCycle(new Date(firstMs - index * 12 * HOUR_MS)));
+    formatUtcCycle(new Date(firstMs - index * 6 * HOUR_MS)));
 };
 
 const parseKimBinary = (buffer, expectedWidth, expectedHeight) => {
