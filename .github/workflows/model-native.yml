@@ -6,7 +6,7 @@ name: Native model grids to R2
 on:
   schedule:
     # 두 기관의 배포 지연(GFS 3~5h, ECMWF 7~8h)을 감안해 넉넉히 잡는다.
-    - cron: '40 5,11,17,23 * * *'
+    - cron: '40 5,7,11,17,19,23,1 * * *'
   workflow_dispatch:
     inputs:
       models:
@@ -14,7 +14,7 @@ on:
         default: 'ecmwf,gfs'
       limit:
         description: '이번 실행에서 새로 올릴 최대 프레임 수'
-        default: '12'
+        default: '40'
       force:
         description: '이미 있는 프레임도 다시 만들기'
         type: boolean
@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
 
@@ -54,5 +54,5 @@ jobs:
         run: |
           python tools/model-native/fetch_native_models.py \
             --models "${{ github.event.inputs.models || 'ecmwf,gfs' }}" \
-            --limit "${{ github.event.inputs.limit || '12' }}" \
+            --limit "${{ github.event.inputs.limit || '40' }}" \
             ${{ github.event.inputs.force == 'true' && '--force' || '' }}
