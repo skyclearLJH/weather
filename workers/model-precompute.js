@@ -715,23 +715,43 @@ const warmKimGlobalFrame = async (env, cycle, scheduledTime = Date.now()) => {
   }
   const scheduledDate = new Date(scheduledTime);
   const preferredIndex = (scheduledDate.getUTCHours() * 60 + scheduledDate.getUTCMinutes()) % FRAME_COUNT;
-  let frameIndex = preferredIndex;
-  for (let offset = 0; offset < FRAME_COUNT; offset += 1) {
-    const candidate = (preferredIndex + offset) % FRAME_COUNT;
-    if (!manifest.frames[candidate]) { frameIndex = candidate; break; }
+
+  // 아직 안 채운 프레임을 순서대로 시도한다. 한 프레임의 원자료에 결측이 있어도
+  // 거기서 멈추지 않고 다음 프레임으로 넘어간다 — 예전에는 첫 실패에서 그대로
+  // throw해서, 결측이 있는 프레임 하나 때문에 매분 같은 자리에 걸려 워밍이 통째로
+  // 멈췄다(manifest가 계속 0/40, 나머지 리드타임은 캐시가 없어 500).
+  const MAX_ATTEMPTS = 6;
+  let attempts = 0;
+  let lastError = null;
+  for (let offset = 0; offset < FRAME_COUNT && attempts < MAX_ATTEMPTS; offset += 1) {
+    const frameIndex = (preferredIndex + offset) % FRAME_COUNT;
+    if (manifest.frames[frameIndex]) continue;
+    attempts += 1;
+    try {
+      const key = kimGlobalFrameKey(cycle, frameIndex);
+      const storedFrame = await readStoredJson(store, key);
+      if (!isCompleteKimSourceFrame(storedFrame)) {
+        const payload = await fetchKimGlobalCumulativeFrame(env, cycle, frameIndex);
+        if (!isCompleteKimSourceFrame(payload)) {
+          throw new KimNoDataError('KIM 전구 원자료에 결측 영역이 있어 다시 수집합니다.');
+        }
+        await writeStoredJson(store, key, payload);
+      }
+      manifest.frames[frameIndex] = true;
+      manifest.generatedAt = new Date().toISOString();
+      await writeStoredJson(store, manifestKey, manifest);
+      const count = manifest.frames.filter(Boolean).length;
+      return { warmed: true, complete: count === FRAME_COUNT, count };
+    } catch (error) {
+      // 결측·일시 오류는 다음 프레임으로 넘어가 시도한다. 이 프레임은 manifest에
+      // 표시하지 않으므로 다음 주기에 자연히 다시 시도된다.
+      if (!(error instanceof KimNoDataError)) throw error;
+      lastError = error;
+    }
   }
-  const key = kimGlobalFrameKey(cycle, frameIndex);
-  const storedFrame = await readStoredJson(store, key);
-  if (!isCompleteKimSourceFrame(storedFrame)) {
-    const payload = await fetchKimGlobalCumulativeFrame(env, cycle, frameIndex);
-    if (!isCompleteKimSourceFrame(payload)) throw new KimNoDataError('KIM 전구 원자료에 결측 영역이 있어 다시 수집합니다.');
-    await writeStoredJson(store, key, payload);
-  }
-  manifest.frames[frameIndex] = true;
-  manifest.generatedAt = new Date().toISOString();
-  await writeStoredJson(store, manifestKey, manifest);
+  if (lastError) throw lastError;
   const count = manifest.frames.filter(Boolean).length;
-  return { warmed: true, complete: count === FRAME_COUNT, count };
+  return { warmed: false, complete: count === FRAME_COUNT, count };
 };
 
 const kimCacheIndexForPoint = (point, sourceGrid) => {
