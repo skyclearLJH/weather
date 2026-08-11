@@ -1209,6 +1209,42 @@ const routeRequest = async (request, env, executionCtx) => {
   }
 };
 
+// 화면이 실제로 요청하는 KIM 프레임 응답을 미리 구워 R2에 넣어 둔다.
+// 프레임 요청(action=frame)은 번들과 다른 경로(buildKimNativeFrame)를 쓰는데,
+// 캐시가 없으면 그 자리에서 동아시아 전역 격자를 만들다 Workers CPU 한도를 넘겨
+// 503(1102)이 났다. 화면은 항상 같은 bbox(EAST_ASIA_PRECOMPUTE.bbox)로 요청하므로
+// 캐시 키가 하나로 고정된다 — 미리 구워두면 요청은 R2 읽기로 끝난다.
+// cron이 매분 한 프레임씩 채우고, 실패한 프레임은 표시하지 않아 다음 주기에 재시도된다.
+const warmKimNativeFrame = async (env, cycle, scheduledTime = Date.now()) => {
+  const store = getStore(env);
+  if (!store) return { warmed: false, complete: false, count: 0 };
+  const bbox = EAST_ASIA_PRECOMPUTE.bbox;
+  const scheduledDate = new Date(scheduledTime);
+  const preferredIndex = (scheduledDate.getUTCHours() * 60 + scheduledDate.getUTCMinutes()) % FRAME_COUNT;
+
+  let count = 0;
+  let target = -1;
+  for (let offset = 0; offset < FRAME_COUNT; offset += 1) {
+    const frameIndex = (preferredIndex + offset) % FRAME_COUNT;
+    const key = kimNativeFrameCacheKey(cycle, frameIndex, bbox);
+    // eslint-disable-next-line no-await-in-loop
+    if (await hasStoredJson(store, key)) { count += 1; continue; }
+    if (target < 0) target = frameIndex;
+  }
+  if (target < 0) return { warmed: false, complete: true, count: FRAME_COUNT };
+
+  const payload = await buildKimNativeFrame(env, {
+    model: 'kim-global',
+    bbox,
+    requestedStep: 1, // 화면이 step을 보내지 않을 때와 같은 값
+    cycle,
+    frameIndex: target,
+  });
+  if (!isCompletePayload(payload)) return { warmed: false, complete: false, count };
+  await writeStoredJson(store, kimNativeFrameCacheKey(cycle, target, bbox), payload);
+  return { warmed: true, complete: count + 1 === FRAME_COUNT, count: count + 1 };
+};
+
 const precompute = async (env, scheduledTime = Date.now()) => {
   const metadata = await buildMetadata(env);
   // 저장소 정리(R2 list/delete)를 먼저 await 하던 탓에, 객체가 쌓여 정리가 느려지거나
@@ -1216,6 +1252,8 @@ const precompute = async (env, scheduledTime = Date.now()) => {
   // 안 본 리드타임은 캐시가 없어 즉석 생성하다 워커가 500으로 터짐).
   // 워밍을 먼저 끝내고, 정리는 실패해도 워밍에 영향을 주지 않게 분리한다.
   await warmKimGlobalFrame(env, metadata.cycle, scheduledTime);
+  // 화면이 바로 읽어 갈 프레임 응답도 미리 구워 둔다(실패해도 나머지에 영향 없음).
+  await warmKimNativeFrame(env, metadata.cycle, scheduledTime).catch(() => {});
   await maintainModelStorage(env, scheduledTime).catch(() => {});
 };
 
