@@ -1388,33 +1388,10 @@ const HeatwaveBroadcastView = () => {
         </div>
       ) : null}
 
-      <div
-        className="pointer-events-none absolute z-20 flex items-center"
-        style={{ left: '4.4%', top: '14%' }}
-      >
-        <div
-          className="relative flex items-center overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 shadow-2xl"
-          style={{
-            width: 'clamp(430px, 29vw, 700px)',
-            height: 'clamp(58px, 7.4vh, 96px)',
-            paddingLeft: '1.3vw',
-            paddingRight: '1.2vw',
-            gap: '1.1vw',
-          }}
-        >
-          <div className="relative flex flex-col leading-none">
-            <span className="font-black tracking-[0.18em]" style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}>
-              KBS
-            </span>
-            <span className="mt-[0.2em] font-bold tracking-[0.1em] text-white/80" style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}>
-              WEATHER
-            </span>
-            <span className="absolute -right-3 -top-2 text-[#f4c542]">✦</span>
-          </div>
-          <span
-            className="whitespace-nowrap font-black tracking-tight"
-            style={{ fontSize: 'clamp(25px, 2vw, 44px)', textShadow: '0 2px 6px rgba(0,0,0,0.35)' }}
-          >
+      <div className="pointer-events-none absolute left-[4.4%] top-[14%] z-20 flex items-center">
+        <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
+          <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
+          <span className="whitespace-nowrap text-3xl font-black">
             {mode === 'tropical'
               ? '열대야 현황'
               : mode === 'change'
@@ -1424,24 +1401,24 @@ const HeatwaveBroadcastView = () => {
                 : '오늘 최고기온'}
           </span>
           {displayObservedAtCode ? (
-            <div className="ml-auto flex shrink-0 flex-col items-end whitespace-nowrap">
+            <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap border-l border-white/30 pl-4">
               {targetDate && mode !== 'change' ? (
-                <span className="font-black tabular-nums" style={{ fontSize: 'clamp(16px, 1.2vw, 26px)' }}>
+                <span className="text-2xl font-black tabular-nums">
                   {Number(displayObservedAtCode.slice(4, 6))}/{Number(displayObservedAtCode.slice(6, 8))}
                 </span>
               ) : (
                 <>
-                  <span className="font-black tabular-nums" style={{ fontSize: 'clamp(16px, 1.2vw, 26px)' }}>
+                  <span className="text-2xl font-black tabular-nums">
                     {displayObservedAtCode.slice(8, 10)}:{displayObservedAtCode.slice(10, 12)}
                   </span>
-                  <span className="text-xs font-semibold text-[#bdd6fb]">
+                  <span className="text-sm font-bold text-[#bdd6fb]">
                     {Number(displayObservedAtCode.slice(4, 6))}/{Number(displayObservedAtCode.slice(6, 8))}
                   </span>
                 </>
               )}
             </div>
           ) : null}
-          <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
+          <div className="absolute inset-x-0 bottom-0 h-[3px] bg-[#8ec2ff]" />
         </div>
       </div>
 
@@ -1454,7 +1431,7 @@ const HeatwaveBroadcastView = () => {
           style={{
             left: '4.4%',
             top: 'calc(50% - max(23vh, 140px) - 18.5px)',
-            width: 'clamp(430px, 29vw, 700px)',
+            width: 'min(620px, 72vw)',
           }}
         >
           <div className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm" style={{ width: 'clamp(368px, 25vw, 575px)' }}>

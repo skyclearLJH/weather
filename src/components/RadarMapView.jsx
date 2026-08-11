@@ -4871,48 +4871,10 @@ const RadarMapView = ({
               />
             ) : null}
             {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}
-            <div
-              className="pointer-events-none absolute z-20 flex items-center gap-[1vw]"
-              style={{ left: '4.4%', top: '14%' }}
-            >
-              <div
-                className="relative flex items-center overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 shadow-2xl"
-                style={{
-                  width: 'clamp(430px, 29vw, 700px)',
-                  height: 'clamp(58px, 7.4vh, 96px)',
-                  paddingLeft: '1.3vw',
-                  paddingRight: '1.2vw',
-                  gap: '1.1vw',
-                }}
-              >
-                <div className="relative flex flex-col leading-none text-white">
-                  <span
-                    className="font-black tracking-[0.18em]"
-                    style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
-                  >
-                    KBS
-                  </span>
-                  <span
-                    className="mt-[0.2em] font-bold tracking-[0.1em] text-white/80"
-                    style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
-                  >
-                    WEATHER
-                  </span>
-                  <svg
-                    viewBox="0 0 12 12"
-                    className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-[#f4c542]"
-                    aria-hidden="true"
-                  >
-                    <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
-                  </svg>
-                </div>
-                <span
-                  className="whitespace-nowrap font-black tracking-tight text-white"
-                  style={{
-                    fontSize: 'clamp(26px, 2.1vw, 46px)',
-                    textShadow: '0 2px 6px rgba(0,0,0,0.35)',
-                  }}
-                >
+            <div className="pointer-events-none absolute left-[4.4%] top-[14%] z-20 flex items-center">
+              <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
+                <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
+                <span className="whitespace-nowrap text-3xl font-black">
                   {isAccumView
                     ? '누적 강수량'
                     : isKimView
@@ -4924,18 +4886,8 @@ const RadarMapView = ({
                           : '레이더 영상'}
                 </span>
                 {(isAccumView ? currentAccumHour : isKimView ? currentKimFrame : currentFrame) ? (
-                  <div
-                    className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap"
-                    style={{ gap: '0.6vw' }}
-                  >
-                    <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
-                    <span
-                      className="font-black leading-none tabular-nums text-white"
-                      style={{
-                        fontSize: 'clamp(22px, 1.7vw, 38px)',
-                        textShadow: '0 2px 5px rgba(0,0,0,0.3)',
-                      }}
-                    >
+                  <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap border-l border-white/30 pl-4">
+                    <span className="text-2xl font-black tabular-nums">
                       {formatHourMinute(
                         isAccumView
                           ? currentAccumHour
@@ -4944,10 +4896,7 @@ const RadarMapView = ({
                             : currentFrame.validTime,
                       )}
                     </span>
-                    <span
-                      className="font-semibold text-[#bdd6fb]"
-                      style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}
-                    >
+                    <span className="text-sm font-bold text-[#bdd6fb]">
                       {formatBroadcastDate(
                         isAccumView
                           ? currentAccumHour
@@ -4958,7 +4907,7 @@ const RadarMapView = ({
                     </span>
                   </div>
                 ) : null}
-                <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
+                <div className="absolute inset-x-0 bottom-0 h-[3px] bg-[#8ec2ff]" />
               </div>
             </div>
 
@@ -4994,7 +4943,7 @@ const RadarMapView = ({
                 style={{
                   left: '4.4%',
                   top: 'calc(50% - max(23vh, 140px) - 18.5px)',
-                  width: 'clamp(430px, 29vw, 700px)',
+                  width: 'min(620px, 72vw)',
                 }}
               >
                 <div
@@ -5035,7 +4984,7 @@ const RadarMapView = ({
                 style={{
                   left: '4.4%',
                   top: 'calc(50% - max(23vh, 140px) - 18.5px)',
-                  width: 'clamp(430px, 29vw, 700px)',
+                  width: 'min(620px, 72vw)',
                 }}
               >
                 <div

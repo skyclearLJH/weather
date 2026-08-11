@@ -1696,77 +1696,26 @@ function SatelliteView({
         />
       ) : null}
 
-      {/* 좌상단: 타이틀 밴드 — 레이더 방송모드와 동일 형태·위치 */}
-      <div
-        className="pointer-events-none absolute z-20 flex items-center gap-[1vw]"
-        style={{ left: '4.4%', top: '14%' }}
-      >
-        <div
-          className="relative flex items-center overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 shadow-2xl"
-          style={{
-            width: 'clamp(430px, 29vw, 700px)',
-            height: 'clamp(58px, 7.4vh, 96px)',
-            paddingLeft: '1.3vw',
-            paddingRight: '1.2vw',
-            gap: '1.1vw',
-          }}
-        >
-          <div className="relative flex flex-col leading-none text-white">
-            <span
-              className="font-black tracking-[0.18em]"
-              style={{ fontSize: 'clamp(13px, 1vw, 22px)' }}
-            >
-              KBS
-            </span>
-            <span
-              className="mt-[0.2em] font-bold tracking-[0.1em] text-white/80"
-              style={{ fontSize: 'clamp(9px, 0.72vw, 16px)' }}
-            >
-              WEATHER
-            </span>
-            <svg
-              viewBox="0 0 12 12"
-              className="absolute -right-3 -top-1 h-[0.7vw] min-h-2 w-[0.7vw] min-w-2 fill-[#f4c542]"
-              aria-hidden="true"
-            >
-              <path d="M6 0l1.2 4.8L12 6l-4.8 1.2L6 12 4.8 7.2 0 6l4.8-1.2L6 0Z" />
-            </svg>
-          </div>
+      {/* 좌상단: 타이틀 밴드 — 예측 모델(GlobalModelView)과 동일한 규격으로 통일 */}
+      <div className="pointer-events-none absolute left-[4.4%] top-[14%] z-20 flex items-center">
+        <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
+          <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
           {/* 타이틀·시각은 현재 상태의 내용만 조건부로 렌더한다(디졸브로 두 내용을
               겹치면 전환 중 잘못된 시각이 번쩍이고, 폭이 남아 시간이 밴드 밖으로
               밀리는 문제가 있어 즉시 전환으로 되돌림). */}
-          <span
-            className="whitespace-nowrap font-black tracking-tight text-white"
-            style={{ fontSize: 'clamp(26px, 2.1vw, 46px)', textShadow: '0 2px 6px rgba(0,0,0,0.35)' }}
-          >
-            {typhoonActive ? typhoonBandTitle : '위성 영상'}
-          </span>
+          <span className="whitespace-nowrap text-3xl font-black">{typhoonActive ? typhoonBandTitle : '위성 영상'}</span>
           {typhoonActive ? (
-            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.5vw', marginRight: '0.4vw' }}>
-              <span className="h-[62%] w-px bg-white/30" style={{ marginRight: '0.4vw' }} />
-              <span
-                className="flex flex-col items-center leading-tight text-[#dbe8fb]"
-                style={{ fontSize: 'clamp(12px, 0.82vw, 17px)' }}
-              >
-                <span className="font-bold">{typhoonBandTime?.day}</span>
-                <span className="font-bold">{typhoonBandTime?.time}</span>
-              </span>
+            <div className="ml-auto flex shrink-0 flex-col items-center whitespace-nowrap border-l border-white/30 pl-4 leading-tight text-[#bdd6fb]">
+              <span className="text-[11px] font-bold tabular-nums">{typhoonBandTime?.day}</span>
+              <span className="text-[11px] font-bold tabular-nums">{typhoonBandTime?.time}</span>
             </div>
           ) : bandTime ? (
-            <div className="ml-auto flex shrink-0 items-center whitespace-nowrap" style={{ gap: '0.6vw' }}>
-              <span className="h-[52%] w-px bg-white/30" style={{ marginRight: '0.5vw' }} />
-              <span
-                className="font-black leading-none tabular-nums text-white"
-                style={{ fontSize: 'clamp(22px, 1.7vw, 38px)', textShadow: '0 2px 5px rgba(0,0,0,0.3)' }}
-              >
-                {bandTime.clock}
-              </span>
-              <span className="font-semibold text-[#bdd6fb]" style={{ fontSize: 'clamp(13px, 0.95vw, 20px)' }}>
-                {bandTime.date}
-              </span>
+            <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap border-l border-white/30 pl-4">
+              <span className="text-2xl font-black tabular-nums">{bandTime.clock}</span>
+              <span className="text-sm font-bold text-[#bdd6fb]">{bandTime.date}</span>
             </div>
           ) : null}
-          <div className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-[#3d86e8] to-[#8ec2ff]" />
+          <div className="absolute inset-x-0 bottom-0 h-[3px] bg-[#8ec2ff]" />
         </div>
       </div>
 

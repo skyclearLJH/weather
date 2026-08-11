@@ -1127,25 +1127,19 @@ function HistoricalCaseComparison({
       </div>
 
       <div className="pointer-events-none absolute left-[4.4%] top-[9%] z-40">
-        <div className="flex h-[clamp(58px,7.4vh,96px)] w-[min(720px,92vw)] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/96 via-[#155bb5]/96 to-[#2f7cd6]/96 px-6 shadow-2xl">
-          <div className="relative flex shrink-0 flex-col leading-none">
-            <span className="text-[clamp(13px,1vw,22px)] font-black tracking-[0.18em]">KBS</span>
-            <span className="mt-1 text-[clamp(9px,0.72vw,16px)] font-bold tracking-[0.1em] text-white/75">WEATHER</span>
+        <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
+          <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
+          <span className="whitespace-nowrap text-3xl font-black">과거 사례 비교</span>
+          <div className="ml-auto flex shrink-0 flex-col items-center whitespace-nowrap border-l border-white/30 pl-4 leading-tight text-[#bdd6fb]">
+            <span className="text-[11px] font-bold">{kind === 'rain' ? '레이더 · AWS' : 'AWS 기온'}</span>
+            <span className="text-[11px] font-bold tabular-nums">{kind === 'rain' ? `${durationHours}시간 누적` : `${durationHours}시간 변화`}</span>
           </div>
-          <div className="h-9 w-px bg-white/25" />
-          <div className="min-w-0">
-            <div className="truncate text-[clamp(23px,1.9vw,42px)] font-black tracking-tight">
-              과거 사례 비교
-            </div>
-            <div className="text-[clamp(10px,0.72vw,15px)] font-bold text-[#bdd6fb]">
-              {kind === 'rain' ? `레이더 · AWS ${durationHours}시간 누적` : `AWS 기온 · ${durationHours}시간 변화`}
-            </div>
-          </div>
+          <div className="absolute inset-x-0 bottom-0 h-[3px] bg-[#8ec2ff]" />
         </div>
       </div>
 
       {status === 'ready' ? (
-        <div className="pointer-events-none absolute left-1/2 top-[9%] z-40 -translate-x-1/2 translate-y-[calc(clamp(58px,7.4vh,96px)+14px)]">
+        <div className="pointer-events-none absolute left-1/2 top-[9%] z-40 -translate-x-1/2 translate-y-[94px]">
           <MetricPanel metrics={metrics} />
         </div>
       ) : null}
