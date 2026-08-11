@@ -1191,8 +1191,12 @@ const routeRequest = async (request, env, executionCtx) => {
 
 const precompute = async (env, scheduledTime = Date.now()) => {
   const metadata = await buildMetadata(env);
-  await maintainModelStorage(env, scheduledTime);
+  // 저장소 정리(R2 list/delete)를 먼저 await 하던 탓에, 객체가 쌓여 정리가 느려지거나
+  // 실패하면 그 뒤의 프레임 워밍까지 매번 함께 막혔다(manifest 0/40 고착 → 사용자가
+  // 안 본 리드타임은 캐시가 없어 즉석 생성하다 워커가 500으로 터짐).
+  // 워밍을 먼저 끝내고, 정리는 실패해도 워밍에 영향을 주지 않게 분리한다.
   await warmKimGlobalFrame(env, metadata.cycle, scheduledTime);
+  await maintainModelStorage(env, scheduledTime).catch(() => {});
 };
 
 export default {
