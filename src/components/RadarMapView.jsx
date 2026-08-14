@@ -4872,7 +4872,7 @@ const RadarMapView = ({
             ) : null}
             {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}
             <div className="pointer-events-none absolute left-[4.4%] top-[14%] z-20 flex items-center">
-              <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
+              <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 text-white shadow-2xl">
                 <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
                 <span className="whitespace-nowrap text-3xl font-black">
                   {isAccumView
@@ -4942,7 +4942,9 @@ const RadarMapView = ({
                 }`}
                 style={{
                   left: '4.4%',
-                  top: 'calc(50% - max(23vh, 140px) - 18.5px)',
+                  // 창이 작으면 화면 중앙 기준 계산이 밴드(top 14% + 높이 80px) 위로
+                  // 올라와 겹쳤다. 밴드 아래(여백 12px)를 하한으로 둔다.
+                  top: 'max(calc(14% + 92px), calc(50% - max(23vh, 140px) - 18.5px))',
                   width: 'min(620px, 72vw)',
                 }}
               >
@@ -4983,7 +4985,9 @@ const RadarMapView = ({
                 }`}
                 style={{
                   left: '4.4%',
-                  top: 'calc(50% - max(23vh, 140px) - 18.5px)',
+                  // 창이 작으면 화면 중앙 기준 계산이 밴드(top 14% + 높이 80px) 위로
+                  // 올라와 겹쳤다. 밴드 아래(여백 12px)를 하한으로 둔다.
+                  top: 'max(calc(14% + 92px), calc(50% - max(23vh, 140px) - 18.5px))',
                   width: 'min(620px, 72vw)',
                 }}
               >

@@ -1698,7 +1698,7 @@ function SatelliteView({
 
       {/* 좌상단: 타이틀 밴드 — 예측 모델(GlobalModelView)과 동일한 규격으로 통일 */}
       <div className="pointer-events-none absolute left-[4.4%] top-[14%] z-20 flex items-center">
-        <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
+        <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 text-white shadow-2xl">
           <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
           {/* 타이틀·시각은 현재 상태의 내용만 조건부로 렌더한다(디졸브로 두 내용을
               겹치면 전환 중 잘못된 시각이 번쩍이고, 폭이 남아 시간이 밴드 밖으로

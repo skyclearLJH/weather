@@ -816,7 +816,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
       {workspaceMode === 'record' ? <VideoExportMenu currentTarget={activeView} mapRef={mapRef} defaultStart={times[rangeStart]?.toISOString().slice(0, 16) ?? ''} defaultEnd={times[rangeEnd]?.toISOString().slice(0, 16) ?? ''} onBeforeScreenShare={onBeforeScreenShare} onPreparePlayback={() => { setIsPlaying(false); setFrameIndex(rangeStart); }} onStartPlayback={startPlayback} /> : null}
 
       <div className="pointer-events-none absolute left-[4.4%] top-[14%] z-20 flex items-center">
-        <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 shadow-2xl">
+        <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 text-white shadow-2xl">
           <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
           <span className="whitespace-nowrap text-3xl font-black">{title}</span>
           {cycleInit ? <div className="flex shrink-0 flex-col items-center leading-tight text-[#bdd6fb]"><span className="text-[11px] font-bold tabular-nums">{cycleInit.date}</span><span className="text-[11px] font-bold tabular-nums">{cycleInit.hour}</span></div> : null}
