@@ -26,10 +26,12 @@ const HEAT_ITEMS = [
   { id: 'change', label: '기온변화' },
 ];
 
+// KIM 전구는 워커가 실시간 가공해 첫 표출이 느릴 때가 있어, 바로 뜨는 ECMWF를
+// 앞에 두고 기본으로 삼는다.
 const FORECAST_ITEMS = [
-  { id: 'kim-global', label: 'KIM' },
   { id: 'ifs', label: 'ECMWF' },
   { id: 'gfs', label: 'GFS' },
+  { id: 'kim-global', label: 'KIM' },
   { id: 'compare', label: '비교분석' },
 ];
 

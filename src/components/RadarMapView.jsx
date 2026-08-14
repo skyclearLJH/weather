@@ -4704,7 +4704,7 @@ const RadarMapView = ({
       return;
     }
     const nextView = nextSection === 'forecast'
-      ? 'kim-global'
+      ? 'ifs'
       : nextSection === 'analysis'
         ? 'tracking'
         : 'radar';

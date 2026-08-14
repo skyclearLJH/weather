@@ -1344,7 +1344,7 @@ const HeatwaveBroadcastView = () => {
       onSectionChange={(nextSection) => {
         if (nextSection === 'heat') return;
         const nextView = nextSection === 'forecast'
-          ? 'kim-global'
+          ? 'ifs'
           : nextSection === 'analysis'
             ? 'tracking'
             : 'radar';
