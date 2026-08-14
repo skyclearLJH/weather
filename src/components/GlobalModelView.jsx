@@ -29,7 +29,7 @@ import VideoExportMenu from './VideoExportMenu.jsx';
 const MODEL_IDS = ['kim-global', 'ifs', 'gfs'];
 const MODEL_META = {
   'kim-global': { label: 'KIM 전구', short: 'KIM', band: 'KIM', color: '#22d3ee' },
-  ifs: { label: 'ECMWF IFS', short: 'IFS', band: 'ECMWF', color: '#facc15' },
+  ifs: { label: 'ECMWF', short: 'ECMWF', band: 'ECMWF', color: '#facc15' },
   gfs: { label: 'NOAA GFS', short: 'GFS', band: 'GFS', color: '#4ade80' },
 };
 const BASE_STYLE = {
@@ -334,13 +334,13 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [rangeStart, setRangeStart] = useState(0);
   const [rangeEnd, setRangeEnd] = useState(39);
-  const [leftModel, setLeftModel] = useState('kim-global');
-  const [rightModel, setRightModel] = useState('ifs');
+  const [leftModel, setLeftModel] = useState('ifs');
+  const [rightModel, setRightModel] = useState('gfs');
   const [splitPercent, setSplitPercent] = useState(50);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const [showConsensus, setShowConsensus] = useState(true);
   const [showPressure, setShowPressure] = useState(true);
-  const [pressureModel, setPressureModel] = useState('kim-global');
+  const [pressureModel, setPressureModel] = useState('ifs');
   const [selectedPoint, setSelectedPoint] = useState(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const isCompare = activeView === 'compare';
