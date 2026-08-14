@@ -389,7 +389,7 @@ function ComparisonMapPane({
       const feature = event.features?.[0];
       if (!feature) return;
       popup?.remove();
-      popup = new maplibregl.Popup({ closeButton: false, offset: 12 })
+      popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 12 })
         .setLngLat(event.lngLat)
         .setHTML(
           `<div style="font-weight:800;color:#172033">${feature.properties.label}</div>` +

@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Waves,
   Wind,
+  X,
 } from 'lucide-react';
 import { fetchTerrainWindForecast } from '../api/terrainRainApi.js';
 import {
@@ -755,9 +756,20 @@ function TerrainRainOverlay({
                 {analysis?.totalStations ? ` · ${analysis.totalStations}개 AWS` : ''}
               </div>
             </div>
-            {analysisStatus === 'loading' ? (
-              <LoaderCircle className="mt-1 h-5 w-5 animate-spin text-cyan-300" aria-hidden="true" />
-            ) : null}
+            <div className="mt-1 flex shrink-0 items-center gap-2">
+              {analysisStatus === 'loading' ? (
+                <LoaderCircle className="h-5 w-5 animate-spin text-cyan-300" aria-hidden="true" />
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setSelectedBasin(null)}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-white/20 text-white/70 transition hover:bg-white/10 hover:text-white"
+                aria-label="유역 분석 닫기"
+                title="닫기"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
           {analysisStatus === 'error' ? (
             <div className="border-t border-white/10 px-5 py-4 text-sm font-semibold text-red-200">

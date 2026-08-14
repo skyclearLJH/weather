@@ -11,6 +11,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -252,7 +253,7 @@ const frameOffsetForTile = (tile, frameIndex) => Number.isInteger(tile?.frameInd
   ? 0
   : frameIndex * tile.grid.width * tile.grid.height;
 
-function ModelPointChart({ tiles, times, frameIndex, point }) {
+function ModelPointChart({ tiles, times, frameIndex, point, onClose }) {
   const chart = useMemo(() => {
     if (!point || !times?.length) return null;
     const series = MODEL_IDS.flatMap((modelId) => {
@@ -284,7 +285,18 @@ function ModelPointChart({ tiles, times, frameIndex, point }) {
     <div className="pointer-events-auto absolute bottom-28 left-[8%] z-30 w-[470px] rounded-md border border-white/20 bg-slate-950/88 p-4 text-white shadow-2xl backdrop-blur-md">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-black"><MapPin className="h-4 w-4 text-cyan-300" />{point.lat.toFixed(2)}°N, {point.lon.toFixed(2)}°E</div>
-        <span className="text-xs font-bold text-white/55">6시간 누적 강수량</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-white/55">6시간 누적 강수량</span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-white/20 text-white/70 transition hover:bg-white/10 hover:text-white"
+            aria-label="지점 그래프 닫기"
+            title="닫기"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       <svg viewBox={`0 0 ${width} ${height}`} className="h-[142px] w-full" aria-label="모델별 예상 강수량 그래프">
         {[0, 0.5, 1].map((ratio) => <line key={ratio} x1="0" x2={width} y1={10 + plotHeight * ratio} y2={10 + plotHeight * ratio} stroke="rgba(255,255,255,0.15)" />)}
@@ -835,7 +847,7 @@ function GlobalModelView({ activeView, workspaceMode, showPlaceLabels, menuSlot,
         <div className="pointer-events-none absolute inset-x-0 top-3 z-20 text-xs font-black"><span className="absolute left-[25%] -translate-x-1/2 rounded-md bg-slate-950/70 px-3 py-1.5">{MODEL_META[leftModel].label}</span><span className="absolute left-[75%] -translate-x-1/2 rounded-md bg-slate-950/70 px-3 py-1.5">{MODEL_META[rightModel].label}</span></div>
       </> : null}
 
-      {selectedPoint ? <ModelPointChart tiles={tiles} times={times} frameIndex={frameIndex} point={selectedPoint} /> : null}
+      {selectedPoint ? <ModelPointChart tiles={tiles} times={times} frameIndex={frameIndex} point={selectedPoint} onClose={() => setSelectedPoint(null)} /> : null}
 
       {workspaceMode !== 'broadcast' ? <div data-video-hide className="absolute bottom-24 right-6 z-40 flex max-w-[72vw] flex-col items-end gap-2">
         {menuSlot}

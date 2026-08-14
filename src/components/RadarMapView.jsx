@@ -9,6 +9,7 @@ import {
   MonitorPlay,
   Navigation2,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import SatelliteView from './SatelliteView.jsx';
 import TerrainRainOverlay from './TerrainRainOverlay.jsx';
@@ -1439,6 +1440,7 @@ const TrackingAnalysisPanel = ({
   onSelectFrame,
   onReturnToCurrent,
   onResetMap,
+  onClose,
 }) => {
   const selected = series.find((item) => item.frameIndex === currentFrameIndex) ?? null;
   const latestObserved = series.find((item) => item.frameIndex === latestObservationIndex) ?? null;
@@ -1489,6 +1491,15 @@ const TrackingAnalysisPanel = ({
             title="전국 화면"
           >
             <MapIcon size={17} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-white/15 bg-white/8 text-white transition hover:bg-white/15"
+            aria-label="지점 분석 닫기"
+            title="닫기"
+          >
+            <X size={17} />
           </button>
         </div>
       </div>
@@ -4919,7 +4930,7 @@ const RadarMapView = ({
               workspaceMode={workspaceMode}
             />
 
-            {isTrackingView ? (
+            {isTrackingView && trackingPoint ? (
               <TrackingAnalysisPanel
                 point={trackingPoint}
                 series={trackingSeries}
@@ -4930,6 +4941,7 @@ const RadarMapView = ({
                 onSelectFrame={handleTrackingFrameSelect}
                 onReturnToCurrent={handleTrackingReturnToCurrent}
                 onResetMap={handleTrackingResetMap}
+                onClose={() => setTrackingPoint(null)}
               />
             ) : null}
 
