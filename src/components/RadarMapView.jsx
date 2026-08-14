@@ -4962,14 +4962,14 @@ const RadarMapView = ({
               >
                 <div
                   className="overflow-hidden rounded-md bg-slate-900/60 shadow-xl backdrop-blur-sm"
-                  style={{ width: 'clamp(320px, 22vw, 500px)' }}
+                  style={{ width: 'clamp(368px, 25vw, 575px)' }}
                 >
                   <div className="divide-y divide-white/10">
                     {accumTop5.map((row, index) => (
                       <div
                         key={row.id}
-                        className="flex items-center gap-2.5 px-5 py-[0.9vh]"
-                        style={{ fontSize: 'clamp(16px, 1.25vw, 26px)' }}
+                        className="flex items-center gap-3 px-6 py-[1.05vh]"
+                        style={{ fontSize: 'clamp(18px, 1.44vw, 30px)' }}
                       >
                         <span className="w-[1.2em] shrink-0 font-black text-[#f4c542]">
                           {index + 1}
