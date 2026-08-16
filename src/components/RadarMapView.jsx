@@ -1666,7 +1666,14 @@ const RadarMapView = ({
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [trackingAnalysisTick, setTrackingAnalysisTick] = useState(0);
   const [playRangeVersion, setPlayRangeVersion] = useState(0);
+  // 지도 인스턴스가 만들어진 시점을 알리는 신호. 지도를 만지는 효과가 지도 생성
+  // 효과보다 먼저 선언돼 있어, 이 값이 바뀔 때 다시 적용될 기회를 준다.
+  const [mapInstanceReady, setMapInstanceReady] = useState(false);
 
+  // 지도를 만드는 효과보다 이 효과가 먼저 실행되므로, 처음에는 mapRef가 비어 있다.
+  // mapInstanceReady가 없으면 강수량/지형호우로 바로 진입했을 때(방송 URL의
+  // videoTarget=accum 등) isAccumView가 처음부터 true라 효과가 다시 돌지 않아
+  // 회전이 영영 꺼진 채로 남는다. 지도가 생긴 뒤 한 번 더 적용한다.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -1679,7 +1686,7 @@ const RadarMapView = ({
     if (Math.abs(map.getBearing()) > 0.01) {
       map.easeTo({ bearing: 0, duration: 350 });
     }
-  }, [isAccumView, isTerrainView]);
+  }, [isAccumView, isTerrainView, mapInstanceReady]);
 
   // 레이더 화면 위 '시간당 강수량' 최다 5지점 표 (체크박스로 켜고 끈다).
   // 자료는 일반 페이지 '강수량 > 60분 현재'와 같은 서버 랭킹(precipitation-current)을 쓴다.
@@ -1794,6 +1801,7 @@ const RadarMapView = ({
     navControlRef.current = navControl;
     navControlAddedRef.current = true;
     mapRef.current = map;
+    setMapInstanceReady(true);
     if (import.meta.env.DEV) {
       window.__radarMap = map;
     }
@@ -1884,6 +1892,7 @@ const RadarMapView = ({
       }
       map.remove();
       mapRef.current = null;
+      setMapInstanceReady(false);
       accumSurfaceLayerRef.current = null;
       overlayCanvasRef.current = null;
       transitionFromCanvasRef.current = null;
@@ -4387,7 +4396,9 @@ const RadarMapView = ({
       map.addControl(navControl, 'top-right');
       navControlAddedRef.current = true;
     }
-  }, [isBroadcast]);
+    // 회전 정책과 같은 이유로 mapInstanceReady가 필요하다. 방송 URL로 바로 들어오면
+    // isBroadcast가 처음부터 true라 이 효과가 다시 돌지 않아 확대 버튼이 남는다.
+  }, [isBroadcast, mapInstanceReady]);
 
   // 방송모드 지도 배색 전환. 일반 화면에서 이미 생성된 지도에도 전환 완료까지 재적용한다.
   useEffect(() => {
