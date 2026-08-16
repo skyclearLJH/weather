@@ -353,9 +353,12 @@ const smoothMaskedAccumGrid = (source, width, height, passes) => {
   return current;
 };
 
-const OBS_HISTORY_HOURS = 6;
+const OBS_HISTORY_HOURS = 12;
 const OBS_FRAME_INTERVAL_MINUTES = 5;
-const OBS_FRAME_COUNT = (OBS_HISTORY_HOURS * 60) / OBS_FRAME_INTERVAL_MINUTES + 1; // 최신 포함 과거 6시간
+const OBS_FRAME_COUNT = (OBS_HISTORY_HOURS * 60) / OBS_FRAME_INTERVAL_MINUTES + 1; // 최신 포함 과거 12시간
+// 초단기예측은 기상청이 6시간까지 주지만, 방송에서는 신뢰도가 높은 앞부분만
+// 쓰므로 2시간까지만 타임라인에 올린다.
+const QPF_HORIZON_HOURS = 2;
 const RADAR_ARCHIVE_MIN_INPUT = '2016-01-01T06:00';
 const FRAME_CACHE_LIMIT = 48;
 const INITIAL_OBS_PREFETCH_COUNT = 18;
@@ -1234,12 +1237,13 @@ const sampleKimRainBicubic = (values, sourceIndex, fxByte, fyByte, gridWidth) =>
   return Math.min(localMax, Math.max(localMin, interpolated));
 };
 
-const OBS_TIMELINE_RANGE_MINUTES = 360;
+const OBS_TIMELINE_RANGE_MINUTES = OBS_HISTORY_HOURS * 60;
 const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 레이더 발표 주기에 맞춘 자동 갱신
 
 // --- 방송모드 ---
 const BROADCAST_PLAY_DURATIONS = Array.from({ length: 11 }, (_, index) => index + 5); // 5~15초
-const BROADCAST_CACHE_LIMIT = 130; // 전 구간 재생을 위해 모든 프레임을 캐시
+// 전 구간(관측 12시간 + 예측 2시간 ≒ 157프레임) 재생을 위해 모든 프레임을 캐시
+const BROADCAST_CACHE_LIMIT = 170;
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 
 // 기본(포털) 초기 화면: 남한 전체. 방송모드: 서해 상 접근 강수까지 보이는 광역 구도.
@@ -1606,6 +1610,10 @@ const RadarMapView = ({
   const [showPlaceLabels, setShowPlaceLabels] = useState(true);
   const [playDurationSec, setPlayDurationSec] = useState(10);
   const [playTarget, setPlayTarget] = useState(null);
+  // 이번 playTarget이 타임라인의 진짜 끝인지. 구간 지정 없이 재생하면 '현재'에서
+  // 한 번 멈추는데, 이는 관측→예측을 잇는 중간 정거장이라 '처음으로'로 바꾸지
+  // 않고 재생 버튼을 유지해 미래로 이어 볼 수 있게 한다.
+  const playTargetIsFinalRef = useRef(true);
   const [playIntervalMs, setPlayIntervalMs] = useState(PLAY_INTERVAL_MS);
   const [broadcastView, setBroadcastView] = useState(getInitialBroadcastView);
   const [kimFrames, setKimFrames] = useState([]);
@@ -2322,8 +2330,13 @@ const RadarMapView = ({
           });
         }
 
+        const forecastLimitMs =
+          latestObsTime.getTime() + QPF_HORIZON_HOURS * 60 * 60 * 1000;
         const forecastFrames = (qpfLatest?.frames ?? [])
-          .filter(({ validTime }) => validTime > latestObsTime)
+          .filter(
+            ({ validTime }) =>
+              validTime > latestObsTime && validTime.getTime() <= forecastLimitMs,
+          )
           .map(({ tm, ef, validTime }) => ({
             key: `fct-${tm}-${ef}`,
             kind: 'fct',
@@ -2365,7 +2378,7 @@ const RadarMapView = ({
         setFrameIndex(nextFrameIndex);
         setStatus('ready');
 
-        // 6시간 전체를 한 번에 받으면 API와 브라우저 메모리에 부담이 커서 최신 주변부터 천천히 받는다.
+        // 12시간 전체를 한 번에 받으면 API와 브라우저 메모리에 부담이 커서 최신 주변부터 천천히 받는다.
         const prefetchQueue = [
           ...[...observationFrames].reverse().slice(0, INITIAL_OBS_PREFETCH_COUNT),
           ...forecastFrames.slice(0, INITIAL_QPF_PREFETCH_COUNT),
@@ -2644,7 +2657,7 @@ const RadarMapView = ({
     };
   }, [isKimView, kimFrames, kimStatus, loadKimFrameData]);
 
-  // 슬라이더 이동 시 바로 앞뒤 프레임만 가볍게 미리 받아 과거 6시간 탐색을 부드럽게 한다.
+  // 슬라이더 이동 시 바로 앞뒤 프레임만 가볍게 미리 받아 과거 12시간 탐색을 부드럽게 한다.
   useEffect(() => {
     if (status !== 'ready' || frames.length === 0) {
       return undefined;
@@ -2761,10 +2774,11 @@ const RadarMapView = ({
   }, [isKimView, isPlaying, kimIndex, kimFrames.length, kimPlayTarget]);
 
   // 방송모드 재생은 목표 지점(현재 또는 예측 끝)에 도달하면 멈춘다.
+  // '현재'에서 멈춘 것뿐이라면 버튼을 재생 상태로 남겨 미래 구간을 이어 재생한다.
   useEffect(() => {
     if (!isAccumView && !isKimView && isBroadcast && isPlaying && playTarget !== null && frameIndex >= playTarget) {
       setIsPlaying(false);
-      setPlaybackFinished(true);
+      setPlaybackFinished(playTargetIsFinalRef.current);
     }
   }, [isBroadcast, isPlaying, playTarget, frameIndex, isAccumView, isKimView]);
 
@@ -2924,6 +2938,8 @@ const RadarMapView = ({
       if (endIndex <= startIndex) return;
       setFrameIndex(startIndex);
       const transitionCount = endIndex - startIndex;
+      // 사용자가 지정한 끝화면은 그 자체가 재생의 종착점이다.
+      playTargetIsFinalRef.current = true;
       setPlayTarget(endIndex);
       setPlayIntervalMs(Math.max(45, Math.round((playDurationSec * 1000) / transitionCount)));
       applyPlayCamera(mapRef.current, activePlayRange, cameraDurationMs);
@@ -2948,6 +2964,7 @@ const RadarMapView = ({
     }
 
     const transitionCount = nextTarget - frameIndex;
+    playTargetIsFinalRef.current = nextTarget >= frames.length - 1;
     setPlayTarget(nextTarget);
     setPlayIntervalMs(Math.max(45, Math.round((playDurationSec * 1000) / transitionCount)));
     setIsPlaying(true);
@@ -3052,8 +3069,8 @@ const RadarMapView = ({
     setFrameIndex(nextFrameIndex);
   }, []);
 
-  // 타임라인은 프레임 개수가 아니라 시간에 비례한다. 왼쪽은 관측 6시간,
-  // 오른쪽은 기상청이 실제 제공한 마지막 예측시각까지만 표시한다.
+  // 타임라인은 프레임 개수가 아니라 시간에 비례한다. 왼쪽은 관측 12시간,
+  // 오른쪽은 기상청이 실제 제공한 마지막 예측시각(최대 2시간)까지만 표시한다.
   const baseTimeMs = useMemo(() => {
     const latestObs = frames.filter((frame) => frame.kind === 'obs').at(-1);
     return latestObs ? latestObs.validTime.getTime() : null;
@@ -4759,7 +4776,7 @@ const RadarMapView = ({
             </div>
           </div>
           <div className={`mt-1 text-sm text-slate-500 ${isFullscreen ? 'hidden sm:block' : ''}`}>
-            기상청 레이더 강수 실황(5분 간격, 과거 6시간)과 초단기 예측강수(10분 간격, 미래 6시간)입니다.
+            기상청 레이더 강수 실황(5분 간격, 과거 12시간)과 초단기 예측강수(10분 간격, 미래 2시간)입니다.
           </div>
           <div className="mt-3">{renderRadarHistoryControls(false)}</div>
         </div>
