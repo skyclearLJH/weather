@@ -142,14 +142,9 @@ export const createAccumSurfaceLayer = (palette) => ({
     } = grid;
     const nextMeshKey = `${width}:${height}:${sampleOffset}:${stride}:${latticeWidth}:${latticeHeight}`;
 
-    // 정점을 두 벌 만든다: 앞쪽 N개는 강수 높이의 윗면, 뒤쪽 N개는 같은 위치의
-    // 지면(높이 0). 육지 경계에서 윗면이 뚝 끊기면 옆이 뚫려 바닥 지도가 비쳐
-    // 보이므로, 경계 모서리마다 두 벌을 이어 수직 벽(스커트)을 세운다.
-    const vertexCount = width * height;
-
     if (this.meshKey !== nextMeshKey) {
-      const positions = new Float32Array(vertexCount * 2 * 2);
-      const zScales = new Float32Array(vertexCount * 2);
+      const positions = new Float32Array(width * height * 2);
+      const zScales = new Float32Array(width * height);
       const yTop = maplibregl.MercatorCoordinate.fromLngLat(
         { lng: bounds.lonMin, lat: bounds.latMax },
         0,
@@ -172,41 +167,19 @@ export const createAccumSurfaceLayer = (palette) => ({
           positions[index * 2] = coordinate.x;
           positions[index * 2 + 1] = coordinate.y;
           zScales[index] = maplibregl.MercatorCoordinate.fromLngLat({ lng: lon, lat }, 1).z;
-          // 지면 사본: 위치·축척은 같고 높이만 0이 된다(아래 surface 채우기 참조).
-          const groundIndex = index + vertexCount;
-          positions[groundIndex * 2] = coordinate.x;
-          positions[groundIndex * 2 + 1] = coordinate.y;
-          zScales[groundIndex] = zScales[index];
         }
       }
       const indices = [];
-      const isDrawnQuad = (quadX, quadY) => {
-        if (quadX < 0 || quadY < 0 || quadX >= width - 1 || quadY >= height - 1) return false;
-        const topLeft = quadY * width + quadX;
-        return Boolean(
-          valid[topLeft] && valid[topLeft + 1] && valid[topLeft + width] && valid[topLeft + width + 1],
-        );
-      };
-      // 경계 모서리를 지면까지 잇는 벽. 바깥에서 봤을 때 앞면이 되도록 감는다.
-      const pushWall = (near, far) => {
-        indices.push(near, far, near + vertexCount);
-        indices.push(far, far + vertexCount, near + vertexCount);
-      };
       for (let gridY = 0; gridY < height - 1; gridY++) {
         for (let gridX = 0; gridX < width - 1; gridX++) {
           const topLeft = gridY * width + gridX;
           const topRight = topLeft + 1;
           const bottomLeft = topLeft + width;
           const bottomRight = bottomLeft + 1;
-          if (!isDrawnQuad(gridX, gridY)) {
+          if (!valid[topLeft] || !valid[topRight] || !valid[bottomLeft] || !valid[bottomRight]) {
             continue;
           }
           indices.push(topLeft, topRight, bottomLeft, topRight, bottomRight, bottomLeft);
-          // 이웃 칸이 없는 쪽(=육지 경계)만 벽을 세운다.
-          if (!isDrawnQuad(gridX, gridY - 1)) pushWall(topRight, topLeft);
-          if (!isDrawnQuad(gridX, gridY + 1)) pushWall(bottomLeft, bottomRight);
-          if (!isDrawnQuad(gridX - 1, gridY)) pushWall(topLeft, bottomLeft);
-          if (!isDrawnQuad(gridX + 1, gridY)) pushWall(bottomRight, topRight);
         }
       }
       const indexArray = new Uint32Array(indices);
@@ -220,9 +193,9 @@ export const createAccumSurfaceLayer = (palette) => ({
       this.meshKey = nextMeshKey;
     }
 
-    const surface = new Float32Array(vertexCount * 2 * 4);
-    const colors = new Float32Array(vertexCount * 2 * 3);
-    const heights = new Float32Array(vertexCount);
+    const surface = new Float32Array(width * height * 4);
+    const colors = new Float32Array(width * height * 3);
+    const heights = new Float32Array(width * height);
     for (let index = 0; index < values.length; index++) {
       heights[index] = rainfallHeight(Math.max(0, values[index]));
     }
@@ -240,15 +213,6 @@ export const createAccumSurfaceLayer = (palette) => ({
         colors[index * 3] = color[0] / 255;
         colors[index * 3 + 1] = color[1] / 255;
         colors[index * 3 + 2] = color[2] / 255;
-        // 지면 사본: 높이만 0. 값(=투명도)과 색은 같게 둬야 벽이 윗면과 이어져
-        // 보이고, 조금 어둡게 해 옆면임이 드러나게 한다.
-        const groundIndex = index + vertexCount;
-        surface[groundIndex * 4] = 0;
-        surface[groundIndex * 4 + 1] = value;
-        surface[groundIndex * 4 + 2] = shade * 0.72;
-        colors[groundIndex * 3] = color[0] / 255;
-        colors[groundIndex * 3 + 1] = color[1] / 255;
-        colors[groundIndex * 3 + 2] = color[2] / 255;
       }
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, this.surfaceBuffer);
