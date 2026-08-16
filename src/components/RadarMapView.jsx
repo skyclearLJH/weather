@@ -3332,10 +3332,8 @@ const RadarMapView = ({
       const NEIGHBORS = 10;
       const CUTOFF_LAND_PX = 100; // 육지는 넓게 보간해 결측 관측소 주변의 빈 영역을 최소화한다.
       const CUTOFF_SEA_PX = 13; // 먼바다: 섬 관측점 주변만
-      const FADE_START_PX = 9;
-      // 연안 바다(본토 해안에서 ~6km까지)는 육지와 동일하게 꽉 채우고, ~22km까지 길게
-      // 옅어진다. 페이드가 짧으면 띠 끝이 선처럼 보이므로 넉넉히 준다. 1 캔버스 px ≈ 1km.
-      const COAST_FILL_FULL_PX = 6;
+      // 연안 바다는 그리지는 않지만, 해안가 육지 노드가 이웃을 넉넉히 찾도록
+      // 보간 반경은 육지와 같게 유지한다(해안선 근처 값이 끊기지 않게).
       const COAST_FILL_MAX_PX = 22;
       const neighborIdx = new Int16Array(latticeW * latticeH * NEIGHBORS).fill(-1);
       const neighborW = new Float32Array(latticeW * latticeH * NEIGHBORS);
@@ -3407,28 +3405,12 @@ const RadarMapView = ({
             neighborIdx[base + k] = candidates[k][1];
             neighborW[base + k] = 1 / (candidates[k][0] + 4);
           }
-          if (isLand) {
-            nodeAlpha[node] = OVERLAY_ALPHA;
-          } else {
-            // 섬 관측점 주변 페이드(기존)와 해안 거리 기반 페이드 중 진한 쪽을 쓴다.
-            const nearest = Math.sqrt(candidates[0][0]);
-            const islandFade =
-              nearest <= FADE_START_PX
-                ? 1
-                : Math.max(
-                    0,
-                    1 - (nearest - FADE_START_PX) / (CUTOFF_SEA_PX - FADE_START_PX),
-                  );
-            const coastFade = !isCoastal
-              ? 0
-              : coastPx <= COAST_FILL_FULL_PX
-                ? 1
-                : Math.max(
-                    0,
-                    1 - (coastPx - COAST_FILL_FULL_PX) / (COAST_FILL_MAX_PX - COAST_FILL_FULL_PX),
-                  );
-            nodeAlpha[node] = Math.round(OVERLAY_ALPHA * Math.max(islandFade, coastFade));
-          }
+          // 기온 지도와 같은 방식: 육지(시도 폴리곤) 안에서만 칠하고 바다는 비운다.
+          // 예전에는 바다로 번지게 해 연안 공백을 메웠지만, 그 대가로 해안선이
+          // 뭉개지고 섬 주변에 둥근 얼룩이 남았다. 바다 강수량은 보여줄 이유가
+          // 없으므로 폴리곤에서 잘라 해안선과 섬 모양을 그대로 살린다.
+          // 연안 보간(useLandFill)은 그대로 두어 해안가 육지 값이 끊기지 않게 한다.
+          nodeAlpha[node] = isLand ? OVERLAY_ALPHA : 0;
         }
       }
 
@@ -3641,10 +3623,10 @@ const RadarMapView = ({
             const lx = sampleOffset + gridX * ACCUM_EXTRUSION_STRIDE;
             if (lx >= latticeW) continue;
             const node = ly * latticeW + lx;
+            // nodeAlpha가 육지 폴리곤으로 잘려 있어 기둥도 육지 위에만 선다.
             if (nodeAlpha[node] === 0) continue;
-            // 섬 억제는 먼바다에서만. 본토·연안 띠까지 파내면 서해안처럼 섬이 많은 곳에서
-            // 강화군·영종·단원구·충남 해안에 구멍이 뚫리고, 그 원이 도메인 경계와 만나
-            // 반원처럼 보였다. 육지 값이 바다까지 이어지도록 이 범위는 면을 유지한다.
+            // 외딴 섬은 아래에서 관측점 위치에 단일 기둥으로 따로 세운다. 여기서
+            // 걸러내지 않으면 같은 자리에 표면 기둥까지 겹쳐 두 개로 보인다.
             if (!isOnMainSurface(node) && isNearSinglePillarIsland(lx, ly)) continue;
             const gridIndex = gridY * sampleWidth + gridX;
             validGrid[gridIndex] = 1;
