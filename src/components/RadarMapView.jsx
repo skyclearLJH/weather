@@ -3033,6 +3033,12 @@ const RadarMapView = ({
 
   const handleBeforeVideoScreenShare = useCallback(async () => {
     const activeView = broadcastView;
+    // 이 플래그는 '다음에 오는 전체화면 해제는 사용자가 아니라 화면 공유 때문'이라는
+    // 표시다. 크롬은 getDisplayMedia 선택창을 띄우면서 네이티브 전체화면을 강제로
+    // 푸는데, 그 fullscreenchange가 실제로 도착할 때까지 켜져 있어야 한다.
+    // (예전에는 아래 finally에서 바로 껐다. 그러면 선택창이 뜨는 순간 전체화면이
+    //  풀렸을 때 플래그가 이미 꺼져 있어 방송모드가 종료되고 화면이 일반모드
+    //  레이더로 되돌아간 채 녹화됐다.)
     videoCaptureTransitionRef.current = true;
     try {
       // 녹화를 방송모드와 같은 크기·해상도로 만들려면 네이티브 전체화면(1920x1080,
@@ -3049,8 +3055,10 @@ const RadarMapView = ({
         window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
       });
       mapRef.current?.resize();
-    } finally {
+    } catch (error) {
+      // 준비 단계에서 실패하면 화면 공유로 이어지지 않으므로 표시를 되돌린다.
       videoCaptureTransitionRef.current = false;
+      throw error;
     }
   }, [broadcastView]);
 
@@ -4204,16 +4212,16 @@ const RadarMapView = ({
     }
   }, [fullscreenMode]);
 
-  // Esc 등으로 네이티브 전체화면이 해제되면 상태를 따라간다.
+  // Esc 등으로 네이티브 전체화면이 해제되면 상태를 따라간다. 단, 화면 공유가
+  // 강제로 푼 것이라면 방송모드를 유지해야 하므로 CSS 전체화면으로 내려앉는다.
   useEffect(() => {
     const handleChange = () => {
       if (!document.fullscreenElement) {
+        // 표시는 한 번만 쓰고 끈다. 이후의 해제는 다시 사용자의 Esc로 취급한다.
+        const isCaptureTransition = videoCaptureTransitionRef.current;
+        videoCaptureTransitionRef.current = false;
         setFullscreenMode((mode) =>
-          mode === 'native'
-            ? videoCaptureTransitionRef.current
-              ? 'css'
-              : null
-            : mode,
+          mode === 'native' ? (isCaptureTransition ? 'css' : null) : mode,
         );
       }
     };
