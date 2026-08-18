@@ -2118,25 +2118,42 @@ const RadarMapView = ({
       source?.play();
       const startedAt = performance.now();
 
+      // 전환 그리기는 30fps로 제한한다. 재생 중에는 프레임마다 이 디졸브가 돌면서
+      // 캔버스 소스를 play/pause하고 매번 큰 텍스처를 다시 올리는데, 화면 주사율이
+      // 높거나 rAF 간격이 흔들리는 환경(방송용 터치스크린 장비)에서 그 왕복이
+      // 번쩍임으로 보였다. 진행도는 시간 기준이라 그리는 횟수를 줄여도 속도는 같다.
+      const MIN_STEP_MS = 33;
+      let lastDrawnAt = -Infinity;
+
       const dissolve = (timestamp) => {
         const progress = Math.min(1, (timestamp - startedAt) / durationMs);
+        // 마지막 장은 반드시 그린다(중간 상태로 멈추지 않게).
+        if (progress < 1 && timestamp - lastDrawnAt < MIN_STEP_MS) {
+          transitionAnimationRef.current = requestAnimationFrame(dissolve);
+          return;
+        }
+        lastDrawnAt = timestamp;
         const easedProgress = progress * progress * (3 - 2 * progress);
+        // 등가 파워(equal-power) 크로스페이드. 알파를 그대로 1-t/t로 쓰면 반투명
+        // 에코가 겹치는 구간에서 합성 결과가 어두워지고(원래의 '중간 밝기가 꺼지는
+        // 플래시'), 그렇다고 lighter로 더하면 반대로 밝기가 튄다. 제곱근 보정이면
+        // 중간에서도 총 밝기가 거의 유지돼 양쪽 아티팩트가 모두 사라진다.
         context.clearRect(0, 0, canvas.width, canvas.height);
         context.globalCompositeOperation = 'source-over';
-        context.globalAlpha = 1 - easedProgress;
+        context.globalAlpha = Math.sqrt(1 - easedProgress);
         context.drawImage(fromCanvas, 0, 0);
-        // 가중 합성으로 반투명 에코의 중간 밝기가 꺼지는 플래시를 방지한다.
-        context.globalCompositeOperation = 'lighter';
-        context.globalAlpha = easedProgress;
+        context.globalAlpha = Math.sqrt(easedProgress);
         context.drawImage(toCanvas, 0, 0);
         context.globalAlpha = 1;
-        context.globalCompositeOperation = 'source-over';
         mapRef.current?.triggerRepaint();
 
         if (progress < 1) {
           transitionAnimationRef.current = requestAnimationFrame(dissolve);
           return;
         }
+        // 끝에서는 새 장만 남긴다(잔상 방지).
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(toCanvas, 0, 0);
         transitionAnimationRef.current = null;
         source?.pause();
         mapRef.current?.triggerRepaint();
