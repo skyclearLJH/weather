@@ -70,25 +70,6 @@ import { fetchServerPrecipitationCurrentRankings } from '../api/weatherApi';
 // 표출 캔버스가 덮는 위경도 범위(레이더 격자 전체 영역)
 const VIEW_BOUNDS = { lonMin: 120.18, lonMax: 133.56, latMin: 30.1, latMax: 43.34 };
 const KIM_VIEW_BOUNDS = { lonMin: 118.2, lonMax: 133.8, latMin: 30.7, latMax: 45.2 };
-// 재생 시 프레임 전환 디졸브. 일부 방송 장비에서 재생 중 번쩍임이 보고돼,
-// 편집모드에서 끄면 방송모드까지 그대로 적용되도록 localStorage에 보관한다.
-// (모드 전환은 리로드가 없지만 폭염↔강수 이동은 페이지가 새로 뜨기 때문)
-const DISSOLVE_STORAGE_KEY = 'weathernow.radar.frameDissolve';
-const readDissolveEnabled = () => {
-  try {
-    return window.localStorage.getItem(DISSOLVE_STORAGE_KEY) !== 'off';
-  } catch {
-    return true;
-  }
-};
-const writeDissolveEnabled = (enabled) => {
-  try {
-    window.localStorage.setItem(DISSOLVE_STORAGE_KEY, enabled ? 'on' : 'off');
-  } catch {
-    // 저장 실패해도 이번 세션 동작에는 지장이 없다.
-  }
-};
-
 const CANVAS_WIDTH = 1152;
 const OVERLAY_ALPHA = 208;
 const ACCUM_EXTRUSION_SOURCE_ID = 'accum-extrusion';
@@ -1601,8 +1582,6 @@ const RadarMapView = ({
   const transitionFromCanvasRef = useRef(null);
   const transitionToCanvasRef = useRef(null);
   const transitionAnimationRef = useRef(null);
-  const [frameDissolve, setFrameDissolve] = useState(readDissolveEnabled);
-  const frameDissolveRef = useRef(true);
   const accumSurfaceLayerRef = useRef(null);
   const mappingsRef = useRef(null);
   const kimMappingRef = useRef(null);
@@ -1788,7 +1767,6 @@ const RadarMapView = ({
   const frameIndexRef = useRef(0);
   const isPlayingRef = useRef(false);
   const playIntervalRef = useRef(PLAY_INTERVAL_MS);
-  frameDissolveRef.current = frameDissolve;
   const hasRenderedFrameRef = useRef(false);
 
   const canvasHeight = useMemo(() => {
@@ -2118,70 +2096,16 @@ const RadarMapView = ({
         transitionAnimationRef.current = null;
       }
 
-      // 강수 예상도는 전환 없이 바로 교체한다. 두 장을 알파로 겹치는 크로스디졸브는
-      // 넓은 색면에서 합성 알파가 원본보다 낮아져(0.5 지점에서 약 25%) 매 프레임
-      // 오버레이가 옅어졌다 돌아오는 깜빡임이 생긴다. 이전 장을 불투명하게 깔면
-      // 알파는 유지되지만 새 장의 빈 곳으로 옛 장이 비쳐 잔상이 쌓인다.
-      // 레이더는 성긴 에코라 기존 전환을 그대로 둔다.
-      if (!isPlayingRef.current || !hasRenderedFrameRef.current || frame.kind === 'kim' || !frameDissolveRef.current) {
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(toCanvas, 0, 0);
-        hasRenderedFrameRef.current = true;
-        refreshOverlaySource();
-        return;
-      }
-
-      const fromContext = fromCanvas.getContext('2d');
-      fromContext.clearRect(0, 0, fromCanvas.width, fromCanvas.height);
-      fromContext.drawImage(canvas, 0, 0);
-
-      const durationMs = Math.min(220, Math.max(55, playIntervalRef.current * 0.72));
-      const source = mapRef.current?.getSource('radar-overlay');
-      source?.play();
-      const startedAt = performance.now();
-
-      // 전환 그리기는 30fps로 제한한다. 재생 중에는 프레임마다 이 디졸브가 돌면서
-      // 캔버스 소스를 play/pause하고 매번 큰 텍스처를 다시 올리는데, 화면 주사율이
-      // 높거나 rAF 간격이 흔들리는 환경(방송용 터치스크린 장비)에서 그 왕복이
-      // 번쩍임으로 보였다. 진행도는 시간 기준이라 그리는 횟수를 줄여도 속도는 같다.
-      const MIN_STEP_MS = 33;
-      let lastDrawnAt = -Infinity;
-
-      const dissolve = (timestamp) => {
-        const progress = Math.min(1, (timestamp - startedAt) / durationMs);
-        // 마지막 장은 반드시 그린다(중간 상태로 멈추지 않게).
-        if (progress < 1 && timestamp - lastDrawnAt < MIN_STEP_MS) {
-          transitionAnimationRef.current = requestAnimationFrame(dissolve);
-          return;
-        }
-        lastDrawnAt = timestamp;
-        const easedProgress = progress * progress * (3 - 2 * progress);
-        // 등가 파워(equal-power) 크로스페이드. 알파를 그대로 1-t/t로 쓰면 반투명
-        // 에코가 겹치는 구간에서 합성 결과가 어두워지고(원래의 '중간 밝기가 꺼지는
-        // 플래시'), 그렇다고 lighter로 더하면 반대로 밝기가 튄다. 제곱근 보정이면
-        // 중간에서도 총 밝기가 거의 유지돼 양쪽 아티팩트가 모두 사라진다.
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.globalCompositeOperation = 'source-over';
-        context.globalAlpha = Math.sqrt(1 - easedProgress);
-        context.drawImage(fromCanvas, 0, 0);
-        context.globalAlpha = Math.sqrt(easedProgress);
-        context.drawImage(toCanvas, 0, 0);
-        context.globalAlpha = 1;
-        mapRef.current?.triggerRepaint();
-
-        if (progress < 1) {
-          transitionAnimationRef.current = requestAnimationFrame(dissolve);
-          return;
-        }
-        // 끝에서는 새 장만 남긴다(잔상 방지).
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(toCanvas, 0, 0);
-        transitionAnimationRef.current = null;
-        source?.pause();
-        mapRef.current?.triggerRepaint();
-      };
-
-      transitionAnimationRef.current = requestAnimationFrame(dissolve);
+      // 프레임은 전환 효과 없이 바로 교체한다. 두 장을 알파로 겹치는 크로스디졸브는
+      // 넓은 색면에서 합성 알파가 원본보다 낮아져 오버레이가 옅어졌다 돌아오는
+      // 깜빡임이 생기고, 이전 장을 불투명하게 깔면 새 장의 빈 곳으로 옛 장이 비쳐
+      // 잔상이 쌓인다. 실제로 방송 장비에서 재생 중 번쩍임이 났고(슬라이더로 앞뒤
+      // 이동은 멀쩡했다 — 그쪽이 이 즉시 교체 경로다), 레이더는 프레임 간격이 촘촘해
+      // 전환 효과가 없어도 충분히 부드럽다. 누적 강수량도 같은 이유로 즉시 교체한다.
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(toCanvas, 0, 0);
+      hasRenderedFrameRef.current = true;
+      refreshOverlaySource();
     },
     [refreshOverlaySource],
   );
@@ -4670,21 +4594,6 @@ const RadarMapView = ({
         <span className="mr-auto text-xs font-bold text-white/70">
           {activePlayRange ? '재생 구간 지정됨' : '재생 구간 미지정 (전체 재생)'}
         </span>
-        {/* 프레임 전환 디졸브. 일부 방송 장비에서 재생 중 번쩍임이 보여 끌 수 있게 뒀다.
-            여기서 끄면 방송모드에서도 그대로 적용된다(localStorage에 보관). */}
-        <label className="flex h-9 cursor-pointer items-center gap-2 rounded-full border border-white/25 bg-slate-900/70 px-3 text-xs font-black text-white/80 transition hover:bg-slate-800">
-          <input
-            type="checkbox"
-            checked={frameDissolve}
-            onChange={(event) => {
-              const next = event.target.checked;
-              setFrameDissolve(next);
-              writeDissolveEnabled(next);
-            }}
-            className="h-3.5 w-3.5 accent-[#f4c542]"
-          />
-          부드러운 전환
-        </label>
         <button
           type="button"
           onClick={() => markPlayBound('start')}
