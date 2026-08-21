@@ -21,7 +21,18 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
         body: JSON.stringify({ facts, durationSeconds }),
         signal: AbortSignal.timeout(120000),
       });
-      const payload = await response.json();
+      // 서버가 죽거나 경로가 안 잡히면 HTML(오류 페이지)이 온다.
+      // 그대로 파싱하면 'Unexpected token <'만 보여서 원인을 알 수 없으므로 구분해 준다.
+      const raw = await response.text();
+      let payload = null;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        throw new Error(
+          `서버가 기사 대신 오류 페이지를 보냈습니다 (${response.status}). `
+          + '개발 서버라면 재시작이, 배포본이라면 GEMINI_API_KEY 설정 확인이 필요합니다.',
+        );
+      }
       if (!response.ok) throw new Error(payload?.error || `기사 생성 실패 (${response.status})`);
       setScript(payload.script ?? '');
       setMeta({ charCount: payload.charCount, finishReason: payload.finishReason });
