@@ -21,8 +21,9 @@ const SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스
 - 이동 방향(예: 동남동쪽)과 지명, 숫자는 사실에 적힌 표현을 글자 그대로 옮깁니다.
   '동남동'을 '동북동'으로 바꾸는 것처럼 비슷한 말로 바꿔 쓰면 오보가 됩니다.
 - 지명은 '쓸 수 있는 지명'에 있는 것만 씁니다. 목록에 없는 지명은 한 글자도 쓰지 않습니다.
-  '태안군'을 '태안반도'로, '서산시'를 '충남 내륙'으로 바꿔 부르는 것도 안 됩니다.
-  다만 '충남 태안군'을 '태안'처럼 이름의 일부만 줄여 부르는 것은 됩니다.
+  줄여 부르는 것은 됩니다: '충남 태안군' → '태안', '충남 태안군 일대'.
+  바꿔 부르는 것은 안 됩니다: '태안군' → '태안반도', '서산시' → '서해안'이나 '충남 내륙'.
+  지명 뒤에 반도·해안·내륙·지방 같은 말을 새로 붙이지 마세요. 다른 곳을 가리키게 됩니다.
 - '두 시간', '세 곳'처럼 사실에 없는 수를 붙이지 않습니다.
 - 주어진 사실은 모두 과거부터 지금까지의 관측입니다. '몇 시간 전'을 '몇 시간 후'로
   바꿔 쓰지 않고, 앞으로 어디로 갈지·얼마나 올지는 사실에 없으므로 쓰지 않습니다.
@@ -99,11 +100,18 @@ const extractAllowedPlaces = (facts) => {
   return [...found];
 };
 
-// 원고에 사실과 무관한 시군구가 섞였는지 본다. 전국 시군구명과 대조하므로
+// '태안군'을 '태안반도'로, '서산시'를 '서해안'으로 바꿔 부르는 변형을 잡는다.
+// 지명에 지형 이름을 붙이면 관측 지점과 다른 곳을 가리키게 된다.
+const GEO_FORM = /[가-힣]{2,4}(?:반도|해안|내륙|계곡|평야|고원|산맥|지방|권역)/g;
+
+// 원고에 사실과 무관한 지명이 섞였는지 본다. 전국 시군구명과 대조하므로
 // '다시'처럼 시로 끝나는 일반 낱말을 지명으로 잘못 잡지 않는다.
 const findForeignPlaces = (script, allowed) => {
   const allowedText = allowed.join(' ');
-  return SGG_NAMES.filter((name) => script.includes(name) && !allowedText.includes(name));
+  const foreign = SGG_NAMES.filter((name) => script.includes(name) && !allowedText.includes(name));
+  const reshaped = [...new Set(script.match(GEO_FORM) ?? [])]
+    .filter((word) => !allowedText.includes(word));
+  return [...new Set([...foreign, ...reshaped])];
 };
 
 export async function onRequestOptions() {
