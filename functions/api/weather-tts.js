@@ -20,7 +20,7 @@ const VOICES = new Set([
   'ko-KR-Chirp3-HD-Charon', // 남성
   'ko-KR-Chirp3-HD-Orus', // 남성
 ]);
-const DEFAULT_VOICE = 'ko-KR-Neural2-C';
+const DEFAULT_VOICE = 'ko-KR-Neural2-B';
 
 // Cloudflare Workers에는 process가 없다. typeof로 감싸지 않으면
 // 키가 비었을 때 그 줄에서 함수가 통째로 죽는다(error code 1101).

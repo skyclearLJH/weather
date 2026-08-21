@@ -160,8 +160,8 @@ function VideoExportMenu({
   onPreparePlayback,
   onStartPlayback,
   narrationScript = '',
-  narrationVoice = 'ko-KR-Neural2-C',
-  narrationRate = 1,
+  narrationVoice = 'ko-KR-Neural2-B',
+  narrationRate = 1.1,
   onAutoSetup,
 }) {
   const [startInput, setStartInput] = useState(defaultStart);

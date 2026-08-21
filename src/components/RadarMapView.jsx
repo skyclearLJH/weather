@@ -1596,8 +1596,8 @@ const RadarMapView = ({
   // 원고와 목소리는 패널 밖에 둔다. 패널을 닫아도 손본 원고가 남아야
   // 그대로 영상에 실린다.
   const [narrationScript, setNarrationScript] = useState('');
-  const [narrationVoice, setNarrationVoice] = useState('ko-KR-Neural2-C');
-  const [narrationRate, setNarrationRate] = useState(1);
+  const [narrationVoice, setNarrationVoice] = useState('ko-KR-Neural2-B');
+  const [narrationRate, setNarrationRate] = useState(1.1);
   const accumSurfaceLayerRef = useRef(null);
   const mappingsRef = useRef(null);
   const kimMappingRef = useRef(null);

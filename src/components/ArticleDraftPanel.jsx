@@ -3,9 +3,9 @@ import { Check, Copy, FileText, LoaderCircle, Play, RefreshCw, Square, X } from 
 
 // 방송에 쓸 만한 목소리만 추렸다. Neural2는 또렷하고 Chirp3-HD는 더 자연스럽다.
 const VOICE_OPTIONS = [
-  { id: 'ko-KR-Neural2-C', label: '남성 (또렷) · 기본' },
+  { id: 'ko-KR-Neural2-B', label: '여성 B (또렷) · 기본' },
   { id: 'ko-KR-Neural2-A', label: '여성 A (또렷)' },
-  { id: 'ko-KR-Neural2-B', label: '여성 B (또렷)' },
+  { id: 'ko-KR-Neural2-C', label: '남성 (또렷)' },
   { id: 'ko-KR-Chirp3-HD-Aoede', label: '여성 (자연스러움)' },
   { id: 'ko-KR-Chirp3-HD-Leda', label: '여성 (차분함)' },
   { id: 'ko-KR-Chirp3-HD-Charon', label: '남성 (자연스러움)' },
