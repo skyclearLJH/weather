@@ -203,11 +203,11 @@ export async function onRequestPost(context) {
     });
   }
 
-  // 한국어 방송 낭독은 초당 약 5.5자. 1분이면 330자 안팎이고, 실측 낭독이
-  // 55~65초에 들도록 300~420자 사이를 목표로 잡는다.
-  const targetChars = Math.round(durationSeconds * 5.5);
-  const minChars = Math.round(targetChars * 0.9);
-  const maxChars = Math.round(targetChars * 1.27);
+  // TTS로 실제 재어 보니 공백 뺀 265자가 46초였다(초당 5.8자). 1분을 채우려면
+  // 그보다 넉넉해야 해서 초당 6자로 잡고, 아래로는 덜 깎이게 폭을 좁게 준다.
+  const targetChars = Math.round(durationSeconds * 6);
+  const minChars = Math.round(targetChars * 0.95);
+  const maxChars = Math.round(targetChars * 1.2);
 
   const allowedPlaces = extractAllowedPlaces(facts);
   const placeBlock = allowedPlaces.length

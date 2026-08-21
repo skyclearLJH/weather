@@ -163,8 +163,8 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 낭독 시간 어림: 한국어 방송은 초당 5.5자 안팎.
-  const readSeconds = Math.round((script.replace(/\s/g, '').length / 5.5) || 0);
+  // 낭독 시간 어림: TTS로 재어 보니 공백 뺀 글자 기준 초당 5.8자였다.
+  const readSeconds = Math.round((script.replace(/\s/g, '').length / 5.8) || 0);
 
   return (
     <div
