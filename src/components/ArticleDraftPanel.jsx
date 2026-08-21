@@ -15,13 +15,20 @@ const VOICE_OPTIONS = [
 // 레이더 화면에서 뽑은 '관측 사실'과 그것으로 쓴 방송 원고를 나란히 보여준다.
 // 사실이 틀리면 원고도 틀리므로, 검수는 사실 쪽을 먼저 보게 위에 둔다.
 // 원고는 그대로 읽을 게 아니라 손볼 것을 전제로 편집 가능하게 만든다.
-function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
-  const [script, setScript] = useState('');
+function ArticleDraftPanel({
+  facts,
+  durationSeconds = 60,
+  script,
+  onScriptChange,
+  voice,
+  onVoiceChange,
+  speakingRate,
+  onRateChange,
+  onClose,
+}) {
   const [status, setStatus] = useState('idle'); // idle | loading | ready | error
   const [error, setError] = useState('');
   const [meta, setMeta] = useState(null);
-  const [voice, setVoice] = useState('ko-KR-Neural2-C');
-  const [speakingRate, setSpeakingRate] = useState(1);
   const [audioStatus, setAudioStatus] = useState('idle'); // idle | loading | playing | error
   const [audioError, setAudioError] = useState('');
   const [audioSeconds, setAudioSeconds] = useState(null);
@@ -77,7 +84,7 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
         return generate(true);
       }
       if (!response.ok) throw new Error(payload?.error || `기사 생성 실패 (${response.status})`);
-      setScript(payload.script ?? '');
+      onScriptChange(payload.script ?? '');
       setMeta({
         charCount: payload.charCount,
         finishReason: payload.finishReason,
@@ -91,7 +98,7 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
       runningRef.current = false;
     }
     return undefined;
-  }, [facts, durationSeconds]);
+  }, [facts, durationSeconds, onScriptChange]);
 
   // 만든 소리는 blob URL로 잡아 두고, 다시 만들 때마다 이전 것을 놓아준다.
   const releaseAudio = useCallback(() => {
@@ -159,8 +166,10 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
   }, [releaseAudio]);
 
   useEffect(() => {
-    generate();
-    // 패널이 열릴 때 한 번만 자동 생성한다(다시 만들기는 버튼으로).
+    // 이미 원고가 있으면(직접 쓴 것이든 앞서 만든 것이든) 덮어쓰지 않는다.
+    // 다시 만들려면 '다시 만들기'를 누르면 된다.
+    if (!script.trim()) generate();
+    // 패널이 열릴 때 한 번만 본다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -274,7 +283,7 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
           ) : (
             <textarea
               value={script}
-              onChange={(event) => setScript(event.target.value)}
+              onChange={(event) => onScriptChange(event.target.value)}
               spellCheck={false}
               className="h-[46vh] w-full resize-none rounded-md border border-white/15 bg-slate-900/70 p-3 text-[15px] font-semibold leading-relaxed text-white outline-none focus:border-cyan-300/60"
               aria-label="방송 원고"
@@ -286,7 +295,7 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
       <div className="flex flex-wrap items-center gap-2 border-t border-white/15 px-5 py-3">
         <select
           value={voice}
-          onChange={(event) => { setVoice(event.target.value); stopSpeaking(); }}
+          onChange={(event) => { onVoiceChange(event.target.value); stopSpeaking(); }}
           className="h-9 rounded-md border border-white/20 bg-slate-900 px-2 text-xs font-bold text-white/85 outline-none"
           aria-label="목소리"
         >
@@ -303,7 +312,7 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
             max="1.3"
             step="0.05"
             value={speakingRate}
-            onChange={(event) => setSpeakingRate(Number(event.target.value))}
+            onChange={(event) => onRateChange(Number(event.target.value))}
             className="w-24 accent-cyan-400"
             aria-label="낭독 속도"
           />

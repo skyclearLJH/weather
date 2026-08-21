@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Download, Film, MapPin } from 'lucide-react';
+import { Check, Download, Film, MapPin, Volume2 } from 'lucide-react';
 import {
+  AudioBufferSource,
   BufferTarget,
   CanvasSource,
+  getFirstEncodableAudioCodec,
   getFirstEncodableVideoCodec,
   Mp4OutputFormat,
   Output,
@@ -58,6 +60,40 @@ const readCamera = (map) => {
 
 const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
+const AUDIO_BITRATE = 128_000;
+// 낭독이 끝나자마자 화면이 끊기면 급해 보인다. 뒤에 조금 여유를 둔다.
+const NARRATION_TAIL_SEC = 1.2;
+
+// 원고를 음성으로 바꿔 오디오 버퍼로 돌려준다. 영상 길이를 여기서 나온
+// 실제 낭독 길이에 맞추므로, 글자 수로 어림하지 않는다.
+const synthesizeNarration = async ({ script, voice, speakingRate }) => {
+  const response = await fetch('/api/weather-tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ script, voice, speakingRate }),
+    signal: AbortSignal.timeout(90000),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    let message = `음성을 만들지 못했습니다 (${response.status})`;
+    try {
+      message = JSON.parse(raw)?.error || message;
+    } catch {
+      message = `서버가 음성 대신 오류 페이지를 보냈습니다 (${response.status}).`;
+    }
+    throw new Error(message);
+  }
+  const encoded = await response.arrayBuffer();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error('이 브라우저에서는 음성을 넣을 수 없습니다.');
+  const audioContext = new AudioContextClass();
+  try {
+    return await audioContext.decodeAudioData(encoded);
+  } finally {
+    audioContext.close?.();
+  }
+};
+
 const waitForVideo = async (video, stream) => {
   video.srcObject = stream;
   video.muted = true;
@@ -100,6 +136,9 @@ function VideoExportMenu({
   onBeforeScreenShare,
   onPreparePlayback,
   onStartPlayback,
+  narrationScript = '',
+  narrationVoice = 'ko-KR-Neural2-C',
+  narrationRate = 1,
 }) {
   const [startInput, setStartInput] = useState(defaultStart);
   const [endInput, setEndInput] = useState(defaultEnd);
@@ -108,6 +147,8 @@ function VideoExportMenu({
   const [endCamera, setEndCamera] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingProgress, setRecordingProgress] = useState(0);
+  const [withNarration, setWithNarration] = useState(false);
+  const [progressLabel, setProgressLabel] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -150,6 +191,11 @@ function VideoExportMenu({
       return;
     }
 
+    if (withNarration && !narrationScript.trim()) {
+      setError("읽을 원고가 없습니다. '기사 만들기'에서 원고를 쓰거나 붙여넣어 주세요.");
+      return;
+    }
+
     let stream = null;
     let sourceVideo = null;
     let cleanCaptureActive = false;
@@ -157,6 +203,23 @@ function VideoExportMenu({
       setIsRecording(true);
       setRecordingProgress(0);
       setError('');
+
+      // 음성을 먼저 만든다. 실제 낭독 길이를 알아야 영상 길이를 맞출 수 있고,
+      // 화면 공유를 허락받기 전에 실패하면 사용자를 헛수고시키지 않는다.
+      let narrationBuffer = null;
+      if (withNarration) {
+        setProgressLabel('원고를 음성으로 바꾸는 중입니다…');
+        narrationBuffer = await synthesizeNarration({
+          script: narrationScript,
+          voice: narrationVoice,
+          speakingRate: narrationRate,
+        });
+      }
+      const totalSeconds = narrationBuffer
+        ? narrationBuffer.duration + NARRATION_TAIL_SEC
+        : durationSec;
+
+      setProgressLabel('화면을 준비하는 중입니다…');
       await onPreparePlayback?.({ start: startInput, end: endInput, durationSec });
       await onBeforeScreenShare?.();
       stream = await navigator.mediaDevices.getDisplayMedia({
@@ -210,6 +273,22 @@ function VideoExportMenu({
         quality: new Quality({ bitrate: VIDEO_BITRATE }),
       });
       output.addVideoTrack(videoSource, { frameRate: VIDEO_FRAME_RATE });
+
+      // 오디오 트랙은 인코딩을 시작하기 전에 붙여야 한다.
+      let audioSource = null;
+      if (narrationBuffer) {
+        const audioCodec = await getFirstEncodableAudioCodec(
+          format.getSupportedAudioCodecs(),
+          { numberOfChannels: narrationBuffer.numberOfChannels, sampleRate: narrationBuffer.sampleRate },
+        );
+        if (!audioCodec) throw new Error('이 기기에서 음성 트랙을 인코딩할 수 없습니다.');
+        audioSource = new AudioBufferSource({
+          codec: audioCodec,
+          bitrate: AUDIO_BITRATE,
+        });
+        output.addAudioTrack(audioSource);
+      }
+
       await output.start();
 
       const map = mapRef.current;
@@ -221,18 +300,48 @@ function VideoExportMenu({
       map?.easeTo?.({ ...endCamera, duration: durationSec * 1000, essential: true });
       onStartPlayback?.({ start: startInput, end: endInput, durationSec });
 
-      const totalFrames = durationSec * VIDEO_FRAME_RATE;
+      // 음성을 넣으면 낭독이 끝날 때까지 레이더를 되풀이해 보여 준다.
+      // 한 바퀴(durationSec)가 끝날 때마다 화면을 처음으로 돌려 다시 재생한다.
+      const loopMs = durationSec * 1000;
+      const totalFrames = Math.max(2, Math.round(totalSeconds * VIDEO_FRAME_RATE));
       const startedAt = performance.now();
+      let nextLoopAt = startedAt + loopMs;
+
+      if (narrationBuffer) setProgressLabel('영상을 찍는 중입니다…');
+
       for (let frameIndex = 1; frameIndex < totalFrames; frameIndex += 1) {
         const targetTime = startedAt + frameIndex * (1000 / VIDEO_FRAME_RATE);
         await wait(Math.max(0, targetTime - performance.now()));
+
+        // 아직 낭독이 남았으면 레이더를 한 바퀴 더 돌린다.
+        if (narrationBuffer && performance.now() >= nextLoopAt
+            && targetTime - startedAt < (totalSeconds - 1) * 1000) {
+          map?.jumpTo?.(startCamera);
+          map?.easeTo?.({ ...endCamera, duration: loopMs, essential: true });
+          onStartPlayback?.({ start: startInput, end: endInput, durationSec });
+          nextLoopAt += loopMs;
+        }
+
         if (!drawVideoFrame(context, sourceVideo)) continue;
         await videoSource.add(frameIndex / VIDEO_FRAME_RATE, frameDuration);
         if (frameIndex % VIDEO_FRAME_RATE === 0 || frameIndex === totalFrames - 1) {
-          setRecordingProgress(Math.round((frameIndex / (totalFrames - 1)) * 100));
+          // 음성을 넣을 때는 뒤에 합치는 몫을 남겨 둔다.
+          const ratio = frameIndex / (totalFrames - 1);
+          setRecordingProgress(Math.round(ratio * (narrationBuffer ? 90 : 100)));
         }
       }
+
+      if (audioSource && narrationBuffer) {
+        setProgressLabel('음성을 영상에 얹는 중입니다…');
+        setRecordingProgress(94);
+        await audioSource.add(narrationBuffer);
+        audioSource.close();
+      }
+
+      setProgressLabel('파일로 만드는 중입니다…');
+      setRecordingProgress(97);
       await output.finalize();
+      setRecordingProgress(100);
 
       const blob = new Blob([target.buffer], { type: 'video/mp4' });
       const url = URL.createObjectURL(blob);
@@ -251,11 +360,47 @@ function VideoExportMenu({
       if (cleanCaptureActive) document.body.classList.remove('weather-video-capture');
       setIsRecording(false);
       setRecordingProgress(0);
+      setProgressLabel('');
     }
   };
 
   return (
-    <div data-video-hide className="absolute right-6 top-6 z-50">
+    <>
+      {/* 만드는 동안 무슨 일이 어디까지 진행됐는지 화면 한가운데에 크게 보여 준다.
+          녹화 화면에는 찍히면 안 되므로 data-video-hide를 단다. */}
+      {isRecording ? (
+        <div
+          data-video-hide
+          className="absolute left-1/2 top-1/2 z-[60] w-[min(420px,86vw)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/20 bg-slate-950/95 px-6 py-5 text-white shadow-2xl backdrop-blur-md"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-2 text-sm font-black">
+            <Film className="h-4 w-4 text-cyan-300" aria-hidden="true" />
+            동영상을 만들고 있습니다
+          </div>
+          <div className="mt-3 flex items-end gap-2">
+            <span className="text-3xl font-black tabular-nums text-cyan-300">
+              {recordingProgress}
+            </span>
+            <span className="pb-1 text-sm font-bold text-white/50">%</span>
+          </div>
+          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full rounded-full bg-cyan-400 transition-[width] duration-300"
+              style={{ width: `${recordingProgress}%` }}
+            />
+          </div>
+          <div className="mt-3 text-xs font-semibold text-white/60">
+            {progressLabel || '화면을 찍는 중입니다…'}
+          </div>
+          <div className="mt-1 text-[11px] font-semibold text-white/35">
+            끝날 때까지 이 탭을 그대로 두세요.
+          </div>
+        </div>
+      ) : null}
+
+      <div data-video-hide className="absolute right-6 top-6 z-50">
       <div className="w-[360px] rounded-lg border border-white/20 bg-slate-950/95 p-4 text-white shadow-2xl backdrop-blur-md">
           <div className="mb-4 flex items-center">
             <div className="flex items-center gap-2 text-base font-black">
@@ -316,6 +461,31 @@ function VideoExportMenu({
               </select>
             </label>
 
+            {/* 음성을 넣으면 영상 길이는 '동영상 길이'가 아니라 낭독 길이를 따른다.
+                그동안 레이더는 되풀이해 돈다. */}
+            <label className="col-span-2 flex cursor-pointer items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2.5 text-xs font-bold text-white/75">
+              <input
+                type="checkbox"
+                checked={withNarration}
+                onChange={(event) => setWithNarration(event.target.checked)}
+                className="h-4 w-4 accent-cyan-400"
+              />
+              <Volume2 className="h-4 w-4 text-cyan-300" aria-hidden="true" />
+              음성 포함
+              <span className="ml-auto font-semibold text-white/45">
+                {narrationScript.trim()
+                  ? `원고 ${narrationScript.replace(/\s/g, '').length}자`
+                  : '원고 없음'}
+              </span>
+            </label>
+
+            {withNarration ? (
+              <div className="col-span-2 -mt-1 text-[11px] font-semibold leading-relaxed text-white/45">
+                영상 길이는 낭독 길이에 맞춰지고, 그동안 레이더는 {durationSec}초마다
+                되풀이됩니다.
+              </div>
+            ) : null}
+
             <div className="col-span-2 flex h-9 items-center justify-between rounded-md border border-white/10 bg-white/5 px-3 text-xs font-bold text-white/65">
               <span>출력 형식</span>
               <span className="text-white">1920 × 1080 · H.264 MP4</span>
@@ -352,8 +522,9 @@ function VideoExportMenu({
               ? `MP4 생성 중 ${recordingProgress}%`
               : `${currentLabel} MP4 생성`}
           </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
