@@ -51,6 +51,15 @@ const toBroadcastMm = (mm) => {
   return rounded > 0 ? rounded : Math.round(mm);
 };
 
+// 색은 모델이 짐작하게 두면 90밀리미터를 '붉은색'이라 부르는 일이 생긴다.
+// 화면 범례 그대로 사실에 적어 준다.
+const colorOf = (mm) => {
+  if (mm >= 100) return '가장 짙은 색';
+  if (mm >= 50) return '보라색';
+  if (mm >= 30) return '붉은색';
+  return null;
+};
+
 const toRad = (deg) => (deg * Math.PI) / 180;
 
 const distanceKm = (lon1, lat1, lon2, lat2) => {
@@ -406,7 +415,8 @@ export const formatRadarFacts = (facts, extras = {}) => {
       const where = cluster.places.length ? cluster.places.join(', ') : cluster.sea;
       if (!where) return;
       const area = cluster.area ? ` [${cluster.area}]` : '';
-      lines.push(`- 강한 비구름 ${index + 1}: ${where}${area} — 시간당 ${cluster.maxMm}밀리미터 안팎으로 추정`);
+      const color = colorOf(cluster.maxMm);
+      lines.push(`- 강한 비구름 ${index + 1}: ${where}${area} — 시간당 ${cluster.maxMm}밀리미터 안팎으로 추정${color ? ` (화면에서 ${color})` : ''}`);
     });
   } else if (!facts.strong) {
     lines.push('- 강한 비구름(시간당 15밀리미터 이상): 없음. 내륙 대부분 소강상태');
@@ -424,16 +434,18 @@ export const formatRadarFacts = (facts, extras = {}) => {
   // 라벨만 주면 '3시간 전'을 '3시간 후'로 뒤집어 쓰는 일이 생겨,
   // 시제가 드러나는 완성 문장으로 준다.
   if (facts.movement) {
-    lines.push(`- 비구름은 지금 ${facts.movement.directionName}쪽으로 시속 ${facts.movement.speedKmh}km로 이동하고 있습니다. (이동 방향은 '${facts.movement.directionName}쪽'으로 그대로 쓸 것)`);
+    lines.push(`- 비구름은 지금 ${facts.movement.directionName}쪽으로 시속 ${facts.movement.speedKmh}킬로미터로 이동하고 있습니다. (이동 방향은 '${facts.movement.directionName}쪽'으로 그대로 쓸 것)`);
     const from = [facts.movement.fromSea, ...facts.movement.fromRegions].filter(Boolean).join(', ');
     // '1.4시간 전'은 방송에서 쓰지 않는 말이라 시간 단위로 어림한다.
     const hoursAgo = Math.max(1, Math.round(facts.movement.spanHours));
     if (from) lines.push(`- 이 비구름은 약 ${hoursAgo}시간 전에는 ${from}에 있었습니다. (지나온 과거 위치이며, 앞으로 갈 곳이 아님)`);
   }
+  // 이동 방향을 두 줄로 나눠 주면 서로 어긋나 보여 원고가 헷갈린다.
+  // 방향과 속도는 위 한 줄에만 두고, 여기서는 세기 변화만 말한다.
   if (facts.lastHour) {
-    const strength = facts.lastHour.strongerCount > 0 ? '강한 비구름 구역은 넓어졌습니다'
-      : facts.lastHour.strongerCount < 0 ? '강한 비구름 구역은 줄었습니다' : '강한 비구름 구역은 비슷합니다';
-    lines.push(`- 한 시간 전과 견주면 비구름이 ${facts.lastHour.directionName}쪽으로 약 ${facts.lastHour.distanceKm}km 옮겨 갔고, ${strength}. (지금까지의 변화)`);
+    const strength = facts.lastHour.strongerCount > 0 ? '넓어졌습니다'
+      : facts.lastHour.strongerCount < 0 ? '줄었습니다' : '비슷합니다';
+    lines.push(`- 한 시간 전과 견주면 강한 비구름 구역은 ${strength}. (지금까지의 변화)`);
   }
   if (facts.trend) {
     const trendText = facts.trend === '확대'

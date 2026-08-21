@@ -9,9 +9,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'content-type',
 };
 
-// gemini-2.5-flash는 신규 사용자에게 닫혔고, API가 3.6-flash를 쓰라고 안내한다.
-const MODEL = 'gemini-3.6-flash';
-const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+// 무료 한도는 모델마다 따로 센다(하루 20회). 주 모델을 다 쓰면 다음 모델로 넘어가
+// 하루에 쓸 수 있는 횟수를 늘린다. 앞쪽일수록 원고 품질이 낫다.
+const MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+const endpointOf = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
 const SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스터입니다.
 주어진 '관측 사실'만으로 레이더 영상 해설 원고를 씁니다.
@@ -32,6 +33,8 @@ const SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스
   몇 시간 뒤 상황은 레이더만으로 알 수 없으므로 쓰지 않습니다.
 - 저기압·정체전선·태풍 같은 원인은 사실로 확인되지 않았으면 쓰지 않습니다.
 - '극한호우', '물폭탄', '기록적 폭우' 같은 말은 쓰지 않습니다.
+- 색은 사실에 적힌 것만 씁니다. 사실에 색이 없으면 색을 말하지 않습니다.
+  세기와 색을 임의로 짝지으면 범례와 어긋납니다.
 - 특보는 사실에 있을 때만 말합니다. 강한 비구름이 보인다고 특보가 났다고 쓰지 않습니다.
 - 자리가 바뀌었으면 '이동', 같은 자리에서 세졌으면 '새로 발달',
   세졌다 약해졌다 하면 '강약을 반복'이라고 나눠 씁니다.
@@ -236,9 +239,11 @@ ${placeBlock}
     generationConfig: { temperature: 0.75, maxOutputTokens: 16000 },
   });
 
-  // 한 번 부르고, 사실에 없는 지명이 섞이면 그 지명을 짚어 한 번만 다시 쓰게 한다.
-  const askOnce = async (retryNote) => {
-    const response = await fetch(ENDPOINT, {
+  // 어떤 모델이 원고를 써 줬는지 화면에 알려 주려고 기억해 둔다.
+  let usedModel = MODELS[0];
+
+  const callModel = async (model, retryNote) => {
+    const response = await fetch(endpointOf(model), {
       method: 'POST',
       headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify(buildPayload(retryNote)),
@@ -254,7 +259,7 @@ ${placeBlock}
           .flatMap((detail) => detail?.violations ?? []);
         const daily = violations.some((v) => /PerDay/i.test(v?.quotaId ?? ''));
         const limited = daily
-          ? new Error('오늘 쓸 수 있는 무료 횟수(하루 20회)를 모두 썼습니다. 내일 다시 쓰거나 유료 전환이 필요합니다.')
+          ? new Error('오늘 쓸 수 있는 무료 횟수를 모두 썼습니다. 내일 다시 쓰거나 유료 전환이 필요합니다.')
           : new Error(`요청이 잠시 몰렸습니다. ${Math.ceil(Number(/retry in ([\d.]+)s/i.exec(raw)?.[1] ?? 35))}초쯤 뒤에 다시 만들어 주세요.`);
         limited.status = 429;
         limited.daily = daily;
@@ -268,6 +273,24 @@ ${placeBlock}
       script: parts.map((part) => part?.text ?? '').join('').trim(),
       finishReason: candidate?.finishReason ?? null,
     };
+  };
+
+  // 한 번 부르고, 사실에 없는 지명이 섞이면 그 지명을 짚어 한 번만 다시 쓰게 한다.
+  // 하루치를 다 쓴 모델은 건너뛰고 다음 모델로 넘어간다.
+  const askOnce = async (retryNote) => {
+    let lastError = null;
+    for (const model of MODELS) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const answer = await callModel(model, retryNote);
+        usedModel = model;
+        return answer;
+      } catch (error) {
+        lastError = error;
+        if (!error.daily) throw error;
+      }
+    }
+    throw lastError ?? new Error('기사 생성에 실패했습니다.');
   };
 
   try {
@@ -297,7 +320,7 @@ ${placeBlock}
 
     return new Response(JSON.stringify({
       script: attempt.script,
-      model: MODEL,
+      model: usedModel,
       charCount: attempt.script.replace(/\s/g, '').length,
       // 잘림 여부를 화면에서 알 수 있게 함께 준다(MAX_TOKENS면 예산 부족).
       finishReason: attempt.finishReason,
