@@ -68,8 +68,17 @@ const STYLE_SAMPLES = `[문체 예시 1]
 검게 보이는 강한 비구름이
 내륙으로 유입되고 있습니다.//`;
 
-const readApiKey = (context) =>
-  context.env?.GEMINI_API_KEY || process.env?.GEMINI_API_KEY || '';
+// Cloudflare Workers에는 process가 없다. 로컬 dev(node)에서만 있으므로
+// typeof로 감싸지 않으면 키가 비었을 때 그 줄에서 바로 예외(1101)가 난다.
+const readApiKey = (context) => {
+  const fromBinding = context.env?.GEMINI_API_KEY;
+  if (fromBinding) return fromBinding;
+  try {
+    return (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
+  } catch {
+    return '';
+  }
+};
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders });
