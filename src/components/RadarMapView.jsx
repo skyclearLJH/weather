@@ -3041,6 +3041,28 @@ const RadarMapView = ({
     }
   }, [broadcastView]);
 
+  // 크롬은 화면 공유 선택창을 띄우면서 네이티브 전체화면을 강제로 푼다.
+  // '허용'을 누른 뒤 다시 들어가야 방송화면과 같은 1920x1080으로 녹화된다.
+  // (그대로 두면 툴바만큼 세로가 줄어든 CSS 전체화면이 찍혀 16:9가 깨진다.)
+  const handleAfterVideoScreenShare = useCallback(async () => {
+    if (!document.fullscreenElement) {
+      const element = sectionRef.current;
+      try {
+        if (!element?.requestFullscreen) throw new Error('unsupported');
+        await element.requestFullscreen();
+        setFullscreenMode('native');
+      } catch {
+        // 브라우저가 막으면 지금까지처럼 CSS 전체화면으로 찍는다.
+        setFullscreenMode('css');
+      }
+    }
+    // 전체화면 전환이 화면에 반영된 뒤 지도 크기를 다시 잡는다.
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+    });
+    mapRef.current?.resize();
+  }, []);
+
   const currentFrame = frames[frameIndex];
 
   // 화면에 그려진 레이더 프레임에서 기사용 '관측 사실'을 만든다.
@@ -4984,6 +5006,7 @@ const RadarMapView = ({
                 defaultStart={videoDefaultStart}
                 defaultEnd={videoDefaultEnd}
                 onBeforeScreenShare={handleBeforeVideoScreenShare}
+                onAfterScreenShare={handleAfterVideoScreenShare}
                 onPreparePlayback={handleVideoPrepare}
                 onStartPlayback={handleVideoStart}
                 narrationScript={narrationScript}

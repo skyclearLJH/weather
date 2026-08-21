@@ -109,6 +109,25 @@ const waitForVideo = async (video, stream) => {
   });
 };
 
+// 전체화면으로 들어가면 공유 트랙의 해상도가 뒤늦게 커진다. 바뀌기 전 크기로
+// 출력 캔버스를 잡으면 작은 화면이 확대돼 찍히므로, 값이 멎을 때까지 기다린다.
+const waitForStableCaptureSize = async (video, timeoutMs = 2500) => {
+  const startedAt = performance.now();
+  let previous = `${video.videoWidth}x${video.videoHeight}`;
+  let sameCount = 0;
+  while (performance.now() - startedAt < timeoutMs) {
+    await wait(120);
+    const current = `${video.videoWidth}x${video.videoHeight}`;
+    if (current === previous && video.videoWidth > 0) {
+      sameCount += 1;
+      if (sameCount >= 2) return;
+    } else {
+      sameCount = 0;
+      previous = current;
+    }
+  }
+};
+
 const drawVideoFrame = (context, video) => {
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
@@ -137,6 +156,7 @@ function VideoExportMenu({
   defaultStart = '',
   defaultEnd = '',
   onBeforeScreenShare,
+  onAfterScreenShare,
   onPreparePlayback,
   onStartPlayback,
   narrationScript = '',
@@ -266,6 +286,10 @@ function VideoExportMenu({
       await waitForVideo(sourceVideo, stream);
       document.body.classList.add('weather-video-capture');
       cleanCaptureActive = true;
+      // 선택창이 풀어 버린 전체화면을 여기서 다시 잡는다. 크기를 재기 전에 해야
+      // 방송화면과 같은 해상도로 찍힌다.
+      await onAfterScreenShare?.();
+      await waitForStableCaptureSize(sourceVideo);
       await new Promise((resolve) => {
         window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
       });
