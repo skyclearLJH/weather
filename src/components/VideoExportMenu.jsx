@@ -63,6 +63,9 @@ const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolv
 const AUDIO_BITRATE = 128_000;
 // 낭독이 끝나자마자 화면이 끊기면 급해 보인다. 뒤에 조금 여유를 둔다.
 const NARRATION_TAIL_SEC = 1.2;
+// 한 바퀴를 돌고 곧바로 되감으면 눈이 따라가지 못한다. 마지막 프레임을
+// 잠깐 보여 주고 다시 시작한다.
+const LOOP_PAUSE_SEC = 2;
 
 // 원고를 음성으로 바꿔 오디오 버퍼로 돌려준다. 영상 길이를 여기서 나온
 // 실제 낭독 길이에 맞추므로, 글자 수로 어림하지 않는다.
@@ -324,8 +327,10 @@ function VideoExportMenu({
       onStartPlayback?.({ start: startInput, end: endInput, durationSec });
 
       // 음성을 넣으면 낭독이 끝날 때까지 레이더를 되풀이해 보여 준다.
-      // 한 바퀴(durationSec)가 끝날 때마다 화면을 처음으로 돌려 다시 재생한다.
-      const loopMs = durationSec * 1000;
+      // 한 바퀴는 '재생 durationSec + 마지막 프레임에서 LOOP_PAUSE_SEC 멈춤'이다.
+      // 재생은 마지막 프레임에서 멈춰 서 있으므로, 되감기를 늦추면 그대로 정지가 된다.
+      const playMs = durationSec * 1000;
+      const loopMs = (durationSec + LOOP_PAUSE_SEC) * 1000;
       const totalFrames = Math.max(2, Math.round(totalSeconds * VIDEO_FRAME_RATE));
       const startedAt = performance.now();
       let nextLoopAt = startedAt + loopMs;
@@ -340,7 +345,7 @@ function VideoExportMenu({
         if (narrationBuffer && performance.now() >= nextLoopAt
             && targetTime - startedAt < (totalSeconds - 1) * 1000) {
           map?.jumpTo?.(startCamera);
-          map?.easeTo?.({ ...endCamera, duration: loopMs, essential: true });
+          map?.easeTo?.({ ...endCamera, duration: playMs, essential: true });
           onStartPlayback?.({ start: startInput, end: endInput, durationSec });
           nextLoopAt += loopMs;
         }
@@ -505,8 +510,9 @@ function VideoExportMenu({
             {withNarration ? (
               <div className="col-span-2 -mt-1 space-y-1 text-[11px] font-semibold leading-relaxed text-white/45">
                 <div>
-                  영상 길이는 낭독 길이에 맞춰지고, 그동안 레이더는 {durationSec}초마다
-                  되풀이됩니다.
+                  영상 길이는 낭독 길이에 맞춰집니다. 레이더는 {durationSec}초 재생하고
+                  마지막 화면에서 {LOOP_PAUSE_SEC}초 멈추기를 되풀이합니다
+                  (한 바퀴 {durationSec + LOOP_PAUSE_SEC}초).
                 </div>
                 <div className="text-cyan-200/70">
                   시각은 3시간 전 ~ 1시간 뒤, 시작 화면은 전국,
