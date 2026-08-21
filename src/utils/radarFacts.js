@@ -15,6 +15,9 @@ const SIDO_SHORT = {
 
 // 방송에서는 '충남 서산시'가 아니라 '서산'으로 부른다.
 const SHORT_NAME = (sgg) => {
+  // '포항시남구', '안산시단원구'처럼 시 안의 구까지 붙은 이름은 시 이름만 남긴다.
+  const cityWithGu = /^(.+?)시.*구$/.exec(sgg);
+  if (cityWithGu?.[1]?.length >= 2) return cityWithGu[1];
   const shortened = sgg.replace(/(특별자치시|광역시|특별시|시|군|구)$/, '');
   return shortened.length >= 2 ? shortened : sgg;
 };
@@ -39,6 +42,14 @@ const REGION_POINTS = (sggLabels.features ?? []).map((feature) => ({
   lon: feature.geometry?.coordinates?.[0] ?? 0,
   lat: feature.geometry?.coordinates?.[1] ?? 0,
 }));
+
+// 방송에서는 '33.8밀리미터'라고 하지 않는다. 10 단위로 어림하고
+// 가장 짙은 색 구간은 범례에 맞춰 100밀리미터로 묶는다.
+const toBroadcastMm = (mm) => {
+  if (mm >= 100) return 100;
+  const rounded = Math.round(mm / 10) * 10;
+  return rounded > 0 ? rounded : Math.round(mm);
+};
 
 const toRad = (deg) => (deg * Math.PI) / 180;
 
@@ -69,7 +80,9 @@ const nearestRegion = (lon, lat, maxKm = 45) => {
       best = region;
     }
   }
-  return bestKm <= maxKm ? best : null;
+  if (bestKm > maxKm) return null;
+  // 대표점에서 멀면 그 시군 안이라고 단정할 수 없다. '인근'으로 부르게 표시해 둔다.
+  return { ...best, farFromCenter: bestKm > 20 };
 };
 
 // 한 프레임에서 기준 등급 이상인 격자 셀을 모아 위치·강도를 요약한다.
@@ -119,7 +132,7 @@ const regionsOf = (cells, limit = 4) => {
   cells.forEach(({ lon, lat }) => {
     const region = nearestRegion(lon, lat);
     if (!region) return;
-    const key = `${region.sido} ${region.sgg}`;
+    const key = region.farFromCenter ? `${SHORT_NAME(region.sgg)} 인근` : SHORT_NAME(region.sgg);
     counter.set(key, (counter.get(key) ?? 0) + 1);
   });
   return [...counter.entries()]
@@ -184,7 +197,7 @@ const describeCluster = (cells, bucketToMm) => {
   cells.forEach(({ lon, lat }) => {
     const region = nearestRegion(lon, lat);
     if (!region) return;
-    const short = SHORT_NAME(region.sgg);
+    const short = region.farFromCenter ? `${SHORT_NAME(region.sgg)} 인근` : SHORT_NAME(region.sgg);
     counter.set(short, (counter.get(short) ?? 0) + 1);
     const area = AREA_BY_SIDO[region.sido];
     if (area) areaCounter.set(area, (areaCounter.get(area) ?? 0) + 1);
@@ -197,7 +210,7 @@ const describeCluster = (cells, bucketToMm) => {
     places,
     area,
     sea: places.length ? null : seaSideOf(centroid),
-    maxMm: bucketToMm(maxBucket),
+    maxMm: toBroadcastMm(bucketToMm(maxBucket)),
     cellCount: cells.length,
     centroid,
   };
@@ -287,8 +300,9 @@ export const buildRadarFacts = ({
   // 강한 비구름을 덩어리로 나눠 '어디에 얼마나'를 각각 말할 수 있게 한다.
   const clusters = strongNow
     ? clusterCells(strongNow.cells)
-        .filter((cells) => cells.length >= 3)
-        .slice(0, 4)
+        // 좁은 한두 격자에만 잡힌 값은 이상 에코일 수 있어 덩어리로 치지 않는다.
+        .filter((cells) => cells.length >= 5)
+        .slice(0, 3)
         .map((cells) => describeCluster(cells, bucketToMm))
     : [];
 
@@ -332,11 +346,11 @@ export const buildRadarFacts = ({
     strong: strongNow && {
       regions: regionsOf(strongNow.cells),
       sea: seaSideOf(strongNow.centroid),
-      maxMm: strongNow.maxMm,
+      maxMm: toBroadcastMm(strongNow.maxMm),
       maxRegion: strongNow.maxPoint
         ? (() => {
           const region = nearestRegion(strongNow.maxPoint.lon, strongNow.maxPoint.lat);
-          return region ? `${region.sido} ${region.sgg}` : null;
+          return region ? SHORT_NAME(region.sgg) : null;
         })()
         : null,
       cellCount: strongNow.count,
@@ -364,7 +378,13 @@ export const formatRadarFacts = (facts, extras = {}) => {
     const hour12 = hour % 12 === 0 ? 12 : hour % 12;
     time = `${half} ${hour12}시 ${String(facts.observedAt.getMinutes()).padStart(2, '0')}분`;
   }
-  lines.push(`[레이더 관측 - ${time} 현재]`);
+  // 자료가 늦게 들어오면 '현재'라고 하면 안 된다. 몇 분 지난 자료인지 밝힌다.
+  const delayMinutes = facts.observedAt instanceof Date
+    ? Math.round((Date.now() - facts.observedAt.getTime()) / 60000)
+    : 0;
+  lines.push(delayMinutes >= 10
+    ? `[레이더 관측 - ${time} 자료 기준 (지금보다 ${delayMinutes}분 전 자료라 '현재'라고 하지 말고 '${time} 레이더 기준'으로 쓸 것)]`
+    : `[레이더 관측 - ${time} 현재]`);
 
   if (facts.areas?.length) {
     lines.push(`- 비구름이 걸친 권역: ${facts.areas.join(', ')}`);
@@ -380,22 +400,24 @@ export const formatRadarFacts = (facts, extras = {}) => {
       const where = cluster.places.length ? cluster.places.join(', ') : cluster.sea;
       if (!where) return;
       const area = cluster.area ? ` [${cluster.area}]` : '';
-      lines.push(`- 강한 비구름 ${index + 1}: ${where}${area} — 시간당 ${cluster.maxMm}mm 안팎`);
+      lines.push(`- 강한 비구름 ${index + 1}: ${where}${area} — 시간당 ${cluster.maxMm}밀리미터 안팎으로 추정`);
     });
   } else if (!facts.strong) {
-    lines.push('- 강한 비구름(15mm/h 이상): 없음');
+    lines.push('- 강한 비구름(시간당 15밀리미터 이상): 없음. 내륙 대부분 소강상태');
   }
 
   if (facts.strong?.maxMm) {
-    lines.push(`- 전국에서 가장 센 곳: 시간당 ${facts.strong.maxMm}mm 안팎${facts.strong.maxRegion ? ` (${facts.strong.maxRegion} 부근)` : ''}`);
+    lines.push(`- 전국에서 가장 센 곳: 시간당 ${facts.strong.maxMm}밀리미터 안팎으로 추정${facts.strong.maxRegion ? ` (${facts.strong.maxRegion} 부근)` : ''}`);
   }
 
   // 라벨만 주면 '3시간 전'을 '3시간 후'로 뒤집어 쓰는 일이 생겨,
   // 시제가 드러나는 완성 문장으로 준다.
   if (facts.movement) {
     lines.push(`- 비구름은 지금 ${facts.movement.directionName}쪽으로 시속 ${facts.movement.speedKmh}km로 이동하고 있습니다. (이동 방향은 '${facts.movement.directionName}쪽'으로 그대로 쓸 것)`);
-    const from = [facts.movement.fromSea, ...facts.movement.fromRegions.map(SHORT_NAME)].filter(Boolean).join(', ');
-    if (from) lines.push(`- 이 비구름은 ${facts.movement.spanHours}시간 전에는 ${from}에 있었습니다. (지나온 과거 위치이며, 앞으로 갈 곳이 아님)`);
+    const from = [facts.movement.fromSea, ...facts.movement.fromRegions].filter(Boolean).join(', ');
+    // '1.4시간 전'은 방송에서 쓰지 않는 말이라 시간 단위로 어림한다.
+    const hoursAgo = Math.max(1, Math.round(facts.movement.spanHours));
+    if (from) lines.push(`- 이 비구름은 약 ${hoursAgo}시간 전에는 ${from}에 있었습니다. (지나온 과거 위치이며, 앞으로 갈 곳이 아님)`);
   }
   if (facts.lastHour) {
     const strength = facts.lastHour.strongerCount > 0 ? '강한 비구름 구역은 넓어졌습니다'
@@ -410,7 +432,7 @@ export const formatRadarFacts = (facts, extras = {}) => {
   }
 
   if (extras.observations?.length) {
-    lines.push(`- AWS 실측 1시간 최다: ${extras.observations.slice(0, 3).map((row) => `${row.name} ${row.value}mm`).join(', ')}`);
+    lines.push(`- AWS 지상 실측 1시간 최다(레이더 추정이 아닌 실측값): ${extras.observations.slice(0, 3).map((row) => `${row.name} ${row.value}밀리미터`).join(', ')}`);
   }
   if (extras.warnings?.length) {
     lines.push(`- 발효 중인 특보: ${extras.warnings.join(', ')}`);

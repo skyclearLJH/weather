@@ -28,9 +28,14 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
   const audioRef = useRef(null);
   const audioUrlRef = useRef('');
   const [waitSeconds, setWaitSeconds] = useState(null);
+  // 겹쳐 부르면 기다림 루프가 쌓여 스스로 한도를 먹는다. 한 번에 하나만 돌게 한다.
+  const runningRef = useRef(false);
+  const aliveRef = useRef(true);
 
   const generate = useCallback(async (isRetry = false) => {
     if (!facts) return;
+    if (runningRef.current && !isRetry) return;
+    runningRef.current = true;
     setStatus('loading');
     setError('');
     try {
@@ -57,6 +62,8 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
         const wait = Math.min(60, Number(/(\d+)초/.exec(payload?.error ?? '')?.[1] ?? 35));
         setWaitSeconds(wait);
         for (let left = wait; left > 0; left -= 1) {
+          // 패널을 닫았으면 더 기다릴 이유가 없다.
+          if (!aliveRef.current) { setWaitSeconds(null); return undefined; }
           // eslint-disable-next-line no-await-in-loop
           await new Promise((resolve) => { setTimeout(resolve, 1000); });
           setWaitSeconds(left - 1);
@@ -75,7 +82,10 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
     } catch (caught) {
       setError(caught.message || '기사를 만들지 못했습니다.');
       setStatus('error');
+    } finally {
+      runningRef.current = false;
     }
+    return undefined;
   }, [facts, durationSeconds]);
 
   // 만든 소리는 blob URL로 잡아 두고, 다시 만들 때마다 이전 것을 놓아준다.
@@ -137,8 +147,11 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
     }
   }, [script, voice, speakingRate, releaseAudio]);
 
-  // 패널을 닫을 때 재생 중인 소리가 남지 않게 한다.
-  useEffect(() => releaseAudio, [releaseAudio]);
+  // 패널을 닫을 때 재생 중인 소리도, 기다리던 재시도도 남지 않게 한다.
+  useEffect(() => () => {
+    aliveRef.current = false;
+    releaseAudio();
+  }, [releaseAudio]);
 
   useEffect(() => {
     generate();
