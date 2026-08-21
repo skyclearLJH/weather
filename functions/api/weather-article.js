@@ -247,11 +247,17 @@ ${placeBlock}
     const result = await response.json();
     if (!response.ok || result?.error) {
       const raw = result?.error?.message || `기사 생성 실패 (${response.status})`;
-      // 무료 한도(분당 20회)에 걸린 것은 고장이 아니라 잠깐 기다리면 되는 일이다.
       if (response.status === 429 || /quota|rate limit/i.test(raw)) {
-        const seconds = Math.ceil(Number(/retry in ([\d.]+)s/i.exec(raw)?.[1] ?? 35));
-        const limited = new Error(`무료 사용 한도가 잠시 찼습니다. ${seconds}초쯤 뒤에 다시 만들어 주세요.`);
+        // 하루치를 다 쓴 것과 잠깐 몰린 것은 전혀 다르다. 기다려서 될 일이 아니면
+        // 기다리라고 하지 않는다.
+        const violations = (result?.error?.details ?? [])
+          .flatMap((detail) => detail?.violations ?? []);
+        const daily = violations.some((v) => /PerDay/i.test(v?.quotaId ?? ''));
+        const limited = daily
+          ? new Error('오늘 쓸 수 있는 무료 횟수(하루 20회)를 모두 썼습니다. 내일 다시 쓰거나 유료 전환이 필요합니다.')
+          : new Error(`요청이 잠시 몰렸습니다. ${Math.ceil(Number(/retry in ([\d.]+)s/i.exec(raw)?.[1] ?? 35))}초쯤 뒤에 다시 만들어 주세요.`);
         limited.status = 429;
+        limited.daily = daily;
         throw limited;
       }
       throw new Error(raw);
@@ -303,7 +309,11 @@ ${placeBlock}
       headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message || '기사 생성 중 오류가 발생했습니다.' }), {
+    return new Response(JSON.stringify({
+      error: error.message || '기사 생성 중 오류가 발생했습니다.',
+      // 하루 한도면 화면에서 기다리게 하지 않는다.
+      dailyQuotaExhausted: Boolean(error.daily),
+    }), {
       status: error.status === 429 ? 429 : 502,
       headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' },
     });

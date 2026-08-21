@@ -58,6 +58,10 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
         );
       }
       // 무료 한도는 잠깐 기다리면 풀린다. 사용자가 다시 누르게 하지 않고 한 번은 대신 기다린다.
+      // 하루치를 다 썼으면 기다려도 소용없다. 바로 알려 준다.
+      if (response.status === 429 && payload?.dailyQuotaExhausted) {
+        throw new Error(payload.error);
+      }
       if (response.status === 429 && !isRetry) {
         const wait = Math.min(60, Number(/(\d+)초/.exec(payload?.error ?? '')?.[1] ?? 35));
         setWaitSeconds(wait);

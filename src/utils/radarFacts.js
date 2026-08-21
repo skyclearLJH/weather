@@ -135,10 +135,12 @@ const regionsOf = (cells, limit = 4) => {
     const key = region.farFromCenter ? `${SHORT_NAME(region.sgg)} 인근` : SHORT_NAME(region.sgg);
     counter.set(key, (counter.get(key) ?? 0) + 1);
   });
-  return [...counter.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([name]) => name);
+  // 같은 곳이 '포항'과 '포항 인근'으로 겹쳐 나오면 정확한 쪽만 남긴다.
+  const ranked = [...counter.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+  const exact = new Set(ranked.filter((name) => !name.endsWith(' 인근')));
+  return ranked
+    .filter((name) => !(name.endsWith(' 인근') && exact.has(name.replace(' 인근', ''))))
+    .slice(0, limit);
 };
 
 // 전국을 한 덩어리로 다루면 '어디에 얼마나'를 말할 수 없다.
@@ -203,7 +205,11 @@ const describeCluster = (cells, bucketToMm) => {
     if (area) areaCounter.set(area, (areaCounter.get(area) ?? 0) + 1);
   });
   const byCount = (a, b) => b[1] - a[1];
-  const places = [...counter.entries()].sort(byCount).slice(0, 3).map(([name]) => name);
+  const ranked = [...counter.entries()].sort(byCount).map(([name]) => name);
+  const exact = new Set(ranked.filter((name) => !name.endsWith(' 인근')));
+  const places = ranked
+    .filter((name) => !(name.endsWith(' 인근') && exact.has(name.replace(' 인근', ''))))
+    .slice(0, 3);
   const area = [...areaCounter.entries()].sort(byCount)[0]?.[0] ?? null;
 
   return {
@@ -406,7 +412,12 @@ export const formatRadarFacts = (facts, extras = {}) => {
     lines.push('- 강한 비구름(시간당 15밀리미터 이상): 없음. 내륙 대부분 소강상태');
   }
 
-  if (facts.strong?.maxMm) {
+  // 최고값이 어느 강수대에도 속하지 않으면 좁은 이상 에코일 수 있다.
+  // 앞에서 말한 강수대와 어긋나 보이므로 아예 내보내지 않는다.
+  const inClusters = facts.clusters?.some((cluster) => cluster.places.some(
+    (place) => facts.strong?.maxRegion && place.startsWith(facts.strong.maxRegion.replace(' 인근', '')),
+  ));
+  if (facts.strong?.maxMm && (!facts.strong.maxRegion || inClusters)) {
     lines.push(`- 전국에서 가장 센 곳: 시간당 ${facts.strong.maxMm}밀리미터 안팎으로 추정${facts.strong.maxRegion ? ` (${facts.strong.maxRegion} 부근)` : ''}`);
   }
 
