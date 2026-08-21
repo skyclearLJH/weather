@@ -33,6 +33,10 @@ import {
   onRequestOptions as kimRainOptions,
 } from './functions/api/kim-rain.js';
 import {
+  onRequestPost as weatherArticlePost,
+  onRequestOptions as weatherArticleOptions,
+} from './functions/api/weather-article.js';
+import {
   onRequestGet as terrainRainGet,
   onRequestOptions as terrainRainOptions,
 } from './functions/api/terrain-rain.js';
@@ -113,6 +117,26 @@ const localFunctionsPlugin = (env) => ({
             ? await globalModelRainOptions(context)
             : await globalModelRainGet(context);
           await sendFunctionResponse(response, res);
+          return;
+        }
+
+        if (requestUrl.pathname === '/api/weather-article') {
+          if (req.method === 'OPTIONS') {
+            await sendFunctionResponse(await weatherArticleOptions(), res);
+            return;
+          }
+          // POST 본문을 모아 Request로 다시 만든다(로컬 미들웨어는 스트림만 준다).
+          const chunks = [];
+          for await (const chunk of req) chunks.push(chunk);
+          const articleContext = {
+            env: localEnv,
+            request: new Request(requestUrl.toString(), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: Buffer.concat(chunks),
+            }),
+          };
+          await sendFunctionResponse(await weatherArticlePost(articleContext), res);
           return;
         }
 
