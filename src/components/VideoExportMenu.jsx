@@ -139,6 +139,7 @@ function VideoExportMenu({
   narrationScript = '',
   narrationVoice = 'ko-KR-Neural2-C',
   narrationRate = 1,
+  onAutoSetup,
 }) {
   const [startInput, setStartInput] = useState(defaultStart);
   const [endInput, setEndInput] = useState(defaultEnd);
@@ -149,6 +150,7 @@ function VideoExportMenu({
   const [recordingProgress, setRecordingProgress] = useState(0);
   const [withNarration, setWithNarration] = useState(false);
   const [progressLabel, setProgressLabel] = useState('');
+  const [autoLabel, setAutoLabel] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -174,6 +176,27 @@ function VideoExportMenu({
       return;
     }
     setter(camera);
+    setError('');
+  };
+
+  // 체크를 켜는 순간 시각과 두 화면을 대신 잡아 준다. 끄면 흔적을 지운다.
+  const handleNarrationToggle = (event) => {
+    const next = event.target.checked;
+    setWithNarration(next);
+    if (!next) {
+      setAutoLabel('');
+      return;
+    }
+    const auto = onAutoSetup?.();
+    if (!auto) {
+      setAutoLabel('');
+      return;
+    }
+    setStartInput(auto.start);
+    setEndInput(auto.end);
+    if (auto.startCamera) setStartCamera(auto.startCamera);
+    if (auto.endCamera) setEndCamera(auto.endCamera);
+    setAutoLabel(auto.endLabel || '');
     setError('');
   };
 
@@ -467,7 +490,7 @@ function VideoExportMenu({
               <input
                 type="checkbox"
                 checked={withNarration}
-                onChange={(event) => setWithNarration(event.target.checked)}
+                onChange={handleNarrationToggle}
                 className="h-4 w-4 accent-cyan-400"
               />
               <Volume2 className="h-4 w-4 text-cyan-300" aria-hidden="true" />
@@ -480,9 +503,16 @@ function VideoExportMenu({
             </label>
 
             {withNarration ? (
-              <div className="col-span-2 -mt-1 text-[11px] font-semibold leading-relaxed text-white/45">
-                영상 길이는 낭독 길이에 맞춰지고, 그동안 레이더는 {durationSec}초마다
-                되풀이됩니다.
+              <div className="col-span-2 -mt-1 space-y-1 text-[11px] font-semibold leading-relaxed text-white/45">
+                <div>
+                  영상 길이는 낭독 길이에 맞춰지고, 그동안 레이더는 {durationSec}초마다
+                  되풀이됩니다.
+                </div>
+                <div className="text-cyan-200/70">
+                  시각은 3시간 전 ~ 1시간 뒤, 시작 화면은 전국,
+                  {autoLabel ? ` 종료 화면은 ${autoLabel}로` : ' 종료 화면은 비가 가장 센 곳으로'}
+                  {' '}자동으로 잡았습니다. 바꾸려면 아래에서 다시 지정하세요.
+                </div>
               </div>
             ) : null}
 

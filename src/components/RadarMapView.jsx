@@ -23,6 +23,13 @@ import { updateWorkspaceModeInUrl } from '../utils/weatherWorkspaceMode.js';
 import ArticleDraftPanel from './ArticleDraftPanel.jsx';
 import { buildRadarFacts, formatRadarFacts } from '../utils/radarFacts.js';
 import {
+  findPeakPoint,
+  findProvinceAt,
+  nearestPlaceName,
+  provinceExtent,
+  zoomForAreaRatio,
+} from '../utils/autoVideoCamera.js';
+import {
   applyPlayCamera,
   captureCamera,
   clearPlayRange,
@@ -3070,6 +3077,77 @@ const RadarMapView = ({
     }));
   }, [frames, currentFrame, hourlyTop5]);
 
+  // '음성 포함'을 켜면 시각과 화면을 알아서 잡아 준다. 매번 손으로 맞추면
+  // 방송 직전에 실수하기 쉬운 값들이라 기본값을 대신 채워 주는 것이다.
+  const handleAutoVideoSetup = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return null;
+
+    // 시각: 지금부터 3시간 전 ~ 1시간 뒤(초단기 예측까지 담기게).
+    const toLocalInput = (date) => {
+      const pad = (value) => String(value).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+        + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    };
+    const now = new Date();
+    const result = {
+      start: toLocalInput(new Date(now.getTime() - 3 * 3600000)),
+      end: toLocalInput(new Date(now.getTime() + 3600000)),
+      startCamera: null,
+      endCamera: null,
+      endLabel: null,
+    };
+
+    // 시작 화면: 레이더 기본 화면(방송용 남한 전체).
+    const base = map.cameraForBounds(BROADCAST_MAP_BOUNDS, { padding: 0 });
+    if (base) {
+      result.startCamera = {
+        center: [base.center.lng ?? base.center[0], base.center.lat ?? base.center[1]],
+        zoom: base.zoom,
+        pitch: 0,
+        bearing: 0,
+      };
+    }
+
+    // 종료 화면: 지금 가장 비가 센 곳을 가운데 두고, 그 도가 화면의 10%가 되게.
+    const mappings = mappingsRef.current;
+    const cache = frameCacheRef.current;
+    const observed = frames.filter((frame) => frame.kind === 'obs');
+    const latest = observed.at(-1);
+    const buckets = latest ? cache.get(latest.key) : null;
+    if (mappings && buckets) {
+      const canvasHeight = mappings.radarMap.length / CANVAS_WIDTH;
+      const peak = findPeakPoint({
+        buckets,
+        mappings: mappings.radarMap,
+        canvasWidth: CANVAS_WIDTH,
+        canvasHeight,
+        toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
+      });
+      if (peak) {
+        const province = findProvinceAt(peak.lon, peak.lat);
+        let zoom = 8;
+        if (province) {
+          const { bounds, fillRatio } = provinceExtent(province);
+          const fit = map.cameraForBounds(bounds, { padding: 0 });
+          if (fit) zoom = zoomForAreaRatio(fit.zoom, fillRatio, 0.1);
+        }
+        result.endCamera = {
+          center: [peak.lon, peak.lat],
+          // 지도 자체의 한계를 넘지 않게 가둔다.
+          zoom: Math.min(map.getMaxZoom(), Math.max(map.getMinZoom(), zoom)),
+          pitch: 0,
+          bearing: 0,
+        };
+        const place = nearestPlaceName(peak.lon, peak.lat);
+        result.endLabel = [province?.properties?.name, place && `${place} 일대`]
+          .filter(Boolean)
+          .join(' · ');
+      }
+    }
+    return result;
+  }, [frames]);
+
   const latestObservationIndex = useMemo(
     () => frames.findLastIndex((frame) => frame.kind === 'obs'),
     [frames],
@@ -4907,6 +4985,7 @@ const RadarMapView = ({
                 narrationScript={narrationScript}
                 narrationVoice={narrationVoice}
                 narrationRate={narrationRate}
+                onAutoSetup={handleAutoVideoSetup}
               />
             ) : null}
 
@@ -4952,6 +5031,13 @@ const RadarMapView = ({
                           ? '지형 호우'
                           : '레이더 영상'}
                 </span>
+                {/* 컨트롤바를 현재 시각 뒤로 넘기면 초단기 예측이 보인다.
+                    관측과 헷갈리지 않게 밴드에서 색을 달리해 알린다. */}
+                {!isAccumView && !isKimView && currentFrame?.kind === 'fct' ? (
+                  <span className="whitespace-nowrap text-2xl font-black text-[#ffd400]">
+                    예측
+                  </span>
+                ) : null}
                 {(isAccumView ? currentAccumHour : isKimView ? currentKimFrame : currentFrame) ? (
                   <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap border-l border-white/30 pl-4">
                     <span className="text-2xl font-black tabular-nums">
