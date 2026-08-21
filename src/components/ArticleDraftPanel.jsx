@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FileText, LoaderCircle, Play, RefreshCw, Square, X } from 'lucide-react';
+import { Check, Copy, FileText, LoaderCircle, Play, RefreshCw, Square, X } from 'lucide-react';
 
 // 방송에 쓸 만한 목소리만 추렸다. Neural2는 또렷하고 Chirp3-HD는 더 자연스럽다.
 const VOICE_OPTIONS = [
@@ -28,6 +28,7 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
   const audioRef = useRef(null);
   const audioUrlRef = useRef('');
   const [waitSeconds, setWaitSeconds] = useState(null);
+  const [copied, setCopied] = useState(false);
   // 겹쳐 부르면 기다림 루프가 쌓여 스스로 한도를 먹는다. 한 번에 하나만 돌게 한다.
   const runningRef = useRef(false);
   const aliveRef = useRef(true);
@@ -163,6 +164,18 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 사실을 손으로 긁어 복사하기 번거로워, 통째로 집어 가게 한다.
+  const copyFacts = useCallback(async () => {
+    if (!facts) return;
+    try {
+      await navigator.clipboard.writeText(facts);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // 클립보드를 막아 둔 환경도 있다. 그때는 직접 긁어 복사하면 된다.
+    }
+  }, [facts]);
+
   // 낭독 시간 어림: TTS로 재어 보니 공백 뺀 글자 기준 초당 5.8자였다.
   const readSeconds = Math.round((script.replace(/\s/g, '').length / 5.8) || 0);
 
@@ -200,8 +213,22 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
 
       <div className="grid max-h-[70vh] grid-cols-1 gap-0 overflow-auto md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         <div className="border-b border-white/10 px-5 py-4 md:border-b-0 md:border-r">
-          <div className="mb-2 text-[11px] font-black tracking-wide text-cyan-200">
-            관측 사실 (이 내용만으로 원고를 씁니다)
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[11px] font-black tracking-wide text-cyan-200">
+              관측 사실 (이 내용만으로 원고를 씁니다)
+            </span>
+            <button
+              type="button"
+              onClick={copyFacts}
+              disabled={!facts}
+              className="ml-auto flex h-7 items-center gap-1 rounded border border-white/20 px-2 text-[11px] font-black text-white/70 transition hover:bg-white/10 disabled:opacity-40"
+              title="관측 사실을 통째로 복사합니다"
+            >
+              {copied
+                ? <Check className="h-3 w-3 text-emerald-300" />
+                : <Copy className="h-3 w-3" />}
+              {copied ? '복사됨' : '복사'}
+            </button>
           </div>
           <pre className="whitespace-pre-wrap break-words text-[13px] font-semibold leading-relaxed text-white/85">
             {facts || '레이더 자료를 불러오는 중입니다.'}
@@ -211,9 +238,9 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
         <div className="px-5 py-4">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-[11px] font-black tracking-wide text-cyan-200">방송 원고</span>
-            {status === 'ready' ? (
+            {script.trim() ? (
               <span className="text-[11px] font-bold text-white/45">
-                {meta?.charCount}자 · 약 {readSeconds}초
+                {script.replace(/\s/g, '').length}자 · 약 {readSeconds}초
                 {meta?.finishReason && meta.finishReason !== 'STOP' ? ' · 잘림' : ''}
               </span>
             ) : null}
@@ -226,6 +253,17 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
             </div>
           ) : null}
 
+          {/* AI가 못 써 줘도 원고를 직접 붙여넣어 음성과 영상은 만들 수 있어야 한다.
+              그래서 실패는 배너로만 알리고 입력창은 늘 남겨 둔다. */}
+          {status === 'error' ? (
+            <div className="mb-2 rounded-md border border-red-400/40 bg-red-400/10 px-3 py-2 text-[12px] font-bold text-red-100">
+              {error}
+              <div className="mt-1 font-semibold text-red-100/80">
+                아래 칸에 원고를 직접 붙여넣어도 미리듣기와 영상 만들기는 그대로 됩니다.
+              </div>
+            </div>
+          ) : null}
+
           {status === 'loading' ? (
             <div className="flex items-center gap-2 py-8 text-sm font-bold text-white/70">
               <LoaderCircle className="h-4 w-4 animate-spin text-cyan-300" />
@@ -233,8 +271,6 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
                 ? `무료 사용 한도가 잠시 찼습니다. ${waitSeconds}초 뒤 자동으로 다시 만듭니다…`
                 : '기사를 쓰는 중입니다…'}
             </div>
-          ) : status === 'error' ? (
-            <div className="py-6 text-sm font-semibold text-red-200">{error}</div>
           ) : (
             <textarea
               value={script}
