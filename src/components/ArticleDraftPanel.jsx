@@ -35,7 +35,11 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
       }
       if (!response.ok) throw new Error(payload?.error || `기사 생성 실패 (${response.status})`);
       setScript(payload.script ?? '');
-      setMeta({ charCount: payload.charCount, finishReason: payload.finishReason });
+      setMeta({
+        charCount: payload.charCount,
+        finishReason: payload.finishReason,
+        foreignPlaces: payload.foreignPlaces ?? [],
+      });
       setStatus('ready');
     } catch (caught) {
       setError(caught.message || '기사를 만들지 못했습니다.');
@@ -104,6 +108,13 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
               </span>
             ) : null}
           </div>
+
+          {/* 관측 사실에 없는 지명이 남았다면 방송 사고로 이어지므로 눈에 띄게 알린다. */}
+          {status === 'ready' && meta?.foreignPlaces?.length ? (
+            <div className="mb-2 rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[12px] font-bold text-amber-100">
+              사실에 없는 지명이 들어 있습니다: {meta.foreignPlaces.join(', ')} — 확인 후 고쳐 주세요.
+            </div>
+          ) : null}
 
           {status === 'loading' ? (
             <div className="flex items-center gap-2 py-8 text-sm font-bold text-white/70">
