@@ -84,6 +84,22 @@ export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
 
+// [임시 진단] 배포가 반영됐는지와 어떤 이름으로 변수가 잡혔는지만 확인한다.
+// 값은 절대 내보내지 않고 이름과 길이만 준다. 확인이 끝나면 제거한다.
+export async function onRequestGet(context) {
+  const names = Object.keys(context.env ?? {}).sort();
+  const key = context.env?.GEMINI_API_KEY;
+  return new Response(JSON.stringify({
+    deployedAt: '2026-08-21-diag',
+    envNames: names,
+    hasGeminiKey: Boolean(key),
+    geminiKeyLength: key ? String(key).length : 0,
+  }), {
+    status: 200,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+}
+
 export async function onRequestPost(context) {
   const apiKey = readApiKey(context);
   if (!apiKey) {
