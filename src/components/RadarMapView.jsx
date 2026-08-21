@@ -8,6 +8,7 @@ import {
   Minimize2,
   MonitorPlay,
   Navigation2,
+  FileText,
   RefreshCw,
   X,
 } from 'lucide-react';
@@ -19,6 +20,8 @@ import HistoricalDateTimeInput from './HistoricalDateTimeInput.jsx';
 import VideoExportMenu from './VideoExportMenu.jsx';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
 import { updateWorkspaceModeInUrl } from '../utils/weatherWorkspaceMode.js';
+import ArticleDraftPanel from './ArticleDraftPanel.jsx';
+import { buildRadarFacts, formatRadarFacts } from '../utils/radarFacts.js';
 import {
   applyPlayCamera,
   captureCamera,
@@ -1582,6 +1585,7 @@ const RadarMapView = ({
   const transitionFromCanvasRef = useRef(null);
   const transitionToCanvasRef = useRef(null);
   const transitionAnimationRef = useRef(null);
+  const [articleFacts, setArticleFacts] = useState(null);
   const accumSurfaceLayerRef = useRef(null);
   const mappingsRef = useRef(null);
   const kimMappingRef = useRef(null);
@@ -3026,6 +3030,41 @@ const RadarMapView = ({
   }, [broadcastView]);
 
   const currentFrame = frames[frameIndex];
+
+  // 화면에 그려진 레이더 프레임에서 기사용 '관측 사실'을 만든다.
+  // 과거 프레임은 이미 캐시에 있으므로 추가 통신 없이 이동·추세까지 계산된다.
+  const handleBuildArticleFacts = useCallback(() => {
+    const mappings = mappingsRef.current;
+    const cache = frameCacheRef.current;
+    if (!mappings || frames.length === 0) {
+      setArticleFacts('레이더 자료가 아직 준비되지 않았습니다.');
+      return;
+    }
+    // 현재 시각까지의 관측 프레임 중 캐시된 것만, 최대 3시간 정도를 쓴다.
+    const observed = frames
+      .filter((frame) => frame.kind === 'obs' && frame.validTime <= (currentFrame?.validTime ?? new Date()))
+      .slice(-19); // 10분 간격 기준 약 3시간
+    const withBuckets = observed
+      .map((frame) => ({ validTime: frame.validTime, buckets: cache.get(frame.key) }))
+      .filter((frame) => frame.buckets);
+    if (withBuckets.length === 0) {
+      setArticleFacts('레이더 프레임을 아직 다 읽지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
+      return;
+    }
+    const canvasHeight = mappings.radarMap.length / CANVAS_WIDTH;
+    const facts = buildRadarFacts({
+      frames: withBuckets,
+      mappings: mappings.radarMap,
+      canvasWidth: CANVAS_WIDTH,
+      canvasHeight,
+      toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
+      bucketToMm: (bucket) => bucketLowerValue(bucket),
+    });
+    setArticleFacts(formatRadarFacts(facts, {
+      observations: hourlyTop5.map((row) => ({ name: row.label, value: row.mm })),
+    }));
+  }, [frames, currentFrame, hourlyTop5]);
+
   const latestObservationIndex = useMemo(
     () => frames.findLastIndex((frame) => frame.kind === 'obs'),
     [frames],
@@ -4860,6 +4899,28 @@ const RadarMapView = ({
                 onBeforeScreenShare={handleBeforeVideoScreenShare}
                 onPreparePlayback={handleVideoPrepare}
                 onStartPlayback={handleVideoStart}
+              />
+            ) : null}
+
+            {/* 녹화모드: 지금 화면의 레이더에서 방송 원고 초안을 만든다.
+                레이더 화면(누적·예상도·추적 제외)에서만 의미가 있어 그때만 띄운다. */}
+            {workspaceMode === 'record' && isRadarView ? (
+              <button
+                type="button"
+                data-video-hide
+                onClick={handleBuildArticleFacts}
+                className="absolute bottom-24 left-6 z-40 flex h-10 items-center gap-2 rounded-full border border-cyan-300/50 bg-slate-950/85 px-4 text-xs font-black text-cyan-100 shadow-xl backdrop-blur-md transition hover:bg-slate-900"
+              >
+                <FileText className="h-4 w-4" aria-hidden="true" />
+                기사 만들기
+              </button>
+            ) : null}
+
+            {articleFacts ? (
+              <ArticleDraftPanel
+                facts={articleFacts}
+                durationSeconds={60}
+                onClose={() => setArticleFacts(null)}
               />
             ) : null}
             {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}
