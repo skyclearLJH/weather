@@ -1,5 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
-import { FileText, LoaderCircle, RefreshCw, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { FileText, LoaderCircle, Play, RefreshCw, Square, X } from 'lucide-react';
+
+// 방송에 쓸 만한 목소리만 추렸다. Neural2는 또렷하고 Chirp3-HD는 더 자연스럽다.
+const VOICE_OPTIONS = [
+  { id: 'ko-KR-Neural2-A', label: '여성 A (또렷)' },
+  { id: 'ko-KR-Neural2-B', label: '여성 B (또렷)' },
+  { id: 'ko-KR-Neural2-C', label: '남성 C (또렷)' },
+  { id: 'ko-KR-Chirp3-HD-Aoede', label: '여성 (자연스러움)' },
+  { id: 'ko-KR-Chirp3-HD-Leda', label: '여성 (차분함)' },
+  { id: 'ko-KR-Chirp3-HD-Charon', label: '남성 (자연스러움)' },
+  { id: 'ko-KR-Chirp3-HD-Orus', label: '남성 (묵직함)' },
+];
 
 // 레이더 화면에서 뽑은 '관측 사실'과 그것으로 쓴 방송 원고를 나란히 보여준다.
 // 사실이 틀리면 원고도 틀리므로, 검수는 사실 쪽을 먼저 보게 위에 둔다.
@@ -9,6 +20,13 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
   const [status, setStatus] = useState('idle'); // idle | loading | ready | error
   const [error, setError] = useState('');
   const [meta, setMeta] = useState(null);
+  const [voice, setVoice] = useState('ko-KR-Neural2-A');
+  const [speakingRate, setSpeakingRate] = useState(1);
+  const [audioStatus, setAudioStatus] = useState('idle'); // idle | loading | playing | error
+  const [audioError, setAudioError] = useState('');
+  const [audioSeconds, setAudioSeconds] = useState(null);
+  const audioRef = useRef(null);
+  const audioUrlRef = useRef('');
 
   const generate = useCallback(async () => {
     if (!facts) return;
@@ -46,6 +64,68 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
       setStatus('error');
     }
   }, [facts, durationSeconds]);
+
+  // 만든 소리는 blob URL로 잡아 두고, 다시 만들 때마다 이전 것을 놓아준다.
+  const releaseAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = '';
+    }
+  }, []);
+
+  const stopSpeaking = useCallback(() => {
+    releaseAudio();
+    setAudioStatus('idle');
+  }, [releaseAudio]);
+
+  const speak = useCallback(async () => {
+    if (!script.trim()) return;
+    releaseAudio();
+    setAudioStatus('loading');
+    setAudioError('');
+    setAudioSeconds(null);
+    try {
+      const response = await fetch('/api/weather-tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script, voice, speakingRate }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (!response.ok) {
+        const raw = await response.text();
+        let message = `음성 생성 실패 (${response.status})`;
+        try {
+          message = JSON.parse(raw)?.error || message;
+        } catch {
+          message = `서버가 음성 대신 오류 페이지를 보냈습니다 (${response.status}). `
+            + '개발 서버라면 재시작이, 배포본이라면 GOOGLE_TTS_API_KEY 설정 확인이 필요합니다.';
+        }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      // 실제 낭독 길이를 알아야 영상 길이를 맞출 수 있어 재어 둔다.
+      audio.addEventListener('loadedmetadata', () => {
+        if (Number.isFinite(audio.duration)) setAudioSeconds(Math.round(audio.duration));
+      });
+      audio.addEventListener('ended', () => setAudioStatus('idle'));
+      await audio.play();
+      setAudioStatus('playing');
+    } catch (caught) {
+      setAudioError(caught.message || '음성을 만들지 못했습니다.');
+      setAudioStatus('error');
+    }
+  }, [script, voice, speakingRate, releaseAudio]);
+
+  // 패널을 닫을 때 재생 중인 소리가 남지 않게 한다.
+  useEffect(() => releaseAudio, [releaseAudio]);
 
   useEffect(() => {
     generate();
@@ -135,8 +215,57 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 border-t border-white/15 px-5 py-3 text-[11px] font-semibold text-white/45">
-        AI가 쓴 초안입니다. 방송 전 사실과 표현을 확인해 주세요.
+      <div className="flex flex-wrap items-center gap-2 border-t border-white/15 px-5 py-3">
+        <select
+          value={voice}
+          onChange={(event) => { setVoice(event.target.value); stopSpeaking(); }}
+          className="h-9 rounded-md border border-white/20 bg-slate-900 px-2 text-xs font-bold text-white/85 outline-none"
+          aria-label="목소리"
+        >
+          {VOICE_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </select>
+
+        <label className="flex items-center gap-1.5 text-[11px] font-bold text-white/60">
+          속도
+          <input
+            type="range"
+            min="0.8"
+            max="1.3"
+            step="0.05"
+            value={speakingRate}
+            onChange={(event) => setSpeakingRate(Number(event.target.value))}
+            className="w-24 accent-cyan-400"
+            aria-label="낭독 속도"
+          />
+          <span className="w-8 tabular-nums text-white/80">{speakingRate.toFixed(2)}</span>
+        </label>
+
+        <button
+          type="button"
+          onClick={audioStatus === 'playing' ? stopSpeaking : speak}
+          disabled={audioStatus === 'loading' || !script.trim()}
+          className="flex h-9 items-center gap-1.5 rounded-md border border-cyan-300/40 bg-cyan-400/15 px-3 text-xs font-black text-cyan-100 transition hover:bg-cyan-400/25 disabled:opacity-40"
+        >
+          {audioStatus === 'loading'
+            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            : audioStatus === 'playing'
+              ? <Square className="h-3.5 w-3.5" />
+              : <Play className="h-3.5 w-3.5" />}
+          {audioStatus === 'playing' ? '멈춤' : '미리듣기'}
+        </button>
+
+        {audioSeconds !== null ? (
+          <span className="text-[11px] font-bold text-white/45">낭독 {audioSeconds}초</span>
+        ) : null}
+        {audioStatus === 'error' ? (
+          <span className="text-[11px] font-bold text-red-200">{audioError}</span>
+        ) : null}
+
+        <span className="ml-auto text-[11px] font-semibold text-white/45">
+          AI가 쓴 초안입니다. 방송 전 사실과 표현을 확인해 주세요.
+        </span>
       </div>
     </div>
   );

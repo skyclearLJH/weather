@@ -37,6 +37,10 @@ import {
   onRequestOptions as weatherArticleOptions,
 } from './functions/api/weather-article.js';
 import {
+  onRequestPost as weatherTtsPost,
+  onRequestOptions as weatherTtsOptions,
+} from './functions/api/weather-tts.js';
+import {
   onRequestGet as terrainRainGet,
   onRequestOptions as terrainRainOptions,
 } from './functions/api/terrain-rain.js';
@@ -137,6 +141,25 @@ const localFunctionsPlugin = (env) => ({
             }),
           };
           await sendFunctionResponse(await weatherArticlePost(articleContext), res);
+          return;
+        }
+
+        if (requestUrl.pathname === '/api/weather-tts') {
+          if (req.method === 'OPTIONS') {
+            await sendFunctionResponse(await weatherTtsOptions(), res);
+            return;
+          }
+          const ttsChunks = [];
+          for await (const chunk of req) ttsChunks.push(chunk);
+          const ttsContext = {
+            env: localEnv,
+            request: new Request(requestUrl.toString(), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: Buffer.concat(ttsChunks),
+            }),
+          };
+          await sendFunctionResponse(await weatherTtsPost(ttsContext), res);
           return;
         }
 
