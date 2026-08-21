@@ -21,14 +21,20 @@ const SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스
 - 이동 방향(예: 동남동쪽)과 지명, 숫자는 사실에 적힌 표현을 글자 그대로 옮깁니다.
   '동남동'을 '동북동'으로 바꾸는 것처럼 비슷한 말로 바꿔 쓰면 오보가 됩니다.
 - 지명은 '쓸 수 있는 지명'에 있는 것만 씁니다. 목록에 없는 지명은 한 글자도 쓰지 않습니다.
-  줄여 부르는 것은 됩니다: '충남 태안군' → '태안', '충남 태안군 일대'.
-  바꿔 부르는 것은 안 됩니다: '태안군' → '태안반도', '서산시' → '서해안'이나 '충남 내륙'.
-  지명 뒤에 반도·해안·내륙·지방 같은 말을 새로 붙이지 마세요. 다른 곳을 가리키게 됩니다.
+  줄여 부르는 것은 됩니다: '충남 태안군' → '태안', '태안 일대', '태안 주변'.
+  바꿔 부르는 것은 안 됩니다: '태안군' → '태안반도'처럼 다른 지형을 가리키게 하지 마세요.
+  권역 이름(수도권·충청·경북 …)은 사실의 '권역'에 나온 것만 씁니다.
 - '두 시간', '세 곳'처럼 사실에 없는 수를 붙이지 않습니다.
 - 주어진 사실은 모두 과거부터 지금까지의 관측입니다. '몇 시간 전'을 '몇 시간 후'로
   바꿔 쓰지 않고, 앞으로 어디로 갈지·얼마나 올지는 사실에 없으므로 쓰지 않습니다.
 - 방송 낭독용이라 한 줄에 8~12자로 짧게 끊어 씁니다.
+- 3~4줄이 한 묶음이 되게 하고, 묶음 사이는 빈 줄로 띄웁니다.
+- 지역을 한 덩어리로 뭉뚱그리지 말고, 사실에 나온 구역별로 나눠 말합니다.
+  구역마다 어디에 시간당 몇 mm인지 짚어 줍니다.
+- 지명은 '서산', '홍성'처럼 짧게 부릅니다. '충남 서산시'라고 하지 않습니다.
+- 시각은 '오전 11시 25분 현재'처럼 씁니다. 날짜는 넣지 않습니다.
 - 문장은 '~습니다' 또는 '~데요'로 끝냅니다.
+- 마지막은 주의가 필요한 점을 한 문장으로 짚으며 맺습니다.
 - 마지막 줄 끝에 //를 붙입니다.
 - 색상 범례를 활용해 '붉게 보이는', '보라색으로 보이는' 같은 표현을 자연스럽게 씁니다.
 - 예보는 단정하지 말고 '~로 보입니다', '~가능성이 있습니다' 수준으로 씁니다.
@@ -37,47 +43,62 @@ const SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스
 [색상 범례]
 붉은색 = 시간당 30mm 안팎, 보라색 = 시간당 50mm 안팎, 검은색 = 시간당 100mm 안팎`;
 
-const STYLE_SAMPLES = `[문체 예시 1]
+const STYLE_SAMPLES = `[문체 예시 1 - 이 구성과 호흡을 가장 가깝게 따르세요]
+레이더 영상으로
+현재 비구름 이동 모습
+확인해 보겠습니다.
+
+오전 11시 25분 현재,
+서해 중부에서 들어온 비구름이
+충남 서해안과 충청 내륙을
+지나고 있습니다.
+
+특히 서산과 당진 일대에는
+시간당 30mm 안팎,
+홍성 주변에는 시간당 50mm가 넘는
+강한 비구름이 발달해 있는데요.
+
+한 시간 전보다 강한 비구름이
+내륙 쪽으로 이동하면서
+천안과 충북 일부 지역에도
+비를 뿌리고 있습니다.
+
+경북 북부와 강원 남부를 지나
+동해안으로 빠져나가는
+강한 비구름도 확인됩니다.
+
+포항과 울산 인근에도
+붉게 보이는 비구름이
+국지적으로 발달하고 있습니다.
+
+수도권에도 산발적으로
+비구름이 지나고 있는 만큼,
+짧은 시간 빗줄기가 강해지는 곳이
+있어 주의가 필요합니다.//
+
+[문체 예시 2]
 레이더 영상을 통해
 비구름 이동 모습을
 확인해 보겠습니다.
+
 어젯밤부터
 강한 비구름이 충남 지역으로
 계속해서 유입되고 있는데요.
 검게 보이는 부분은
 시간당 100mm 안팎의
 극한 호우가 내리는 지역입니다.
+
 자정 이후로
 강한 비구름이
 태안과 서산, 당진 일대에
 걸쳐 있었는데요.
 1시간 전부터는
 상황이 달라졌습니다.
+
 비구름이 다소
 남쪽으로 내려오면서
 지금은 홍성과 예산, 아산 일대를
-지나고 있습니다.//
-
-[문체 예시 2]
-레이더 영상으로
-실시간 비구름 이동 모습
-확인해 보겠습니다.
-서해 남부 해상에서
-호남지방을 거쳐
-경북 지역까지
-비구름이 자리하고 있습니다.
-붉게 보이는
-강한 비구름이
-강약을 반복하며
-광주·전남 일대를
-지나고 있는데요.
-밤 10시 전후에도
-보성 등 일부 지역에는
-시간당 50mm의
-집중호우가 쏟아졌습니다.
-또, 서해 남부 해상에서
-검게 보이는 강한 비구름이
-내륙으로 유입되고 있습니다.//`;
+지나고 있습니다.//`;
 
 // Cloudflare Workers에는 process가 없다. 로컬 dev(node)에서만 있으므로
 // typeof로 감싸지 않으면 키가 비었을 때 그 줄에서 바로 예외(1101)가 난다.
@@ -93,10 +114,20 @@ const readApiKey = (context) => {
 
 // 사실에 적힌 지명만 쓰게 하려고, 프롬프트에 넣을 목록을 사실에서 그대로 뽑는다.
 const SEA_NAMES = ['서해상', '동해상', '남해상'];
+const AREA_NAMES = ['수도권', '강원', '충청', '전북', '전남', '경북', '경남', '제주'];
+
+// 사실 쪽에서 '충남 서산시'가 아니라 '서산'으로 주므로, 대조도 짧은 이름으로 한다.
+const shorten = (name) => {
+  const cut = name.replace(/(특별자치시|광역시|특별시|시|군|구)$/, '');
+  return cut.length >= 2 ? cut : name;
+};
+const SGG_SHORT = [...new Set(SGG_NAMES.map(shorten))];
+
 const extractAllowedPlaces = (facts) => {
   const found = new Set();
   SEA_NAMES.forEach((sea) => { if (facts.includes(sea)) found.add(sea); });
-  SGG_NAMES.forEach((name) => { if (facts.includes(name)) found.add(name); });
+  AREA_NAMES.forEach((area) => { if (facts.includes(area)) found.add(area); });
+  SGG_SHORT.forEach((name) => { if (facts.includes(name)) found.add(name); });
   return [...found];
 };
 
@@ -108,7 +139,7 @@ const GEO_FORM = /[가-힣]{2,4}(?:반도|해안|내륙|계곡|평야|고원|산
 // '다시'처럼 시로 끝나는 일반 낱말을 지명으로 잘못 잡지 않는다.
 const findForeignPlaces = (script, allowed) => {
   const allowedText = allowed.join(' ');
-  const foreign = SGG_NAMES.filter((name) => script.includes(name) && !allowedText.includes(name));
+  const foreign = SGG_SHORT.filter((name) => script.includes(name) && !allowedText.includes(name));
   const reshaped = [...new Set(script.match(GEO_FORM) ?? [])]
     .filter((word) => !allowedText.includes(word));
   return [...new Set([...foreign, ...reshaped])];
@@ -190,7 +221,15 @@ ${placeBlock}
     });
     const result = await response.json();
     if (!response.ok || result?.error) {
-      throw new Error(result?.error?.message || `기사 생성 실패 (${response.status})`);
+      const raw = result?.error?.message || `기사 생성 실패 (${response.status})`;
+      // 무료 한도(분당 20회)에 걸린 것은 고장이 아니라 잠깐 기다리면 되는 일이다.
+      if (response.status === 429 || /quota|rate limit/i.test(raw)) {
+        const seconds = Math.ceil(Number(/retry in ([\d.]+)s/i.exec(raw)?.[1] ?? 35));
+        const limited = new Error(`무료 사용 한도가 잠시 찼습니다. ${seconds}초쯤 뒤에 다시 만들어 주세요.`);
+        limited.status = 429;
+        throw limited;
+      }
+      throw new Error(raw);
     }
     const candidate = result?.candidates?.[0];
     const parts = candidate?.content?.parts ?? [];
@@ -240,7 +279,7 @@ ${placeBlock}
     });
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message || '기사 생성 중 오류가 발생했습니다.' }), {
-      status: 502,
+      status: error.status === 429 ? 429 : 502,
       headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' },
     });
   }

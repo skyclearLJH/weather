@@ -3,9 +3,9 @@ import { FileText, LoaderCircle, Play, RefreshCw, Square, X } from 'lucide-react
 
 // 방송에 쓸 만한 목소리만 추렸다. Neural2는 또렷하고 Chirp3-HD는 더 자연스럽다.
 const VOICE_OPTIONS = [
+  { id: 'ko-KR-Neural2-C', label: '남성 (또렷) · 기본' },
   { id: 'ko-KR-Neural2-A', label: '여성 A (또렷)' },
   { id: 'ko-KR-Neural2-B', label: '여성 B (또렷)' },
-  { id: 'ko-KR-Neural2-C', label: '남성 C (또렷)' },
   { id: 'ko-KR-Chirp3-HD-Aoede', label: '여성 (자연스러움)' },
   { id: 'ko-KR-Chirp3-HD-Leda', label: '여성 (차분함)' },
   { id: 'ko-KR-Chirp3-HD-Charon', label: '남성 (자연스러움)' },
@@ -20,15 +20,16 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
   const [status, setStatus] = useState('idle'); // idle | loading | ready | error
   const [error, setError] = useState('');
   const [meta, setMeta] = useState(null);
-  const [voice, setVoice] = useState('ko-KR-Neural2-A');
+  const [voice, setVoice] = useState('ko-KR-Neural2-C');
   const [speakingRate, setSpeakingRate] = useState(1);
   const [audioStatus, setAudioStatus] = useState('idle'); // idle | loading | playing | error
   const [audioError, setAudioError] = useState('');
   const [audioSeconds, setAudioSeconds] = useState(null);
   const audioRef = useRef(null);
   const audioUrlRef = useRef('');
+  const [waitSeconds, setWaitSeconds] = useState(null);
 
-  const generate = useCallback(async () => {
+  const generate = useCallback(async (isRetry = false) => {
     if (!facts) return;
     setStatus('loading');
     setError('');
@@ -50,6 +51,18 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
           `서버가 기사 대신 오류 페이지를 보냈습니다 (${response.status}). `
           + '개발 서버라면 재시작이, 배포본이라면 GEMINI_API_KEY 설정 확인이 필요합니다.',
         );
+      }
+      // 무료 한도는 잠깐 기다리면 풀린다. 사용자가 다시 누르게 하지 않고 한 번은 대신 기다린다.
+      if (response.status === 429 && !isRetry) {
+        const wait = Math.min(60, Number(/(\d+)초/.exec(payload?.error ?? '')?.[1] ?? 35));
+        setWaitSeconds(wait);
+        for (let left = wait; left > 0; left -= 1) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => { setTimeout(resolve, 1000); });
+          setWaitSeconds(left - 1);
+        }
+        setWaitSeconds(null);
+        return generate(true);
       }
       if (!response.ok) throw new Error(payload?.error || `기사 생성 실패 (${response.status})`);
       setScript(payload.script ?? '');
@@ -148,7 +161,7 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
         <span className="text-base font-black">레이더 기사 미리보기</span>
         <button
           type="button"
-          onClick={generate}
+          onClick={() => generate()}
           disabled={status === 'loading'}
           className="ml-auto flex h-9 items-center gap-1.5 rounded-md border border-white/20 px-3 text-xs font-black text-white/80 transition hover:bg-white/10 disabled:opacity-50"
         >
@@ -199,7 +212,9 @@ function ArticleDraftPanel({ facts, durationSeconds = 60, onClose }) {
           {status === 'loading' ? (
             <div className="flex items-center gap-2 py-8 text-sm font-bold text-white/70">
               <LoaderCircle className="h-4 w-4 animate-spin text-cyan-300" />
-              기사를 쓰는 중입니다…
+              {waitSeconds !== null
+                ? `무료 사용 한도가 잠시 찼습니다. ${waitSeconds}초 뒤 자동으로 다시 만듭니다…`
+                : '기사를 쓰는 중입니다…'}
             </div>
           ) : status === 'error' ? (
             <div className="py-6 text-sm font-semibold text-red-200">{error}</div>
