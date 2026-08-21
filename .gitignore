@@ -38,3 +38,8 @@ aws_day_*.txt
 *.njsproj
 *.sln
 *.sw?
+
+# wrangler 로컬 상태(miniflare 캐시/KV/R2)와 API 응답 받아본 임시 파일
+.wrangler/
+aws_temp_now_*.txt
+yeosan.txt
