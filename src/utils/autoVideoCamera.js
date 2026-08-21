@@ -4,40 +4,26 @@
 import provinces from '../data/map/krProvinces.json';
 import sggLabels from '../data/map/kr-sgg-labels-20260701.json';
 
-// 레이더 격자에서 가장 센 지점을 찾는다. 한 칸만 튄 값은 이상 에코일 수 있어
-// 주변까지 함께 센 값으로 고른다.
-export const findPeakPoint = ({ buckets, mappings, canvasWidth, canvasHeight, toLonLat }) => {
-  if (!buckets || !mappings) return null;
-  const step = 4;
-  let best = null;
-  let bestScore = 0;
-
-  for (let y = step; y < canvasHeight - step; y += step) {
-    for (let x = step; x < canvasWidth - step; x += step) {
-      const index = mappings[y * canvasWidth + x];
-      if (index < 0) continue;
-      const center = buckets[index] ?? 0;
-      if (center <= 0) continue;
-
-      // 주변 여덟 칸을 함께 더해, 좁게 튄 값보다 넓게 강한 곳을 고른다.
-      let score = center * 2;
-      for (let dy = -step; dy <= step; dy += step) {
-        for (let dx = -step; dx <= step; dx += step) {
-          if (dx === 0 && dy === 0) continue;
-          const near = mappings[(y + dy) * canvasWidth + (x + dx)];
-          if (near >= 0) score += buckets[near] ?? 0;
-        }
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        best = { x, y, bucket: center };
-      }
+// 시도마다 사각 범위를 미리 재 둔다. 육지 판정을 후보마다 하므로
+// 범위 밖이면 곧바로 걸러 내야 빠르다.
+const provinceBoxes = (provinces.features ?? []).map((feature) => {
+  let west = 180;
+  let east = -180;
+  let south = 90;
+  let north = -90;
+  const visit = (polygon) => {
+    for (const [x, y] of polygon[0]) {
+      if (x < west) west = x;
+      if (x > east) east = x;
+      if (y < south) south = y;
+      if (y > north) north = y;
     }
-  }
-  if (!best) return null;
-  const [lon, lat] = toLonLat(best.x, best.y);
-  return { lon, lat, bucket: best.bucket };
-};
+  };
+  const geometry = feature.geometry;
+  if (geometry?.type === 'Polygon') visit(geometry.coordinates);
+  else if (geometry?.type === 'MultiPolygon') geometry.coordinates.forEach(visit);
+  return { feature, west, east, south, north };
+});
 
 const ringContains = (ring, lon, lat) => {
   let inside = false;
@@ -54,6 +40,75 @@ const eachPolygon = (geometry, visit) => {
   if (!geometry) return;
   if (geometry.type === 'Polygon') visit(geometry.coordinates);
   else if (geometry.type === 'MultiPolygon') geometry.coordinates.forEach(visit);
+};
+
+// 지점이 육지(어느 시도) 안인지 본다. 바다면 null.
+export const provinceContaining = (lon, lat) => {
+  for (const box of provinceBoxes) {
+    if (lon < box.west || lon > box.east || lat < box.south || lat > box.north) continue;
+    let hit = false;
+    eachPolygon(box.feature.geometry, (polygon) => {
+      if (hit) return;
+      if (ringContains(polygon[0], lon, lat)
+        && !polygon.slice(1).some((hole) => ringContains(hole, lon, lat))) hit = true;
+    });
+    if (hit) return box.feature;
+  }
+  return null;
+};
+
+/**
+ * 레이더 격자에서 '육지 위' 가장 센 지점을 찾는다.
+ *
+ * 바다의 발달한 에코가 가장 셀 때가 많은데, 그쪽으로 줌인하면 아무도 살지 않는
+ * 바다를 비추게 된다. 그래서 센 곳을 여러 곳 추려 둔 뒤 육지인 것 중에서 고른다.
+ * 한 칸만 튄 값은 이상 에코일 수 있어 주변까지 함께 센 점수로 순위를 매긴다.
+ */
+export const findPeakPoint = ({
+  buckets, mappings, canvasWidth, canvasHeight, toLonLat, candidateCount = 240,
+}) => {
+  if (!buckets || !mappings) return null;
+  const step = 4;
+  // 점수 높은 순으로 후보를 조금만 들고 있는다(전부 모으면 무겁다).
+  const candidates = [];
+  let cutoff = 0;
+
+  for (let y = step; y < canvasHeight - step; y += step) {
+    for (let x = step; x < canvasWidth - step; x += step) {
+      const index = mappings[y * canvasWidth + x];
+      if (index < 0) continue;
+      const center = buckets[index] ?? 0;
+      if (center <= 0) continue;
+
+      let score = center * 2;
+      for (let dy = -step; dy <= step; dy += step) {
+        for (let dx = -step; dx <= step; dx += step) {
+          if (dx === 0 && dy === 0) continue;
+          const near = mappings[(y + dy) * canvasWidth + (x + dx)];
+          if (near >= 0) score += buckets[near] ?? 0;
+        }
+      }
+      if (candidates.length >= candidateCount && score <= cutoff) continue;
+
+      candidates.push({ x, y, score, bucket: center });
+      if (candidates.length > candidateCount * 2) {
+        candidates.sort((a, b) => b.score - a.score);
+        candidates.length = candidateCount;
+        cutoff = candidates[candidates.length - 1].score;
+      }
+    }
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.score - a.score);
+
+  // 센 순서대로 보면서 육지에 처음 닿는 지점을 고른다.
+  for (const candidate of candidates) {
+    const [lon, lat] = toLonLat(candidate.x, candidate.y);
+    const province = provinceContaining(lon, lat);
+    if (province) return { lon, lat, bucket: candidate.bucket, province };
+  }
+  // 육지에 비가 없으면 줌인할 곳이 없다고 본다.
+  return null;
 };
 
 // 지점이 속한 시도를 찾는다. 바다 위라면 가장 가까운 시도로 대신한다.

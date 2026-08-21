@@ -3124,8 +3124,9 @@ const RadarMapView = ({
         canvasHeight,
         toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
       });
+      // 육지에 비가 없으면 줌인하지 않고 전국 화면 그대로 끝낸다.
       if (peak) {
-        const province = findProvinceAt(peak.lon, peak.lat);
+        const province = peak.province ?? findProvinceAt(peak.lon, peak.lat);
         let zoom = 8;
         if (province) {
           const { bounds, fillRatio } = provinceExtent(province);
@@ -3143,6 +3144,9 @@ const RadarMapView = ({
         result.endLabel = [province?.properties?.name, place && `${place} 일대`]
           .filter(Boolean)
           .join(' · ');
+      } else {
+        result.endCamera = result.startCamera;
+        result.endLabel = '육지에 강한 비가 없어 전국 화면 그대로';
       }
     }
     return result;
