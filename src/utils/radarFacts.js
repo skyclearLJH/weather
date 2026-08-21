@@ -240,12 +240,19 @@ export const formatRadarFacts = (facts, extras = {}) => {
     lines.push(`- 비구름이 걸친 지역: ${where}`);
   }
 
+  // 라벨만 주면 '3시간 전'을 '3시간 후'로 뒤집어 쓰는 일이 생겨,
+  // 시제가 드러나는 완성 문장으로 준다.
   if (facts.movement) {
     const from = [facts.movement.fromSea, ...facts.movement.fromRegions].filter(Boolean).join(', ');
-    lines.push(`- 이동: ${facts.movement.directionName}쪽으로 시속 ${facts.movement.speedKmh}km`);
-    lines.push(`- ${facts.movement.spanHours}시간 전 위치: ${from || '자료 부족'}`);
+    lines.push(`- 비구름은 지금 ${facts.movement.directionName}쪽으로 시속 ${facts.movement.speedKmh}km로 이동하고 있습니다. (이동 방향은 '${facts.movement.directionName}쪽'으로 그대로 쓸 것)`);
+    if (from) lines.push(`- 이 비구름은 ${facts.movement.spanHours}시간 전에는 ${from}에 있었습니다. (지나온 과거 위치이며, 앞으로 갈 곳이 아님)`);
   }
-  if (facts.trend) lines.push(`- 강수 구역 변화: ${facts.trend}`);
+  if (facts.trend) {
+    const trendText = facts.trend === '확대'
+      ? '넓어졌습니다'
+      : facts.trend === '축소' ? '좁아졌습니다' : '비슷하게 유지되고 있습니다';
+    lines.push(`- 최근 몇 시간 동안 비구름이 걸친 범위는 ${trendText}. (지금까지의 변화이며 앞으로의 예보가 아님)`);
+  }
 
   if (extras.observations?.length) {
     lines.push(`- AWS 실측 1시간 최다: ${extras.observations.slice(0, 3).map((row) => `${row.name} ${row.value}mm`).join(', ')}`);
