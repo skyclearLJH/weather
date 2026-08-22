@@ -63,16 +63,20 @@ const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolv
 const AUDIO_BITRATE = 128_000;
 // 낭독이 끝나자마자 화면이 끊기면 급해 보인다. 뒤에 조금 여유를 둔다.
 const NARRATION_TAIL_SEC = 1.2;
-// 음성 영상 한 사이클의 짜임새. 관측을 돌리고 현재에서 멈춰 보여 준 뒤,
-// 초단기 예측을 돌리고 마지막에서 다시 멈춘다. 곧바로 되감으면 눈이 따라가지 못한다.
-const CYCLE_PLAN = [
-  { phase: 'observation', play: 10, hold: 3 },
-  { phase: 'forecast', play: 4, hold: 3 },
+// 음성 영상의 사이클 구성. 관측을 두 번 보여 준 뒤 마지막에 초단기 예측으로
+// 넘어가고, 예측 마지막 장면은 낭독이 끝날 때까지 그대로 둔다.
+const CYCLES = [
+  { phase: 'observation', play: 15, hold: 5 },
+  { phase: 'observation', play: 15, hold: 5, ranking: true },
+  // hold가 null이면 '끝까지'라는 뜻이다.
+  { phase: 'forecast', play: 10, hold: null },
 ];
-const CYCLE_SEC = CYCLE_PLAN.reduce((sum, step) => sum + step.play + step.hold, 0); // 20초
-const CYCLE_COUNT = 3;
-// 순위표는 두 번째 사이클에서만 띄운다.
-const RANKING_CYCLE_INDEX = 1;
+// 마지막 사이클의 정지를 뺀, 정해진 길이의 합(20 + 20 + 10 = 50초).
+const CYCLES_FIXED_SEC = CYCLES.reduce(
+  (sum, cycle) => sum + cycle.play + (cycle.hold ?? 0),
+  0,
+);
+
 
 // 원고를 음성으로 바꿔 오디오 버퍼로 돌려준다. 영상 길이를 여기서 나온
 // 실제 낭독 길이에 맞추므로, 글자 수로 어림하지 않는다.
@@ -274,7 +278,7 @@ function VideoExportMenu({
       // 음성을 넣으면 20초 사이클을 정해진 횟수만큼 돌린다. 낭독이 그보다 길면
       // 소리가 잘리지 않게 사이클을 더 돌린다.
       const totalSeconds = narrationBuffer
-        ? Math.max(CYCLE_SEC * CYCLE_COUNT, narrationBuffer.duration + NARRATION_TAIL_SEC)
+        ? Math.max(CYCLES_FIXED_SEC + NARRATION_TAIL_SEC, narrationBuffer.duration + NARRATION_TAIL_SEC)
         : durationSec;
 
       setProgressLabel('화면을 준비하는 중입니다…');
@@ -366,19 +370,24 @@ function VideoExportMenu({
       // 때가 되면 그대로 실행한다.
       const schedule = [];
       if (narrationBuffer) {
-        for (let cycle = 0; ; cycle += 1) {
-          let offset = cycle * CYCLE_SEC;
-          if (offset >= totalSeconds) break;
-          // 정해진 횟수를 채운 뒤 얼마 남지 않았으면 사이클을 새로 열지 않는다.
-          // 되감자마자 영상이 끝나면 어색해서, 마지막 화면을 그대로 두고 맺는다.
-          if (cycle >= CYCLE_COUNT && totalSeconds - offset < CYCLE_PLAN[0].play) break;
-          // 사이클이 시작할 때 화면을 처음으로 돌리고 순위표를 켜거나 끈다.
-          schedule.push({ at: offset * 1000, kind: 'cycle-start', cycle });
-          for (const step of CYCLE_PLAN) {
-            schedule.push({ at: offset * 1000, kind: 'phase', phase: step.phase, seconds: step.play });
-            offset += step.play + step.hold;
-          }
-        }
+        let offset = 0;
+        CYCLES.forEach((cycle, index) => {
+          schedule.push({
+            at: offset * 1000,
+            kind: 'cycle-start',
+            ranking: Boolean(cycle.ranking),
+            cameraSeconds: cycle.play,
+          });
+          schedule.push({
+            at: offset * 1000,
+            kind: 'phase',
+            phase: cycle.phase,
+            seconds: cycle.play,
+          });
+          // 마지막 사이클의 정지는 '끝까지'라 더할 시간이 없다.
+          offset += cycle.play + (cycle.hold ?? 0);
+          if (index === CYCLES.length - 1) offset = totalSeconds;
+        });
       }
       let scheduleIndex = 0;
       const totalFrames = Math.max(2, Math.round(totalSeconds * VIDEO_FRAME_RATE));
@@ -398,8 +407,8 @@ function VideoExportMenu({
           if (task.kind === 'cycle-start') {
             // 화면을 처음 위치로 돌리고, 관측이 도는 동안에만 줌인이 진행되게 한다.
             map?.jumpTo?.(startCamera);
-            map?.easeTo?.({ ...endCamera, duration: CYCLE_PLAN[0].play * 1000, essential: true });
-            onRankingTable?.(task.cycle === RANKING_CYCLE_INDEX);
+            map?.easeTo?.({ ...endCamera, duration: task.cameraSeconds * 1000, essential: true });
+            onRankingTable?.(task.ranking);
             rankingTouched = true;
           } else if (task.kind === 'phase') {
             onCyclePhase?.({
@@ -573,11 +582,10 @@ function VideoExportMenu({
             {withNarration ? (
               <div className="col-span-2 -mt-1 space-y-1 text-[11px] font-semibold leading-relaxed text-white/45">
                 <div>
-                  한 사이클은 관측 {CYCLE_PLAN[0].play}초 · 현재에서 {CYCLE_PLAN[0].hold}초 정지 ·
-                  초단기 예측 {CYCLE_PLAN[1].play}초 · 끝에서 {CYCLE_PLAN[1].hold}초 정지로
-                  {CYCLE_SEC}초이고, {CYCLE_COUNT}번 돌아 {CYCLE_SEC * CYCLE_COUNT}초입니다.
+                  1·2사이클은 레이더 {CYCLES[0].play}초 재생 + 현재에서 {CYCLES[0].hold}초 정지,
+                  3사이클은 초단기 예측 {CYCLES[2].play}초 재생 뒤 마지막 장면을 끝까지 둡니다.
                   두 번째 사이클에서만 시간당 강수량 순위표가 나옵니다.
-                  낭독이 더 길면 소리가 잘리지 않게 사이클을 더 돌립니다.
+                  영상 길이는 낭독에 맞춰집니다.
                 </div>
                 <div className="text-cyan-200/70">
                   시각은 3시간 전 ~ 1시간 뒤, 시작 화면은 전국,

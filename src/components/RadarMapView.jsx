@@ -3242,6 +3242,16 @@ const RadarMapView = ({
         canvasHeight,
         toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
       });
+      // 원고가 언급할 강수대들. 여러 곳으로 흩어져 있으면 한 곳만 크게 잡을 수 없다.
+      const spread = buildRadarFacts({
+        frames: [{ validTime: latest.validTime, buckets }],
+        mappings: mappings.radarMap,
+        canvasWidth: CANVAS_WIDTH,
+        canvasHeight,
+        toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
+        bucketToMm: (bucket) => bucketLowerValue(bucket),
+      })?.clusters ?? [];
+
       // 육지에 비가 없으면 줌인하지 않고 전국 화면 그대로 끝낸다.
       if (peak) {
         const province = peak.province ?? findProvinceAt(peak.lon, peak.lat);
@@ -3251,17 +3261,53 @@ const RadarMapView = ({
           const fit = map.cameraForBounds(bounds, { padding: 0 });
           if (fit) zoom = zoomForAreaRatio(fit.zoom, fillRatio, 0.1);
         }
+        let center = [peak.lon, peak.lat];
+        let label = null;
+
+        // 강수대가 두 곳 이상이면 그 전부가 화면에 들어오도록 덜 들어간다.
+        // 한 곳만 크게 잡으면 나머지 지역이 화면 밖으로 밀려난다.
+        const points = spread
+          .map((cluster) => cluster.centroid)
+          .filter((point) => Number.isFinite(point?.lon) && Number.isFinite(point?.lat));
+        if (points.length >= 2) {
+          const lons = points.map((point) => point.lon);
+          const lats = points.map((point) => point.lat);
+          // 가장자리에 딱 붙지 않게 여유를 둔다.
+          const margin = 0.25;
+          const spreadBounds = [
+            [Math.min(...lons) - margin, Math.min(...lats) - margin],
+            [Math.max(...lons) + margin, Math.max(...lats) + margin],
+          ];
+          const fitAll = map.cameraForBounds(spreadBounds, { padding: 40 });
+          if (fitAll) {
+            // 둘 중 더 멀리 물러난 쪽을 쓴다.
+            zoom = Math.min(zoom, fitAll.zoom);
+            center = [
+              fitAll.center.lng ?? fitAll.center[0],
+              fitAll.center.lat ?? fitAll.center[1],
+            ];
+          }
+          const names = spread
+            .map((cluster) => cluster.places?.[0])
+            .filter(Boolean)
+            .slice(0, 3);
+          if (names.length) label = `${names.join(' · ')} 일대가 함께 보이게`;
+        }
+
         result.endCamera = {
-          center: [peak.lon, peak.lat],
+          center,
           // 지도 자체의 한계를 넘지 않게 가둔다.
           zoom: Math.min(map.getMaxZoom(), Math.max(map.getMinZoom(), zoom)),
           pitch: 0,
           bearing: 0,
         };
-        const place = nearestPlaceName(peak.lon, peak.lat);
-        result.endLabel = [province?.properties?.name, place && `${place} 일대`]
-          .filter(Boolean)
-          .join(' · ');
+        if (!label) {
+          const place = nearestPlaceName(peak.lon, peak.lat);
+          label = [province?.properties?.name, place && `${place} 일대`]
+            .filter(Boolean)
+            .join(' · ');
+        }
+        result.endLabel = label;
       } else {
         result.endCamera = result.startCamera;
         result.endLabel = '육지에 강한 비가 없어 전국 화면 그대로';
