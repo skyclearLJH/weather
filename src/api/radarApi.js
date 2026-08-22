@@ -54,6 +54,29 @@ export const RADAR_GRID = {
 // 렌더링·캐시 메모리를 줄이기 위한 격자 축소 배율(2 → 1km 해상도)
 export const RADAR_DOWNSAMPLE = 2;
 
+// 500m 네 칸을 1km 한 칸으로 합칠 때의 방식.
+//   'mean' — 네 칸 평균(강수 없는 칸은 0으로 셈). 기상청 1km 산출물에 가깝다.
+//   'max'  — 네 칸 최댓값. 2026-08-22 이전 동작.
+//
+// 최댓값을 쓰면 강수 격자의 37%가 한 등급 이상 높게 칠해지고, 셀수록 심해져
+// 50mm 이상 구역이 1.34배로 부풀었다(실측 비교). 화면이 기상청보다 붉게 보이던
+// 원인이라 평균으로 바꿨다.
+//
+// 되돌리려면 이 값을 'max'로 두면 된다. 재빌드 없이 비교하려면 주소 끝에
+// ?radarPool=max 를 붙이면 그 화면에서만 옛 방식으로 그린다.
+export const RADAR_DOWNSAMPLE_MODE = 'mean';
+
+const readPoolOverride = () => {
+  try {
+    if (typeof window === 'undefined') return null;
+    const value = new URLSearchParams(window.location.search).get('radarPool');
+    return value === 'max' || value === 'mean' ? value : null;
+  } catch {
+    return null;
+  }
+};
+const POOL_MODE = readPoolOverride() ?? RADAR_DOWNSAMPLE_MODE;
+
 // --- 강수 팔레트 (기상청 분포도 범례에서 추출, mm/h 미만 경계 오름차순) ---
 export const RAIN_PALETTE = [
   { min: 0.1, color: [0, 200, 255] },
@@ -230,16 +253,20 @@ export const fetchRadarFrame = async (tm, options = {}) => {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       let maxValue = -30000;
+      let sum = 0;
+      let counted = 0;
       for (let dy = 0; dy < scale; dy++) {
         const rowBase = (y * scale + dy) * nx + x * scale;
         for (let dx = 0; dx < scale; dx++) {
           const value = grid[rowBase + dx];
-          if (value > maxValue) {
-            maxValue = value;
-          }
+          if (value > maxValue) maxValue = value;
+          // 음수는 관측영역 밖(-30000)이거나 무강수(-25000)다. 평균에서는 0으로 센다.
+          if (value > 0) sum += value;
+          counted += 1;
         }
       }
-      buckets[y * width + x] = maxValue > 0 ? rainBucket(maxValue / 100) : 0;
+      const pooled = POOL_MODE === 'max' ? maxValue : (counted > 0 ? sum / counted : 0);
+      buckets[y * width + x] = pooled > 0 ? rainBucket(pooled / 100) : 0;
     }
   }
 

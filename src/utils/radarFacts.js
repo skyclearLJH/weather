@@ -213,7 +213,12 @@ const clusterCells = (cells, cellDeg = 0.2) => {
   return groups.sort((a, b) => b.length - a.length);
 };
 
-// 덩어리 하나를 기사에 쓸 수 있는 형태로. 이름은 짧게, 세기는 그 덩어리의 최고값으로.
+// 덩어리를 대표하는 세기를 고를 백분위. 최고값을 쓰면 몇 화소짜리 첨두가
+// 그 지역 전체의 세기인 것처럼 들린다. 0.9는 '그 지역에서 센 편'을 가리킨다.
+// 이전처럼 최고값을 쓰려면 1로 두면 된다.
+const CLUSTER_INTENSITY_PERCENTILE = 0.9;
+
+// 덩어리 하나를 기사에 쓸 수 있는 형태로. 이름은 짧게, 세기는 대표 백분위로.
 const describeCluster = (cells, bucketToMm) => {
   let lonSum = 0;
   let latSum = 0;
@@ -224,6 +229,16 @@ const describeCluster = (cells, bucketToMm) => {
     if (cell.bucket > maxBucket) maxBucket = cell.bucket;
   });
   const centroid = { lon: lonSum / cells.length, lat: latSum / cells.length };
+
+  // 대표 세기: 낮은 값부터 줄 세워 정해진 자리의 값을 고른다.
+  const sortedBuckets = cells.map((cell) => cell.bucket).sort((left, right) => left - right);
+  const pickAt = Math.min(
+    sortedBuckets.length - 1,
+    Math.floor(sortedBuckets.length * CLUSTER_INTENSITY_PERCENTILE),
+  );
+  const representativeBucket = CLUSTER_INTENSITY_PERCENTILE >= 1
+    ? maxBucket
+    : sortedBuckets[pickAt];
 
   const counter = new Map();
   const areaCounter = new Map();
@@ -249,7 +264,10 @@ const describeCluster = (cells, bucketToMm) => {
     area,
     areas,
     sea: places.length ? null : seaSideOf(centroid),
-    maxMm: toBroadcastMm(bucketToMm(maxBucket)),
+    // 기사에 읽히는 값. 최고값이 아니라 대표 백분위다.
+    maxMm: toBroadcastMm(bucketToMm(representativeBucket)),
+    // 그 덩어리에서 가장 셌던 값. 필요하면 '최대'라고 밝혀 쓸 수 있게 함께 준다.
+    peakMm: toBroadcastMm(bucketToMm(maxBucket)),
     cellCount: cells.length,
     centroid,
     // 관측소 매칭 때만 쓴다. attachNearbyObservations가 API 전송 전에 제거한다.
