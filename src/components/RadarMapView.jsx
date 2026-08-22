@@ -3139,7 +3139,7 @@ const RadarMapView = ({
   const currentFrame = frames[frameIndex];
 
   // 화면에 그려진 레이더 프레임에서 기사용 '관측 사실'을 만든다.
-  // 과거 프레임은 이미 캐시에 있으므로 추가 통신 없이 이동·추세까지 계산된다.
+  // 과거 프레임은 이미 캐시에 있으므로 추가 통신 없이 강도 경향까지 계산된다.
   const handleBuildArticleFacts = useCallback(async () => {
     const mappings = mappingsRef.current;
     if (!mappings || frames.length === 0) {

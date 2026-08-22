@@ -255,21 +255,31 @@ const describeCluster = (cells, bucketToMm) => {
     : sortedBuckets[pickAt];
 
   const counter = new Map();
+  const intensityByPlace = new Map();
   const areaCounter = new Map();
-  cells.forEach(({ lon, lat }) => {
+  cells.forEach(({ lon, lat, bucket }) => {
     const region = nearestRegion(lon, lat);
     if (!region) return;
     const short = region.farFromCenter ? `${SHORT_NAME(region.sgg)} 인근` : SHORT_NAME(region.sgg);
     counter.set(short, (counter.get(short) ?? 0) + 1);
+    const intensities = intensityByPlace.get(short) ?? [];
+    intensities.push(bucket);
+    intensityByPlace.set(short, intensities);
     const area = AREA_BY_SIDO[region.sido];
     if (area) areaCounter.set(area, (areaCounter.get(area) ?? 0) + 1);
   });
   const byCount = (a, b) => b[1] - a[1];
   const ranked = [...counter.entries()].sort(byCount).map(([name]) => name);
   const exact = new Set(ranked.filter((name) => !name.endsWith(' 인근')));
-  const places = ranked
-    .filter((name) => !(name.endsWith(' 인근') && exact.has(name.replace(' 인근', ''))))
-    .slice(0, 3);
+  const distinctPlaces = ranked
+    .filter((name) => !(name.endsWith(' 인근') && exact.has(name.replace(' 인근', ''))));
+  const places = distinctPlaces.slice(0, 3);
+  // 초단기예측은 시각별로 대표 지명이 달라질 수 있다. 강수 핵 전체의 대표값만
+  // 남기지 않고 주요 시군별 상위 10% 강도도 보존해 초반과 한 시간 뒤를 비교한다.
+  const placeDetails = distinctPlaces.slice(0, 6).map((place) => ({
+    place,
+    maxMm: toBroadcastMm(bucketToMm(percentile(intensityByPlace.get(place) ?? [], 0.9))),
+  }));
   const areas = [...areaCounter.entries()].sort(byCount).map(([name]) => name).slice(0, 3);
   const area = areas[0] ?? null;
 
@@ -282,6 +292,7 @@ const describeCluster = (cells, bucketToMm) => {
     maxMm: toBroadcastMm(bucketToMm(representativeBucket)),
     // 그 덩어리에서 가장 셌던 값. 필요하면 '최대'라고 밝혀 쓸 수 있게 함께 준다.
     peakMm: toBroadcastMm(bucketToMm(maxBucket)),
+    placeDetails,
     cellCount: cells.length,
     centroid,
     bounds: { west, east, south, north },
@@ -549,8 +560,14 @@ export const buildForecastFacts = ({
       ? clusterCells(summary.cells)
           .filter((cells) => cells.length >= 5)
           .map((cells) => describeCluster(cells, bucketToMm))
+          // 예측 강수 핵에는 관측소를 붙이지 않으므로 큰 격자 목록은 전송하지 않는다.
+          .map((cluster) => {
+            Reflect.deleteProperty(cluster, 'footprint');
+            return cluster;
+          })
           .sort((left, right) => right.maxMm - left.maxMm || right.cellCount - left.cellCount)
-          .slice(0, 3)
+          // 후반에 새로 상위권으로 드는 강수 핵이 초반 3개에 가려지지 않게 여유를 둔다.
+          .slice(0, 5)
       : [];
     return { validAt: frame.validTime, clusters };
   });

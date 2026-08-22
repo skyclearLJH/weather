@@ -86,6 +86,15 @@ const sanitizeCluster = (cluster) => {
   const lon = finite(cluster?.centroid?.lon, 120, 134);
   const lat = finite(cluster?.centroid?.lat, 30, 44);
   const places = (cluster?.places ?? []).map((place) => cleanText(place, 30)).filter(Boolean).slice(0, 3);
+  const placeDetails = (cluster?.placeDetails ?? [])
+    .map((detail) => {
+      const place = cleanText(detail?.place, 30);
+      const detailMaxMm = finite(detail?.maxMm, 0, 300);
+      return place && detailMaxMm !== null ? { place, maxMm: detailMaxMm } : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.maxMm - left.maxMm)
+    .slice(0, 6);
   const areas = (cluster?.areas ?? [cluster?.area])
     .map((area) => cleanText(area, 20))
     .filter(Boolean)
@@ -101,6 +110,9 @@ const sanitizeCluster = (cluster) => {
     area: areas[0] ?? null,
     areas,
     maxMm,
+    placeDetails: placeDetails.length > 0
+      ? placeDetails
+      : places.map((place) => ({ place, maxMm })),
     centroid: { lon, lat },
     observations,
     observation: observations[0] ?? null,
@@ -168,22 +180,7 @@ const forecastAmountText = (summary) => {
   return `${summary.value}밀리미터 안팎으로`;
 };
 
-const toRad = (degrees) => (degrees * Math.PI) / 180;
-
-const distanceKm = (left, right) => {
-  const dLat = toRad(right.lat - left.lat);
-  const dLon = toRad(right.lon - left.lon);
-  const a = Math.sin(dLat / 2) ** 2
-    + Math.cos(toRad(left.lat)) * Math.cos(toRad(right.lat)) * Math.sin(dLon / 2) ** 2;
-  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
-};
-
-const samePlace = (left, right) => left.replace(/\s*인근$/, '') === right.replace(/\s*인근$/, '');
-
-const forecastMatchesFocus = (item, focusCores) => focusCores.some((core) => (
-  item.places.some((place) => core.places.some((focusPlace) => samePlace(place, focusPlace)))
-  || distanceKm(item.centroid, core.centroid) <= 70
-));
+const placeKey = (place) => place.replace(/\s*인근$/, '');
 
 const intensityTier = (mm) => {
   if (mm >= 100) return 5;
@@ -193,17 +190,22 @@ const intensityTier = (mm) => {
   return mm > 0 ? 1 : 0;
 };
 
-const forecastTrend = (items) => {
-  const directions = items.map((item) => {
-    const tierGap = intensityTier(item.lastMm) - intensityTier(item.firstMm);
-    if (tierGap >= 1 || item.lastMm - item.firstMm >= 20) return 'stronger';
-    if (tierGap <= -1 || item.firstMm - item.lastMm >= 20) return 'weaker';
-    return null;
-  }).filter(Boolean);
-  if (directions.length === 0) return null;
-  if (directions.every((direction) => direction === 'weaker')) return 'weaker';
-  if (directions.every((direction) => direction === 'stronger')) return 'stronger';
-  return null;
+const phaseLocationsOfSnapshot = (snapshot) => {
+  const byPlace = new Map();
+  (snapshot?.clusters ?? []).forEach((cluster) => {
+    cluster.placeDetails.forEach((detail) => {
+      const key = placeKey(detail.place);
+      const existing = byPlace.get(key);
+      if (!existing || detail.maxMm > existing.maxMm) byPlace.set(key, detail);
+    });
+  });
+  return [...byPlace.values()].sort((left, right) => right.maxMm - left.maxMm).slice(0, 20);
+};
+
+const selectImportantForecastLocations = (phase) => {
+  const locations = phase?.locations ?? [];
+  const strong = locations.filter((location) => location.maxMm >= MIN_CORROBORATED_RADAR_MM);
+  return (strong.length > 0 ? strong : locations).slice(0, 3);
 };
 
 const buildObservationGroups = (landCores) => {
@@ -234,21 +236,61 @@ const buildObservationGroups = (landCores) => {
   }).filter(Boolean);
 };
 
-const buildForecastGroups = (summary, focusCores) => {
-  const selected = summary
-    .filter((item) => focusCores.length === 0 || forecastMatchesFocus(item, focusCores))
-    .slice(0, 3);
-  if (selected.length === 0) return [];
-  const maxValue = Math.max(...selected.map((item) => item.maxMm));
-  const high = selected.filter((item) => maxValue - item.maxMm <= 20);
-  const low = selected.filter((item) => maxValue - item.maxMm > 20);
-  return [high, low].filter((items) => items.length > 0).map((items) => ({
-    places: [...new Set(items.flatMap((item) => item.places))].slice(0, 3),
-    firstValidAt: items.map((item) => item.firstValidAt).sort()[0],
-    lastValidAt: items.map((item) => item.lastValidAt).sort().at(-1),
-    amount: intensitySummary(items.map((item) => item.maxMm)),
-    trend: forecastTrend(items),
-  }));
+const buildForecastGroups = (forecast) => {
+  const earlyLocations = selectImportantForecastLocations(forecast.phases?.early);
+  const lateLocations = selectImportantForecastLocations(forecast.phases?.late);
+  if (earlyLocations.length === 0 && lateLocations.length === 0) return [];
+
+  const earlyKeys = new Set(earlyLocations.map((location) => placeKey(location.place)));
+  const lateAllByPlace = new Map(
+    (forecast.phases?.late?.locations ?? []).map((location) => [placeKey(location.place), location]),
+  );
+  const weakeningPlaces = earlyLocations.filter((early) => {
+    const late = lateAllByPlace.get(placeKey(early.place));
+    if (!late) {
+      // 후반 자료에 충분한 지역이 잡혔는데 초반의 매우 강한 지역이 사라졌다면
+      // 더는 주요 강수 지역으로 남지 않은 것으로 본다.
+      return early.maxMm >= 50 && (forecast.phases?.late?.locations.length ?? 0) >= 6;
+    }
+    const tierGap = intensityTier(late.maxMm) - intensityTier(early.maxMm);
+    return tierGap <= -1 || early.maxMm - late.maxMm >= 20;
+  }).map((location) => location.place);
+  const continuingPlaces = lateLocations
+    .filter((location) => earlyKeys.has(placeKey(location.place)) && location.maxMm >= 30)
+    .map((location) => location.place);
+  const newLatePlaces = lateLocations
+    .filter((location) => !earlyKeys.has(placeKey(location.place)))
+    .map((location) => location.place);
+
+  const [strongestLate, secondLate] = lateLocations;
+  const distinctStrongest = strongestLate?.maxMm >= 50 && (
+    !secondLate
+    || intensityTier(strongestLate.maxMm) > intensityTier(secondLate.maxMm)
+    || strongestLate.maxMm - secondLate.maxMm >= 20
+  ) ? strongestLate : null;
+
+  return [
+    earlyLocations.length > 0 ? {
+      phase: 'early',
+      validAt: forecast.phases.early.validAt,
+      minutesAhead: forecast.phases.early.minutesAhead,
+      locations: earlyLocations,
+      places: earlyLocations.map((location) => location.place),
+      amount: intensitySummary(earlyLocations.map((location) => location.maxMm)),
+    } : null,
+    lateLocations.length > 0 ? {
+      phase: 'late',
+      validAt: forecast.phases.late.validAt,
+      minutesAhead: forecast.phases.late.minutesAhead,
+      locations: lateLocations,
+      places: lateLocations.map((location) => location.place),
+      amount: intensitySummary(lateLocations.map((location) => location.maxMm)),
+      weakeningPlaces,
+      continuingPlaces,
+      newPlaces: newLatePlaces,
+      strongest: distinctStrongest,
+    } : null,
+  ].filter(Boolean);
 };
 
 const intensityTrendText = (direction) => ({
@@ -257,6 +299,18 @@ const intensityTrendText = (direction) => ({
   fluctuating: '비의 강도가 강해졌다 약해지기를 반복하고 있습니다',
   steady: '비의 강도가 비슷한 수준을 유지하고 있습니다',
 }[direction] ?? '');
+
+const forecastLeadText = (minutesAhead) => {
+  if (minutesAhead >= 55) return '한 시간 뒤에는';
+  const rounded = Math.max(10, Math.round(minutesAhead / 10) * 10);
+  return `${rounded}분 뒤에는`;
+};
+
+const forecastPointText = (minutesAhead) => {
+  if (minutesAhead >= 55) return '한 시간 뒤';
+  const rounded = Math.max(10, Math.round(minutesAhead / 10) * 10);
+  return `${rounded}분 뒤`;
+};
 
 const sanitizeForecast = (forecast, observedAt) => {
   if (!forecast?.usable) {
@@ -267,6 +321,7 @@ const sanitizeForecast = (forecast, observedAt) => {
       horizonMinutes: finite(forecast?.horizonMinutes, 0, 90),
       snapshots: [],
       summary: [],
+      phases: { early: null, late: null },
     };
   }
 
@@ -274,30 +329,50 @@ const sanitizeForecast = (forecast, observedAt) => {
   const snapshots = (forecast.snapshots ?? []).map((snapshot) => {
     const validAt = isoDate(snapshot?.validAt);
     if (!validAt || new Date(validAt).getTime() > end) return null;
-    const clusters = (snapshot?.clusters ?? []).map(sanitizeCluster).filter(Boolean).slice(0, 3);
+    const clusters = (snapshot?.clusters ?? []).map(sanitizeCluster).filter(Boolean).slice(0, 5);
     return { validAt, clusters };
   }).filter(Boolean);
 
-  // 같은 지명이 여러 예측 시각에 반복되면 가장 강한 값과 첫 등장 시각만 남긴다.
+  const observedMs = new Date(observedAt).getTime();
+  const timedSnapshots = snapshots.map((snapshot) => ({
+    snapshot,
+    minutesAhead: Math.round((new Date(snapshot.validAt).getTime() - observedMs) / 60000),
+  })).filter(({ minutesAhead }) => minutesAhead > 0 && minutesAhead <= 60);
+  const earlyTimed = timedSnapshots
+    .filter(({ minutesAhead }) => minutesAhead <= 30)
+    .sort((left, right) => Math.abs(left.minutesAhead - 20) - Math.abs(right.minutesAhead - 20))[0]
+    ?? timedSnapshots[0];
+  const lateTimed = timedSnapshots
+    .filter(({ minutesAhead }) => minutesAhead >= 40)
+    .sort((left, right) => right.minutesAhead - left.minutesAhead)[0]
+    ?? timedSnapshots.at(-1);
+  const toPhase = (timed) => timed ? {
+    validAt: timed.snapshot.validAt,
+    minutesAhead: timed.minutesAhead,
+    locations: phaseLocationsOfSnapshot(timed.snapshot),
+  } : null;
+  const phases = { early: toPhase(earlyTimed), late: toPhase(lateTimed) };
+
+  // 같은 지명의 시군별 강도를 시각에 따라 추적한다. 강수 핵 전체 대표값만
+  // 쓰면 한 시간 뒤 새롭게 강해지는 지역이 초반 최댓값에 가려질 수 있다.
   const summaryByPlace = new Map();
   snapshots.forEach((snapshot) => {
-    snapshot.clusters.forEach((cluster) => {
-      const key = cluster.places[0];
+    phaseLocationsOfSnapshot(snapshot).forEach((location) => {
+      const key = placeKey(location.place);
       const existing = summaryByPlace.get(key);
       if (!existing) {
         summaryByPlace.set(key, {
-          places: cluster.places,
-          centroid: cluster.centroid,
+          places: [location.place],
           firstValidAt: snapshot.validAt,
           lastValidAt: snapshot.validAt,
-          firstMm: cluster.maxMm,
-          lastMm: cluster.maxMm,
-          maxMm: cluster.maxMm,
+          firstMm: location.maxMm,
+          lastMm: location.maxMm,
+          maxMm: location.maxMm,
         });
       } else {
         existing.lastValidAt = snapshot.validAt;
-        existing.lastMm = cluster.maxMm;
-        existing.maxMm = Math.max(existing.maxMm, cluster.maxMm);
+        existing.lastMm = location.maxMm;
+        existing.maxMm = Math.max(existing.maxMm, location.maxMm);
       }
     });
   });
@@ -308,9 +383,10 @@ const sanitizeForecast = (forecast, observedAt) => {
     sourceAt: isoDate(forecast.sourceAt),
     horizonMinutes: finite(forecast.horizonMinutes, 0, 90),
     snapshots,
+    phases,
     summary: [...summaryByPlace.values()]
       .sort((left, right) => right.maxMm - left.maxMm)
-      .slice(0, 3),
+      .slice(0, 6),
   };
 };
 
@@ -338,9 +414,7 @@ export const buildRadarScriptAnalysis = (input) => {
   const observationGroups = buildObservationGroups(
     corroboratedEntries.map(({ core }) => core),
   );
-  const forecastGroups = forecast.available
-    ? buildForecastGroups(forecast.summary, focusedCores)
-    : [];
+  const forecastGroups = forecast.available ? buildForecastGroups(forecast) : [];
   const facts = [];
   const observedText = kstTimeText(observedAt);
 
@@ -385,16 +459,49 @@ export const buildRadarScriptAnalysis = (input) => {
   });
 
   if (forecast.available && forecastGroups.length > 0) {
-    forecastGroups.forEach((group) => {
+    const earlyForecast = forecastGroups.find((group) => group.phase === 'early');
+    const lateForecast = forecastGroups.find((group) => group.phase === 'late');
+    if (earlyForecast) {
       facts.push({
-        type: 'forecast-group',
-        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 앞으로 한 시간 동안 ${group.places.join(', ')} 부근에 시간당 ${forecastAmountText(group.amount)} 추정되는 비구름이 나타날 가능성이 있습니다.${group.trend === 'weaker' ? ' 다만 이들 지역에서도 비의 강도는 점차 약해질 것으로 예상됩니다.' : group.trend === 'stronger' ? ' 이들 지역에서는 비의 강도가 점차 강해질 것으로 예상됩니다.' : ''}`,
+        type: 'forecast-early',
+        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 ${forecastPointText(earlyForecast.minutesAhead)} ${earlyForecast.places.join(', ')} 부근에 시간당 ${forecastAmountText(earlyForecast.amount)} 추정되는 비구름이 나타날 가능성이 있습니다.`,
       });
-    });
+    }
+    if (lateForecast?.weakeningPlaces.length > 0) {
+      facts.push({
+        type: 'forecast-change',
+        text: `초반에 강한 비가 예상된 ${lateForecast.weakeningPlaces.join(', ')} 부근은 ${forecastLeadText(lateForecast.minutesAhead)} 비의 강도가 다소 약해질 것으로 예상됩니다.`,
+      });
+    }
+    if (lateForecast) {
+      const strongestKey = lateForecast.strongest ? placeKey(lateForecast.strongest.place) : null;
+      const otherLocations = strongestKey
+        ? lateForecast.locations.filter((location) => placeKey(location.place) !== strongestKey)
+        : lateForecast.locations;
+      const continuingKeys = new Set(lateForecast.continuingPlaces.map(placeKey));
+      const continuingLocations = otherLocations
+        .filter((location) => continuingKeys.has(placeKey(location.place)));
+      const laterLocations = otherLocations
+        .filter((location) => !continuingKeys.has(placeKey(location.place)));
+      let lateText = '';
+      if (continuingLocations.length > 0 && laterLocations.length > 0) {
+        const continuingLead = forecastLeadText(lateForecast.minutesAhead).replace(/에는$/, '에도');
+        lateText = `${continuingLead} ${continuingLocations.map((location) => location.place).join(', ')} 부근에는 강한 비가 예상되고, ${laterLocations.map((location) => location.place).join(', ')} 부근에도 시간당 ${forecastAmountText(intensitySummary(laterLocations.map((location) => location.maxMm)))} 추정되는 비구름이 나타날 가능성이 있습니다.`;
+      } else if (continuingLocations.length > 0) {
+        const continuingLead = forecastLeadText(lateForecast.minutesAhead).replace(/에는$/, '에도');
+        lateText = `${continuingLead} ${continuingLocations.map((location) => location.place).join(', ')} 부근에는 강한 비가 예상됩니다.`;
+      } else if (laterLocations.length > 0) {
+        lateText = `${forecastLeadText(lateForecast.minutesAhead)} ${laterLocations.map((location) => location.place).join(', ')} 부근에 시간당 ${forecastAmountText(intensitySummary(laterLocations.map((location) => location.maxMm)))} 추정되는 비구름이 나타날 가능성이 있습니다.`;
+      }
+      if (lateForecast.strongest) {
+        lateText += `${lateText ? ' ' : forecastLeadText(lateForecast.minutesAhead) + ' '}특히 ${lateForecast.strongest.place} 부근은 시간당 ${forecastAmountText(intensitySummary([lateForecast.strongest.maxMm]))} 추정되는 비구름이 이 시각 가장 강할 것으로 예상됩니다.`;
+      }
+      facts.push({ type: 'forecast-late', text: lateText });
+    }
   }
 
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     observedAt,
     observedLabel: observedText,
     thresholdMmPerHour: 10,
