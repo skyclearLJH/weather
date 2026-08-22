@@ -447,8 +447,8 @@ function VideoExportMenu({
       stream?.getTracks().forEach((track) => track.stop());
       if (sourceVideo) sourceVideo.srcObject = null;
       if (cleanCaptureActive) document.body.classList.remove('weather-video-capture');
-      // 녹화가 켰던 순위표는 원래대로 꺼 둔다.
-      if (rankingTouched) onRankingTable?.(false);
+      // 녹화가 만졌던 순위표는 켜기 전 상태로 되돌린다.
+      if (rankingTouched) onRankingTable?.(null);
       setIsRecording(false);
       setRecordingProgress(0);
       setProgressLabel('');

@@ -3083,8 +3083,20 @@ const RadarMapView = ({
   );
 
   // 두 번째 사이클에서만 순위표를 띄우기 위해 영상 쪽에서 켜고 끈다.
+  // null이 오면 녹화 전에 사용자가 켜 두었던 상태로 되돌린다.
+  const rankingBeforeVideoRef = useRef(null);
   const handleVideoRankingTable = useCallback((visible) => {
-    setShowHourlyTop5(Boolean(visible));
+    if (visible === null) {
+      if (rankingBeforeVideoRef.current !== null) {
+        setShowHourlyTop5(rankingBeforeVideoRef.current);
+        rankingBeforeVideoRef.current = null;
+      }
+      return;
+    }
+    setShowHourlyTop5((previous) => {
+      if (rankingBeforeVideoRef.current === null) rankingBeforeVideoRef.current = previous;
+      return Boolean(visible);
+    });
   }, []);
 
   // 크롬은 화면 공유 선택창을 띄우면서 네이티브 전체화면을 강제로 푼다.
@@ -5255,10 +5267,11 @@ const RadarMapView = ({
               </div>
             ) : null}
 
-            {/* 레이더: 시간당 강수량 최다 5지점 (체크박스로 표시) — 누적 표와 같은 위치·형태 */}
+            {/* 레이더: 시간당 강수량 최다 5지점 (체크박스로 표시) — 누적 표와 같은 위치·형태.
+                이 표는 방송 그래픽이라 녹화에도 찍혀야 한다. data-video-hide를 달면
+                녹화가 시작되는 순간 display:none이 되어 영상에서 사라진다. */}
             {isRadarView ? (
               <div
-                data-video-hide
                 className={`pointer-events-none absolute z-20 flex justify-center transition-opacity duration-500 ease-in-out ${
                   showHourlyTop5 && hourlyTop5.length > 0 ? 'opacity-100' : 'opacity-0'
                 }`}
