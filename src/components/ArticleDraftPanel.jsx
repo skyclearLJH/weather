@@ -7,7 +7,8 @@ import { Check, Copy, FileText, LoaderCircle, Play, RefreshCw, Square, X } from 
 const CALIBRATED_CHARS = 456;
 const CALIBRATED_SECONDS = 78;
 const CALIBRATED_RATE = 1.1;
-const MAX_NARRATION_SEC = 60;
+const MIN_NARRATION_SEC = 60;
+const MAX_NARRATION_SEC = 65;
 
 const VOICE_OPTIONS = [
   { id: 'ko-KR-Neural2-B', label: '여성 B (또렷) · 기본' },
@@ -24,7 +25,7 @@ const VOICE_OPTIONS = [
 // 원고는 그대로 읽을 게 아니라 손볼 것을 전제로 편집 가능하게 만든다.
 function ArticleDraftPanel({
   analysis,
-  durationSeconds = 60,
+  durationSeconds = 62.5,
   script,
   onScriptChange,
   voice,
@@ -198,6 +199,7 @@ function ArticleDraftPanel({
   const readSeconds = Math.round(
     (script.replace(/\s/g, '').length / charsPerSecond) || 0,
   );
+  const underLimit = readSeconds > 0 && readSeconds < MIN_NARRATION_SEC;
   const overLimit = readSeconds > MAX_NARRATION_SEC;
 
   return (
@@ -211,7 +213,7 @@ function ArticleDraftPanel({
         <FileText className="h-5 w-5 text-cyan-300" aria-hidden="true" />
         <span className="text-base font-black">레이더 방송 원고</span>
         <span className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-[10px] font-black text-cyan-100">
-          목표 1분 · 1.1배속
+          목표 60~65초 · 1.1배속
         </span>
         <button
           type="button"
@@ -268,8 +270,9 @@ function ArticleDraftPanel({
           <div className="mb-2 flex items-center gap-2">
             <span className="text-[11px] font-black tracking-wide text-cyan-200">방송 원고</span>
             {script.trim() ? (
-              <span className={`text-[11px] font-bold ${overLimit ? 'text-amber-300' : 'text-white/45'}`}>
+              <span className={`text-[11px] font-bold ${underLimit || overLimit ? 'text-amber-300' : 'text-white/45'}`}>
                 {script.replace(/\s/g, '').length}자 · 약 {readSeconds}초
+                {underLimit ? ` · ${MIN_NARRATION_SEC}초 미만` : ''}
                 {overLimit ? ` · ${MAX_NARRATION_SEC}초 넘음` : ''}
                 {meta?.finishReason && meta.finishReason !== 'STOP' ? ' · 잘림' : ''}
               </span>

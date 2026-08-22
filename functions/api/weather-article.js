@@ -16,7 +16,9 @@ const corsHeaders = {
 const CALIBRATED_CHARS = 456;
 const CALIBRATED_SECONDS = 78;
 const CALIBRATED_RATE = 1.1;
-const TARGET_NARRATION_SEC = 60;
+const MIN_NARRATION_SEC = 60;
+const MAX_NARRATION_SEC = 65;
+const TARGET_NARRATION_SEC = (MIN_NARRATION_SEC + MAX_NARRATION_SEC) / 2;
 
 const MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
 const endpointOf = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -133,18 +135,18 @@ const STYLE_SAMPLES = `[문체 예시 1 - 이 구성과 호흡을 가장 가깝�
 // 레이더 원고 생성기 전용 규칙. 기존 원고 API의 호환성은 유지하되 구조화 분석이
 // 들어오면 이 지침을 우선 적용해 관측·실측·예측의 경계를 분명히 한다.
 const RADAR_SCRIPT_SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스터입니다.
-입력된 구조화 사실만 사용해 TTS 1.1배속 기준 약 1분 분량의 한국어 원고를 씁니다.
+입력된 구조화 사실만 사용해 TTS 1.1배속 기준 60~65초 분량의 한국어 원고를 씁니다.
 
 [절대 규칙]
 - 입력 사실에 없는 지명, 수치, 시각, 원인, 특보를 만들거나 보완하지 않습니다.
 - 첫 문장은 정확히 "레이더 영상을 통해 비구름의 이동 모습과 전망을 함께 살펴보겠습니다."로 씁니다. 여기서 "이동 모습"은 화면을 소개하는 말일 뿐이며, 사실에 없는 이동 방향이나 확대·축소를 추정하면 안 됩니다.
 - 두 번째 문단의 첫 문장은 정확히 "최신 레이더 관측을 보면 현재"로 시작해 집중 지역의 비구름 현황으로 이어갑니다. 입력에 있는 관측 시각은 자료 검수용이므로 원고에서 별도 문장으로 낭독하지 않습니다.
-- 레이더 강도는 "레이더에서는 ... 추정되는 비구름"처럼 추정치임을 밝힙니다.
+- 레이더 강도는 "시간당 100밀리미터 안팎의 강한 비를 뿌릴 수 있는 구름대가 확인됩니다"처럼 씁니다. 레이더 수치를 실제 지상 강수량처럼 단정하지 않습니다.
 - 지상 관측은 입력에 이미 묶인 표현을 그대로 활용합니다. 여러 지점을 한 문장에 묶고, 지점별 수치를 한 문장씩 다시 풀어 나열하지 않습니다. AWS라는 용어는 쓰지 않습니다.
 - 지상 관측값은 영상의 1시간 강수량 순위표와 시각 차이가 날 수 있으므로 소수점이나 정확한 실측값을 쓰지 않습니다. 반드시 10밀리미터 단위의 "넘는", "가까운", "안팎" 표현만 사용하고, 입력에 이미 근사된 값을 더 정확한 숫자로 되돌리지 않습니다.
-- 레이더상 강한 비구름과 인근의 강한 지상 관측이 함께 확인된 지역을 원고의 중심으로 삼습니다. 이런 지역이 하나면 원고 대부분을 그 권역에 집중하고, 여러 곳이면 확인된 곳을 모두 다룹니다.
-- 레이더만 강하고 지상 관측으로 뒷받침되지 않은 지역은, 레이더·지상 관측 일치 지역이 하나라도 있을 때 원고에 넣지 않습니다.
-- 레이더 추정과 지상 관측을 별개의 목록처럼 읽지 말고, "실제 지상 관측에서도"라는 연결을 이용해 같은 지역의 상황을 한 흐름으로 설명합니다.
+- 입력 사실에서 상세 대상으로 선정된 지역만 원고의 중심으로 삼습니다. 선정 과정에서 레이더와 지상 관측을 함께 확인했다는 설명은 원고에 넣지 않습니다.
+- "인근의 강한 지상 강수가 함께 확인됩니다" 또는 "지상 강수로 뒷받침됩니다" 같은 선정 근거 문장은 쓰지 않습니다.
+- 실제 1시간 강수량은 뒤 문단에서 "실제 지상 관측에서도"라는 연결과 함께 근삿값으로만 설명합니다.
 - 강도 변화 사실은 같은 위치의 과거 격자와 현재 격자를 비교한 결과입니다. "10여 분 전보다 비의 강도가 뚜렷하게 강해졌습니다"처럼 자연스럽게 연결하되, 이를 비구름의 이동·새로운 발달·강수 구역 확대나 축소로 해석하지 않습니다.
 - 비구름의 이동 방향과 강수 구역의 확대·축소는 어떤 경우에도 언급하지 않습니다.
 - 관측 사실과 예측은 같은 문단에 섞지 않습니다.
@@ -256,13 +258,12 @@ export async function onRequestPost(context) {
   }
 
   // 456자/78초 실측을 1.1배속 기준으로 삼고, 다른 재생 속도를 선택하면
-  // 그 비율만큼만 글자 수를 보정한다. 1.1배속·60초의 중심값은 351자다.
+  // 그 비율만큼만 글자 수를 보정한다. 기본 목표는 60~65초의 가운데인 62.5초다.
   const charsPerSecond = (CALIBRATED_CHARS / CALIBRATED_SECONDS)
     * (speakingRate / CALIBRATED_RATE);
-  const targetChars = Math.round(durationSeconds * charsPerSecond);
-  // 모델이 목표보다 조금 길게 쓰는 경향을 고려해 상한을 2%로 좁힌다.
-  const minChars = Math.round(targetChars * 0.96);
-  const maxChars = Math.round(targetChars * 1.02);
+  const halfWindowSeconds = (MAX_NARRATION_SEC - MIN_NARRATION_SEC) / 2;
+  const minChars = Math.round((durationSeconds - halfWindowSeconds) * charsPerSecond);
+  const maxChars = Math.round((durationSeconds + halfWindowSeconds) * charsPerSecond);
 
   const allowedPlaces = extractAllowedPlaces(facts);
   const placeBlock = allowedPlaces.length

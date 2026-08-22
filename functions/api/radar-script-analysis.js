@@ -342,9 +342,9 @@ export const buildRadarScriptAnalysis = (input) => {
   facts.push({
     type: 'distribution',
     text: corroboratedEntries.length > 0
-      ? `현재 ${focusedAreas.length ? focusedAreas.join(', ') : focusedCores.flatMap((core) => core.places).join(', ')}에는 레이더상 강한 비구름이 걸쳐 있고, 인근 지상 관측에서도 강한 비가 확인됩니다.`
+      ? `현재 ${focusedAreas.length ? focusedAreas.join(', ') : focusedCores.flatMap((core) => core.places).join(', ')}에는 레이더상 강한 비구름이 걸쳐 있습니다.`
       : landCores.length > 0
-        ? `육지에서 시간당 10밀리미터 이상으로 추정되는 비구름이 ${areas.length ? areas.join(', ') : landCores.flatMap((core) => core.places).slice(0, 4).join(', ')}에 분포하지만, 인근 지상 관측에서는 10밀리미터를 초과한 비가 확인되지 않았습니다.`
+        ? `육지에서 시간당 10밀리미터 이상으로 추정되는 비구름이 ${areas.length ? areas.join(', ') : landCores.flatMap((core) => core.places).slice(0, 4).join(', ')}에 분포합니다.`
       : '육지에는 시간당 10밀리미터 이상의 뚜렷한 강수 핵이 없습니다.',
   });
 
@@ -352,9 +352,9 @@ export const buildRadarScriptAnalysis = (input) => {
     facts.push({
       type: corroboratedEntries.length > 0 ? 'corroborated-radar-core' : 'radar-core-unconfirmed',
       coreIndex,
-      text: corroboratedEntries.length > 0
-        ? `${core.places.join(', ')} 부근은 레이더에서 시간당 ${core.maxMm}밀리미터 안팎으로 추정되는 비구름과 인근의 강한 지상 강수가 함께 확인된 주요 지역입니다.`
-        : `${core.places.join(', ')} 부근 비구름은 레이더에서 시간당 ${core.maxMm}밀리미터 안팎으로 추정되지만, 인근의 강한 지상 강수로 뒷받침되지는 않았습니다.`,
+      text: core.maxMm >= MIN_CORROBORATED_RADAR_MM
+        ? `${core.places.join(', ')} 부근에는 레이더에서 시간당 ${core.maxMm}밀리미터 안팎의 강한 비를 뿌릴 수 있는 구름대가 확인됩니다.`
+        : `${core.places.join(', ')} 부근에는 레이더에서 시간당 ${core.maxMm}밀리미터 안팎의 비를 뿌릴 수 있는 구름대가 확인됩니다.`,
     });
     if (core.intensityChange) {
       facts.push({
