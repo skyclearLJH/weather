@@ -68,11 +68,12 @@ const NARRATION_TAIL_SEC = 1.2;
 const CYCLES = [
   // 사이클 0: 첫 화면(3시간 전)에서 잠깐 멈춰 시작을 알린다. 재생 없이 정지만.
   { phase: 'start', play: 0, hold: 5 },
-  { phase: 'observation', play: 15, hold: 5 },
+  // labelsOnHold: 재생이 끝나고 멈춰 있는 동안 강한 강수대 지명을 얹는다.
+  { phase: 'observation', play: 15, hold: 5, labelsOnHold: 'observation' },
   { phase: 'observation', play: 15, hold: 5, ranking: true },
   // hold가 null이면 '끝까지'라는 뜻이다.
   // keepCamera: 앞 사이클이 끝낸 줌 상태 그대로 두고 화면만 흐르게 한다.
-  { phase: 'forecast', play: 10, hold: null, keepCamera: true },
+  { phase: 'forecast', play: 10, hold: null, keepCamera: true, labelsOnHold: 'forecast' },
 ];
 // 마지막 사이클의 정지를 뺀, 정해진 길이의 합(5 + 20 + 20 + 10 = 55초).
 const CYCLES_FIXED_SEC = CYCLES.reduce(
@@ -175,6 +176,7 @@ function VideoExportMenu({
   onStartPlayback,
   onCyclePhase,
   onRankingTable,
+  onStrongRainLabels,
   narrationScript = '',
   narrationVoice = 'ko-KR-Neural2-B',
   narrationRate = 1.1,
@@ -262,6 +264,7 @@ function VideoExportMenu({
     let sourceVideo = null;
     let cleanCaptureActive = false;
     let rankingTouched = false;
+    let labelsTouched = false;
     try {
       setIsRecording(true);
       setRecordingProgress(0);
@@ -388,6 +391,15 @@ function VideoExportMenu({
             phase: cycle.phase,
             seconds: cycle.play,
           });
+          // 재생이 끝나 멈춰 있는 순간부터 지명을 얹는다. 흐르는 동안 띄우면
+          // 화면과 이름이 어긋나 보인다.
+          if (cycle.labelsOnHold) {
+            schedule.push({
+              at: (offset + cycle.play) * 1000,
+              kind: 'labels',
+              mode: cycle.labelsOnHold,
+            });
+          }
           // 마지막 사이클의 정지는 '끝까지'라 더할 시간이 없다.
           offset += cycle.play + (cycle.hold ?? 0);
           if (index === CYCLES.length - 1) offset = totalSeconds;
@@ -422,6 +434,12 @@ function VideoExportMenu({
             }
             onRankingTable?.(task.ranking);
             rankingTouched = true;
+            // 새 사이클이 시작하면 앞 사이클의 지명은 지운다.
+            onStrongRainLabels?.(null);
+            labelsTouched = true;
+          } else if (task.kind === 'labels') {
+            onStrongRainLabels?.(task.mode);
+            labelsTouched = true;
           } else if (task.kind === 'phase') {
             onCyclePhase?.({
               phase: task.phase,
@@ -470,6 +488,8 @@ function VideoExportMenu({
       if (cleanCaptureActive) document.body.classList.remove('weather-video-capture');
       // 녹화가 만졌던 순위표는 켜기 전 상태로 되돌린다.
       if (rankingTouched) onRankingTable?.(null);
+      // 얹었던 지명도 지운다.
+      if (labelsTouched) onStrongRainLabels?.(null);
       setIsRecording(false);
       setRecordingProgress(0);
       setProgressLabel('');

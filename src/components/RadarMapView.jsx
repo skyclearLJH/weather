@@ -1140,6 +1140,56 @@ const ensureTrackingLayers = (map) => {
   });
 };
 
+// 음성 영상에서 화면이 멈춰 있는 동안, 그 화면의 강한 강수대 지명을 크게 얹는다.
+// 방송 화면(1920x1080)을 멀리서 보므로 지도 라벨보다 훨씬 크게 잡는다.
+const STRONG_LABEL_SOURCE = 'strong-rain-labels';
+const STRONG_LABEL_LAYER = 'strong-rain-labels-text';
+
+const ensureStrongRainLabelLayer = (map) => {
+  if (!map.getSource(STRONG_LABEL_SOURCE)) {
+    map.addSource(STRONG_LABEL_SOURCE, {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    });
+  }
+  if (!map.getLayer(STRONG_LABEL_LAYER)) {
+    map.addLayer({
+      id: STRONG_LABEL_LAYER,
+      type: 'symbol',
+      source: STRONG_LABEL_SOURCE,
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': ['Open Sans Bold'],
+        // 티비로 볼 것이라 지도 지명(12~14)보다 훨씬 크게 잡는다.
+        'text-size': 34,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+        'text-padding': 2,
+      },
+      paint: {
+        'text-color': '#ffffff',
+        // 비구름 위에 얹히므로 검은 테두리를 두껍게 둘러 어떤 색 위에서도 읽히게 한다.
+        'text-halo-color': 'rgba(0,0,0,0.92)',
+        'text-halo-width': 3.2,
+        'text-halo-blur': 0.4,
+      },
+    });
+  }
+};
+
+const setStrongRainLabels = (map, labels) => {
+  if (!map) return;
+  ensureStrongRainLabelLayer(map);
+  map.getSource(STRONG_LABEL_SOURCE)?.setData({
+    type: 'FeatureCollection',
+    features: (labels ?? []).map((item) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [item.lon, item.lat] },
+      properties: { label: item.label },
+    })),
+  });
+};
+
 const setTrackingLayerVisibility = (map, visible) => {
   if (visible) ensureTrackingLayers(map);
   TRACKING_LAYER_IDS.forEach((id) => {
@@ -3090,6 +3140,47 @@ const RadarMapView = ({
     },
     [videoTimelineDates, frames],
   );
+
+  // 화면이 멈춰 있는 동안 그 화면의 강한 강수대 지명을 얹는다.
+  // 라벨은 '지금 보이는 프레임'에서 뽑는다. 관측 정지에는 최신 관측 프레임,
+  // 예측 정지에는 예측 마지막 프레임을 쓰므로, 화면과 지명이 어긋나지 않는다.
+  // (예측의 전반부·후반부가 다르면 후반부만 쓰면 되는데, 마지막 프레임을 쓰면
+  //  두 경우 모두 저절로 만족된다.)
+  const handleStrongRainLabels = useCallback((mode) => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!mode) {
+      setStrongRainLabels(map, []);
+      return;
+    }
+    const mappings = mappingsRef.current;
+    const cache = frameCacheRef.current;
+    if (!mappings) return;
+
+    const pool = frames.filter((frame) => (mode === 'forecast' ? frame.kind !== 'obs' : frame.kind === 'obs'));
+    const target = pool.at(-1);
+    const buckets = target ? cache.get(target.key) : null;
+    if (!buckets) {
+      setStrongRainLabels(map, []);
+      return;
+    }
+    const canvasHeight = mappings.radarMap.length / CANVAS_WIDTH;
+    const clusters = buildRadarFacts({
+      frames: [{ validTime: target.validTime, buckets }],
+      mappings: mappings.radarMap,
+      canvasWidth: CANVAS_WIDTH,
+      canvasHeight,
+      toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
+      bucketToMm: (bucket) => bucketLowerValue(bucket),
+    })?.clusters ?? [];
+
+    // 한 화면에 이름이 너무 많으면 읽히지 않는다. 센 곳부터 세 곳까지만.
+    setStrongRainLabels(map, clusters.slice(0, 3).map((cluster) => ({
+      lon: cluster.centroid.lon,
+      lat: cluster.centroid.lat,
+      label: cluster.places?.[0] ?? '',
+    })).filter((item) => item.label));
+  }, [frames]);
 
   // 두 번째 사이클에서만 순위표를 띄우기 위해 영상 쪽에서 켜고 끈다.
   // null이 오면 녹화 전에 사용자가 켜 두었던 상태로 되돌린다.
@@ -5186,6 +5277,7 @@ const RadarMapView = ({
                 onStartPlayback={handleVideoStart}
                 onCyclePhase={handleVideoCyclePhase}
                 onRankingTable={handleVideoRankingTable}
+                onStrongRainLabels={handleStrongRainLabels}
                 narrationScript={narrationScript}
                 narrationVoice={narrationVoice}
                 narrationRate={narrationRate}
