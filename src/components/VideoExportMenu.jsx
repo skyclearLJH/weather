@@ -71,7 +71,8 @@ const CYCLES = [
   { phase: 'observation', play: 15, hold: 5 },
   { phase: 'observation', play: 15, hold: 5, ranking: true },
   // hold가 null이면 '끝까지'라는 뜻이다.
-  { phase: 'forecast', play: 10, hold: null },
+  // keepCamera: 앞 사이클이 끝낸 줌 상태 그대로 두고 화면만 흐르게 한다.
+  { phase: 'forecast', play: 10, hold: null, keepCamera: true },
 ];
 // 마지막 사이클의 정지를 뺀, 정해진 길이의 합(5 + 20 + 20 + 10 = 55초).
 const CYCLES_FIXED_SEC = CYCLES.reduce(
@@ -379,6 +380,7 @@ function VideoExportMenu({
             kind: 'cycle-start',
             ranking: Boolean(cycle.ranking),
             cameraSeconds: cycle.play,
+            keepCamera: Boolean(cycle.keepCamera),
           });
           schedule.push({
             at: offset * 1000,
@@ -407,12 +409,16 @@ function VideoExportMenu({
           const task = schedule[scheduleIndex];
           scheduleIndex += 1;
           if (task.kind === 'cycle-start') {
-            // 화면을 처음 위치로 돌리고, 재생이 도는 동안에만 줌인이 진행되게 한다.
-            map?.jumpTo?.(startCamera);
-            // 재생 없이 멈춰 서는 구간(사이클 0)에서는 시작 화면 그대로 둔다.
-            // duration 0으로 easeTo를 부르면 그 자리에서 곧바로 줌인돼 버린다.
-            if (task.cameraSeconds > 0) {
-              map?.easeTo?.({ ...endCamera, duration: task.cameraSeconds * 1000, essential: true });
+            // 마지막 사이클은 앞에서 끝낸 줌 상태를 그대로 쓴다. 다시 전국으로
+            // 돌아갔다 들어오면 예측을 보여 주는 흐름이 끊긴다.
+            if (!task.keepCamera) {
+              // 화면을 처음 위치로 돌리고, 재생이 도는 동안에만 줌인이 진행되게 한다.
+              map?.jumpTo?.(startCamera);
+              // 재생 없이 멈춰 서는 구간(사이클 0)에서는 시작 화면 그대로 둔다.
+              // duration 0으로 easeTo를 부르면 그 자리에서 곧바로 줌인돼 버린다.
+              if (task.cameraSeconds > 0) {
+                map?.easeTo?.({ ...endCamera, duration: task.cameraSeconds * 1000, essential: true });
+              }
             }
             onRankingTable?.(task.ranking);
             rankingTouched = true;
