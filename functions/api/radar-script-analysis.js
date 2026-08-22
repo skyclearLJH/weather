@@ -379,7 +379,7 @@ export const buildRadarScriptAnalysis = (input) => {
     forecastGroups.forEach((group) => {
       facts.push({
         type: 'forecast-group',
-        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 앞으로 한 시간 동안 ${group.places.join(', ')} 부근에 시간당 ${forecastAmountText(group.amount)} 추정되는 비구름이 나타날 가능성이 있습니다.${group.trend === 'weaker' ? ' 예측 후반으로 갈수록 강도는 점차 약해질 것으로 예측됐습니다.' : group.trend === 'stronger' ? ' 예측 후반으로 갈수록 강도는 점차 강해질 것으로 예측됐습니다.' : ''}`,
+        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 앞으로 한 시간 동안 ${group.places.join(', ')} 부근에 시간당 ${forecastAmountText(group.amount)} 추정되는 비구름이 나타날 가능성이 있습니다.${group.trend === 'weaker' ? ' 다만 이들 지역에서도 비의 강도는 점차 약해질 것으로 예상됩니다.' : group.trend === 'stronger' ? ' 이들 지역에서는 비의 강도가 점차 강해질 것으로 예상됩니다.' : ''}`,
       });
     });
   }
