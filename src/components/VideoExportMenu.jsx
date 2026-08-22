@@ -63,9 +63,16 @@ const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolv
 const AUDIO_BITRATE = 128_000;
 // 낭독이 끝나자마자 화면이 끊기면 급해 보인다. 뒤에 조금 여유를 둔다.
 const NARRATION_TAIL_SEC = 1.2;
-// 한 바퀴를 돌고 곧바로 되감으면 눈이 따라가지 못한다. 마지막 프레임을
-// 잠깐 보여 주고 다시 시작한다.
-const LOOP_PAUSE_SEC = 2;
+// 음성 영상 한 사이클의 짜임새. 관측을 돌리고 현재에서 멈춰 보여 준 뒤,
+// 초단기 예측을 돌리고 마지막에서 다시 멈춘다. 곧바로 되감으면 눈이 따라가지 못한다.
+const CYCLE_PLAN = [
+  { phase: 'observation', play: 10, hold: 3 },
+  { phase: 'forecast', play: 4, hold: 3 },
+];
+const CYCLE_SEC = CYCLE_PLAN.reduce((sum, step) => sum + step.play + step.hold, 0); // 20초
+const CYCLE_COUNT = 3;
+// 순위표는 두 번째 사이클에서만 띄운다.
+const RANKING_CYCLE_INDEX = 1;
 
 // 원고를 음성으로 바꿔 오디오 버퍼로 돌려준다. 영상 길이를 여기서 나온
 // 실제 낭독 길이에 맞추므로, 글자 수로 어림하지 않는다.
@@ -159,6 +166,8 @@ function VideoExportMenu({
   onAfterScreenShare,
   onPreparePlayback,
   onStartPlayback,
+  onCyclePhase,
+  onRankingTable,
   narrationScript = '',
   narrationVoice = 'ko-KR-Neural2-B',
   narrationRate = 1.1,
@@ -245,6 +254,7 @@ function VideoExportMenu({
     let stream = null;
     let sourceVideo = null;
     let cleanCaptureActive = false;
+    let rankingTouched = false;
     try {
       setIsRecording(true);
       setRecordingProgress(0);
@@ -261,8 +271,10 @@ function VideoExportMenu({
           speakingRate: narrationRate,
         });
       }
+      // 음성을 넣으면 20초 사이클을 정해진 횟수만큼 돌린다. 낭독이 그보다 길면
+      // 소리가 잘리지 않게 사이클을 더 돌린다.
       const totalSeconds = narrationBuffer
-        ? narrationBuffer.duration + NARRATION_TAIL_SEC
+        ? Math.max(CYCLE_SEC * CYCLE_COUNT, narrationBuffer.duration + NARRATION_TAIL_SEC)
         : durationSec;
 
       setProgressLabel('화면을 준비하는 중입니다…');
@@ -350,14 +362,27 @@ function VideoExportMenu({
       map?.easeTo?.({ ...endCamera, duration: durationSec * 1000, essential: true });
       onStartPlayback?.({ start: startInput, end: endInput, durationSec });
 
-      // 음성을 넣으면 낭독이 끝날 때까지 레이더를 되풀이해 보여 준다.
-      // 한 바퀴는 '재생 durationSec + 마지막 프레임에서 LOOP_PAUSE_SEC 멈춤'이다.
-      // 재생은 마지막 프레임에서 멈춰 서 있으므로, 되감기를 늦추면 그대로 정지가 된다.
-      const playMs = durationSec * 1000;
-      const loopMs = (durationSec + LOOP_PAUSE_SEC) * 1000;
+      // 사이클 안에서 언제 무엇을 할지 미리 적어 둔다. 녹화 루프는 시각만 재고
+      // 때가 되면 그대로 실행한다.
+      const schedule = [];
+      if (narrationBuffer) {
+        for (let cycle = 0; ; cycle += 1) {
+          let offset = cycle * CYCLE_SEC;
+          if (offset >= totalSeconds) break;
+          // 정해진 횟수를 채운 뒤 얼마 남지 않았으면 사이클을 새로 열지 않는다.
+          // 되감자마자 영상이 끝나면 어색해서, 마지막 화면을 그대로 두고 맺는다.
+          if (cycle >= CYCLE_COUNT && totalSeconds - offset < CYCLE_PLAN[0].play) break;
+          // 사이클이 시작할 때 화면을 처음으로 돌리고 순위표를 켜거나 끈다.
+          schedule.push({ at: offset * 1000, kind: 'cycle-start', cycle });
+          for (const step of CYCLE_PLAN) {
+            schedule.push({ at: offset * 1000, kind: 'phase', phase: step.phase, seconds: step.play });
+            offset += step.play + step.hold;
+          }
+        }
+      }
+      let scheduleIndex = 0;
       const totalFrames = Math.max(2, Math.round(totalSeconds * VIDEO_FRAME_RATE));
       const startedAt = performance.now();
-      let nextLoopAt = startedAt + loopMs;
 
       if (narrationBuffer) setProgressLabel('영상을 찍는 중입니다…');
 
@@ -365,13 +390,25 @@ function VideoExportMenu({
         const targetTime = startedAt + frameIndex * (1000 / VIDEO_FRAME_RATE);
         await wait(Math.max(0, targetTime - performance.now()));
 
-        // 아직 낭독이 남았으면 레이더를 한 바퀴 더 돌린다.
-        if (narrationBuffer && performance.now() >= nextLoopAt
-            && targetTime - startedAt < (totalSeconds - 1) * 1000) {
-          map?.jumpTo?.(startCamera);
-          map?.easeTo?.({ ...endCamera, duration: playMs, essential: true });
-          onStartPlayback?.({ start: startInput, end: endInput, durationSec });
-          nextLoopAt += loopMs;
+        // 적어 둔 일정을 때가 되면 실행한다. 늦게 깨어났더라도 밀린 것을 몰아서 처리한다.
+        const elapsed = performance.now() - startedAt;
+        while (scheduleIndex < schedule.length && schedule[scheduleIndex].at <= elapsed) {
+          const task = schedule[scheduleIndex];
+          scheduleIndex += 1;
+          if (task.kind === 'cycle-start') {
+            // 화면을 처음 위치로 돌리고, 관측이 도는 동안에만 줌인이 진행되게 한다.
+            map?.jumpTo?.(startCamera);
+            map?.easeTo?.({ ...endCamera, duration: CYCLE_PLAN[0].play * 1000, essential: true });
+            onRankingTable?.(task.cycle === RANKING_CYCLE_INDEX);
+            rankingTouched = true;
+          } else if (task.kind === 'phase') {
+            onCyclePhase?.({
+              phase: task.phase,
+              start: startInput,
+              end: endInput,
+              seconds: task.seconds,
+            });
+          }
         }
 
         if (!drawVideoFrame(context, sourceVideo)) continue;
@@ -410,6 +447,8 @@ function VideoExportMenu({
       stream?.getTracks().forEach((track) => track.stop());
       if (sourceVideo) sourceVideo.srcObject = null;
       if (cleanCaptureActive) document.body.classList.remove('weather-video-capture');
+      // 녹화가 켰던 순위표는 원래대로 꺼 둔다.
+      if (rankingTouched) onRankingTable?.(false);
       setIsRecording(false);
       setRecordingProgress(0);
       setProgressLabel('');
@@ -534,9 +573,11 @@ function VideoExportMenu({
             {withNarration ? (
               <div className="col-span-2 -mt-1 space-y-1 text-[11px] font-semibold leading-relaxed text-white/45">
                 <div>
-                  영상 길이는 낭독 길이에 맞춰집니다. 레이더는 {durationSec}초 재생하고
-                  마지막 화면에서 {LOOP_PAUSE_SEC}초 멈추기를 되풀이합니다
-                  (한 바퀴 {durationSec + LOOP_PAUSE_SEC}초).
+                  한 사이클은 관측 {CYCLE_PLAN[0].play}초 · 현재에서 {CYCLE_PLAN[0].hold}초 정지 ·
+                  초단기 예측 {CYCLE_PLAN[1].play}초 · 끝에서 {CYCLE_PLAN[1].hold}초 정지로
+                  {CYCLE_SEC}초이고, {CYCLE_COUNT}번 돌아 {CYCLE_SEC * CYCLE_COUNT}초입니다.
+                  두 번째 사이클에서만 시간당 강수량 순위표가 나옵니다.
+                  낭독이 더 길면 소리가 잘리지 않게 사이클을 더 돌립니다.
                 </div>
                 <div className="text-cyan-200/70">
                   시각은 3시간 전 ~ 1시간 뒤, 시작 화면은 전국,

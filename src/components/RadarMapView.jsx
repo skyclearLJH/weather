@@ -3056,6 +3056,37 @@ const RadarMapView = ({
     }
   }, [broadcastView]);
 
+  // 음성 영상의 한 사이클은 '관측 재생 → 현재에서 정지 → 예측 재생 → 끝에서 정지'다.
+  // 영상 쪽에서 시각을 재며 단계마다 이 함수를 부른다. 여기서는 어느 프레임에서
+  // 어디까지를 몇 초에 걸쳐 돌릴지만 정한다.
+  const handleVideoCyclePhase = useCallback(
+    ({ phase, start, end, seconds }) => {
+      const range = findTimelineRange(videoTimelineDates, start, end);
+      if (!range) return;
+      // 관측과 예측의 경계는 '현재 시각 이후 첫 프레임' 앞이다.
+      const nowMs = Date.now();
+      let boundary = videoTimelineDates.findIndex((date) => date.getTime() > nowMs) - 1;
+      if (boundary < range.startIndex) boundary = range.startIndex;
+      if (boundary > range.endIndex || boundary < 0) boundary = range.endIndex;
+
+      const from = phase === 'forecast' ? boundary : range.startIndex;
+      const to = phase === 'forecast' ? range.endIndex : boundary;
+      const steps = Math.max(1, to - from);
+
+      setPlayDurationSec(seconds);
+      setFrameIndex(from);
+      setPlayTarget(to);
+      setPlayIntervalMs(Math.max(45, Math.round((seconds * 1000) / steps)));
+      window.requestAnimationFrame(() => setIsPlaying(true));
+    },
+    [videoTimelineDates],
+  );
+
+  // 두 번째 사이클에서만 순위표를 띄우기 위해 영상 쪽에서 켜고 끈다.
+  const handleVideoRankingTable = useCallback((visible) => {
+    setShowHourlyTop5(Boolean(visible));
+  }, []);
+
   // 크롬은 화면 공유 선택창을 띄우면서 네이티브 전체화면을 강제로 푼다.
   // '허용'을 누른 뒤 다시 들어가야 방송화면과 같은 1920x1080으로 녹화된다.
   // (그대로 두면 툴바만큼 세로가 줄어든 CSS 전체화면이 찍혀 16:9가 깨진다.)
@@ -5062,6 +5093,8 @@ const RadarMapView = ({
                 onAfterScreenShare={handleAfterVideoScreenShare}
                 onPreparePlayback={handleVideoPrepare}
                 onStartPlayback={handleVideoStart}
+                onCyclePhase={handleVideoCyclePhase}
+                onRankingTable={handleVideoRankingTable}
                 narrationScript={narrationScript}
                 narrationVoice={narrationVoice}
                 narrationRate={narrationRate}
