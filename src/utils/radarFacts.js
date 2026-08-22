@@ -230,6 +230,19 @@ const describeCluster = (cells, bucketToMm) => {
   });
   const centroid = { lon: lonSum / cells.length, lat: latSum / cells.length };
 
+  // 덩어리가 실제로 어디까지 뻗어 있는지. 중심점만으로 화면을 맞추면 넓게
+  // 퍼진 띠의 양 끝이 화면 밖으로 밀려난다.
+  let west = 180;
+  let east = -180;
+  let south = 90;
+  let north = -90;
+  cells.forEach(({ lon, lat }) => {
+    if (lon < west) west = lon;
+    if (lon > east) east = lon;
+    if (lat < south) south = lat;
+    if (lat > north) north = lat;
+  });
+
   // 대표 세기: 낮은 값부터 줄 세워 정해진 자리의 값을 고른다.
   const sortedBuckets = cells.map((cell) => cell.bucket).sort((left, right) => left - right);
   const pickAt = Math.min(
@@ -270,6 +283,7 @@ const describeCluster = (cells, bucketToMm) => {
     peakMm: toBroadcastMm(bucketToMm(maxBucket)),
     cellCount: cells.length,
     centroid,
+    bounds: { west, east, south, north },
     // 관측소 매칭 때만 쓴다. attachNearbyObservations가 API 전송 전에 제거한다.
     footprint: cells.map(({ lon, lat, sourceIndex }) => ({ lon, lat, sourceIndex })),
   };

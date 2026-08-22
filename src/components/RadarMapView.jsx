@@ -3108,6 +3108,12 @@ const RadarMapView = ({
     });
   }, []);
 
+  // 화면 맞추기에 함께 담을 강수대를 고르는 기준.
+  // 주된 강수대의 이 비율보다 약하면서 멀리 있는 것은 뺀다.
+  // (가까우면 약해도 어차피 같은 화면에 들어오므로 그대로 담는다.)
+  const FRAME_MIN_INTENSITY_RATIO = 0.5;
+  const FRAME_NEAR_KM = 150;
+
   // 크롬은 화면 공유 선택창을 띄우면서 네이티브 전체화면을 강제로 푼다.
   // '허용'을 누른 뒤 다시 들어가야 방송화면과 같은 1920x1080으로 녹화된다.
   // (그대로 두면 툴바만큼 세로가 줄어든 CSS 전체화면이 찍혀 16:9가 깨진다.)
@@ -3274,18 +3280,36 @@ const RadarMapView = ({
         let label = null;
 
         // 강수대가 두 곳 이상이면 그 전부가 화면에 들어오도록 덜 들어간다.
-        // 한 곳만 크게 잡으면 나머지 지역이 화면 밖으로 밀려난다.
-        const points = spread
-          .map((cluster) => cluster.centroid)
-          .filter((point) => Number.isFinite(point?.lon) && Number.isFinite(point?.lat));
-        if (points.length >= 2) {
-          const lons = points.map((point) => point.lon);
-          const lats = points.map((point) => point.lat);
+        // 이때 중심점이 아니라 덩어리가 실제로 뻗은 범위를 써야 한다. 넓게 퍼진
+        // 띠는 중심점이 한가운데에 찍혀, 중심점만 맞추면 서쪽 끝(서산 등)이
+        // 화면 밖으로 밀려난다.
+        //
+        // 또 주된 강수대에서 멀리 떨어진 약한 덩어리까지 담으려 하면 화면이
+        // 지나치게 넓어져 정작 봐야 할 곳이 작아진다. 세기가 주된 것의 절반에
+        // 못 미치면서 멀리 있는 덩어리는 화면 맞추기에서 뺀다.
+        const boxed = spread.filter((cluster) => cluster?.bounds);
+        const primary = boxed[0];
+        const framed = primary
+          ? boxed.filter((cluster, index) => {
+            if (index === 0) return true;
+            const strongEnough = (cluster.maxMm ?? 0) >= (primary.maxMm ?? 0) * FRAME_MIN_INTENSITY_RATIO;
+            const gapKm = distanceKm(cluster.centroid, primary.centroid);
+            return strongEnough || gapKm <= FRAME_NEAR_KM;
+          })
+          : [];
+
+        if (framed.length >= 2) {
           // 가장자리에 딱 붙지 않게 여유를 둔다.
           const margin = 0.25;
           const spreadBounds = [
-            [Math.min(...lons) - margin, Math.min(...lats) - margin],
-            [Math.max(...lons) + margin, Math.max(...lats) + margin],
+            [
+              Math.min(...framed.map((cluster) => cluster.bounds.west)) - margin,
+              Math.min(...framed.map((cluster) => cluster.bounds.south)) - margin,
+            ],
+            [
+              Math.max(...framed.map((cluster) => cluster.bounds.east)) + margin,
+              Math.max(...framed.map((cluster) => cluster.bounds.north)) + margin,
+            ],
           ];
           const fitAll = map.cameraForBounds(spreadBounds, { padding: 40 });
           if (fitAll) {
@@ -3296,7 +3320,7 @@ const RadarMapView = ({
               fitAll.center.lat ?? fitAll.center[1],
             ];
           }
-          const names = spread
+          const names = framed
             .map((cluster) => cluster.places?.[0])
             .filter(Boolean)
             .slice(0, 3);
