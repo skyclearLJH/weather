@@ -232,11 +232,13 @@ const describeCluster = (cells, bucketToMm) => {
   const places = ranked
     .filter((name) => !(name.endsWith(' 인근') && exact.has(name.replace(' 인근', ''))))
     .slice(0, 3);
-  const area = [...areaCounter.entries()].sort(byCount)[0]?.[0] ?? null;
+  const areas = [...areaCounter.entries()].sort(byCount).map(([name]) => name).slice(0, 3);
+  const area = areas[0] ?? null;
 
   return {
     places,
     area,
+    areas,
     sea: places.length ? null : seaSideOf(centroid),
     maxMm: toBroadcastMm(bucketToMm(maxBucket)),
     cellCount: cells.length,

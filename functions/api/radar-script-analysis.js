@@ -8,6 +8,7 @@ const corsHeaders = {
 };
 
 const MIN_ARTICLE_OBSERVATION_MM = 10;
+const MIN_CORROBORATED_RADAR_MM = 30;
 
 const json = (payload, status = 200) => new Response(JSON.stringify(payload), {
   status,
@@ -79,6 +80,10 @@ const sanitizeCluster = (cluster) => {
   const lon = finite(cluster?.centroid?.lon, 120, 134);
   const lat = finite(cluster?.centroid?.lat, 30, 44);
   const places = (cluster?.places ?? []).map((place) => cleanText(place, 30)).filter(Boolean).slice(0, 3);
+  const areas = (cluster?.areas ?? [cluster?.area])
+    .map((area) => cleanText(area, 20))
+    .filter(Boolean)
+    .slice(0, 3);
   if (maxMm === null || lon === null || lat === null || places.length === 0) return null;
   const observations = (cluster?.observations ?? [cluster?.observation])
     .map(sanitizeObservation)
@@ -87,7 +92,8 @@ const sanitizeCluster = (cluster) => {
     .slice(0, 3);
   return {
     places,
-    area: cleanText(cluster?.area, 20) || null,
+    area: areas[0] ?? null,
+    areas,
     maxMm,
     centroid: { lon, lat },
     observations,
@@ -113,7 +119,7 @@ const intensitySummary = (values) => {
   }
 
   const anchor = Math.round(((min + max) / 2) / 10) * 10;
-  if (anchor >= 10 && max - min <= 6 && min >= anchor - 5 && max <= anchor + 5) {
+  if (anchor >= 10 && max - min <= 15 && min >= anchor - 10 && max <= anchor + 10) {
     return { kind: 'around', value: String(anchor) };
   }
   return {
@@ -137,6 +143,44 @@ const forecastAmountText = (summary) => {
   return `${summary.value}밀리미터 안팎으로`;
 };
 
+const toRad = (degrees) => (degrees * Math.PI) / 180;
+
+const distanceKm = (left, right) => {
+  const dLat = toRad(right.lat - left.lat);
+  const dLon = toRad(right.lon - left.lon);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(left.lat)) * Math.cos(toRad(right.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
+};
+
+const samePlace = (left, right) => left.replace(/\s*인근$/, '') === right.replace(/\s*인근$/, '');
+
+const forecastMatchesFocus = (item, focusCores) => focusCores.some((core) => (
+  item.places.some((place) => core.places.some((focusPlace) => samePlace(place, focusPlace)))
+  || distanceKm(item.centroid, core.centroid) <= 70
+));
+
+const intensityTier = (mm) => {
+  if (mm >= 100) return 5;
+  if (mm >= 50) return 4;
+  if (mm >= 30) return 3;
+  if (mm >= 10) return 2;
+  return mm > 0 ? 1 : 0;
+};
+
+const forecastTrend = (items) => {
+  const directions = items.map((item) => {
+    const tierGap = intensityTier(item.lastMm) - intensityTier(item.firstMm);
+    if (tierGap >= 1 || item.lastMm - item.firstMm >= 20) return 'stronger';
+    if (tierGap <= -1 || item.firstMm - item.lastMm >= 20) return 'weaker';
+    return null;
+  }).filter(Boolean);
+  if (directions.length === 0) return null;
+  if (directions.every((direction) => direction === 'weaker')) return 'weaker';
+  if (directions.every((direction) => direction === 'stronger')) return 'stronger';
+  return null;
+};
+
 const buildObservationGroups = (landCores) => {
   const used = new Set();
   return landCores.map((core, coreIndex) => {
@@ -151,9 +195,9 @@ const buildObservationGroups = (landCores) => {
       .sort((left, right) => right.value - left.value);
     const topValue = ranked[0]?.value;
     // 한 지역 안에서도 값 차이가 지나치게 큰 지점은 같은 표현으로 묶지 않는다.
-    // 최고값과 10밀리미터 이내인 지점만 최대 3곳 골라 간결하게 요약한다.
+    // 최고값과 15밀리미터 이내인 지점만 최대 3곳 골라 간결하게 요약한다.
     const observations = ranked
-      .filter((observation) => topValue - observation.value <= 10)
+      .filter((observation) => topValue - observation.value <= 15)
       .slice(0, 3);
     if (observations.length === 0) return null;
     return {
@@ -165,17 +209,20 @@ const buildObservationGroups = (landCores) => {
   }).filter(Boolean);
 };
 
-const buildForecastGroups = (summary) => {
-  const selected = summary.slice(0, 3);
+const buildForecastGroups = (summary, focusCores) => {
+  const selected = summary
+    .filter((item) => focusCores.length === 0 || forecastMatchesFocus(item, focusCores))
+    .slice(0, 3);
   if (selected.length === 0) return [];
   const maxValue = Math.max(...selected.map((item) => item.maxMm));
   const high = selected.filter((item) => maxValue - item.maxMm <= 20);
   const low = selected.filter((item) => maxValue - item.maxMm > 20);
   return [high, low].filter((items) => items.length > 0).map((items) => ({
-    places: [...new Set(items.flatMap((item) => item.places.slice(0, 1)))].slice(0, 3),
+    places: [...new Set(items.flatMap((item) => item.places))].slice(0, 3),
     firstValidAt: items.map((item) => item.firstValidAt).sort()[0],
     lastValidAt: items.map((item) => item.lastValidAt).sort().at(-1),
     amount: intensitySummary(items.map((item) => item.maxMm)),
+    trend: forecastTrend(items),
   }));
 };
 
@@ -212,12 +259,16 @@ const sanitizeForecast = (forecast, observedAt) => {
       if (!existing) {
         summaryByPlace.set(key, {
           places: cluster.places,
+          centroid: cluster.centroid,
           firstValidAt: snapshot.validAt,
           lastValidAt: snapshot.validAt,
+          firstMm: cluster.maxMm,
+          lastMm: cluster.maxMm,
           maxMm: cluster.maxMm,
         });
       } else {
         existing.lastValidAt = snapshot.validAt;
+        existing.lastMm = cluster.maxMm;
         existing.maxMm = Math.max(existing.maxMm, cluster.maxMm);
       }
     });
@@ -243,8 +294,25 @@ export const buildRadarScriptAnalysis = (input) => {
   const landCores = (radar.clusters ?? []).map(sanitizeCluster).filter(Boolean).slice(0, 3);
   const areas = (radar.areas ?? []).map((area) => cleanText(area, 20)).filter(Boolean).slice(0, 5);
   const forecast = sanitizeForecast(input?.forecast, observedAt);
-  const observationGroups = buildObservationGroups(landCores);
-  const forecastGroups = forecast.available ? buildForecastGroups(forecast.summary) : [];
+  const corroboratedEntries = landCores
+    .map((core, coreIndex) => ({ core, coreIndex }))
+    .filter(({ core }) => (
+      core.maxMm >= MIN_CORROBORATED_RADAR_MM
+      && core.observations.some((observation) => observation.value > MIN_ARTICLE_OBSERVATION_MM)
+    ));
+  // 일치 지점이 하나라도 있으면 그 지역만 자세히 다룬다. 전혀 없을 때만
+  // 가장 강한 레이더 핵 하나를 지상 관측 미확인 상태로 짧게 남긴다.
+  const focusedEntries = corroboratedEntries.length > 0
+    ? corroboratedEntries
+    : landCores.slice(0, 1).map((core, coreIndex) => ({ core, coreIndex }));
+  const focusedCores = focusedEntries.map(({ core }) => core);
+  const focusedAreas = [...new Set(focusedCores.flatMap((core) => core.areas))];
+  const observationGroups = buildObservationGroups(
+    corroboratedEntries.map(({ core }) => core),
+  );
+  const forecastGroups = forecast.available
+    ? buildForecastGroups(forecast.summary, focusedCores)
+    : [];
   const facts = [];
   const observedText = kstTimeText(observedAt);
 
@@ -254,21 +322,25 @@ export const buildRadarScriptAnalysis = (input) => {
   });
   facts.push({
     type: 'distribution',
-    text: landCores.length > 0
-      ? `육지에서 시간당 10밀리미터 이상으로 추정되는 비구름이 ${areas.length ? areas.join(', ') : landCores.flatMap((core) => core.places).slice(0, 4).join(', ')}에 분포합니다.`
+    text: corroboratedEntries.length > 0
+      ? `현재 ${focusedAreas.length ? focusedAreas.join(', ') : focusedCores.flatMap((core) => core.places).join(', ')}에는 레이더상 강한 비구름이 걸쳐 있고, 인근 지상 관측에서도 강한 비가 확인됩니다.`
+      : landCores.length > 0
+        ? `육지에서 시간당 10밀리미터 이상으로 추정되는 비구름이 ${areas.length ? areas.join(', ') : landCores.flatMap((core) => core.places).slice(0, 4).join(', ')}에 분포하지만, 인근 지상 관측에서는 10밀리미터를 초과한 비가 확인되지 않았습니다.`
       : '육지에는 시간당 10밀리미터 이상의 뚜렷한 강수 핵이 없습니다.',
   });
 
-  landCores.forEach((core, index) => {
+  focusedEntries.forEach(({ core, coreIndex }) => {
     facts.push({
-      type: 'radar-core',
-      coreIndex: index,
-      text: `${core.places.join(', ')} 부근 비구름은 레이더에서 시간당 ${core.maxMm}밀리미터 안팎으로 추정됩니다.`,
+      type: corroboratedEntries.length > 0 ? 'corroborated-radar-core' : 'radar-core-unconfirmed',
+      coreIndex,
+      text: corroboratedEntries.length > 0
+        ? `${core.places.join(', ')} 부근은 레이더에서 시간당 ${core.maxMm}밀리미터 안팎으로 추정되는 비구름과 인근의 강한 지상 강수가 함께 확인된 주요 지역입니다.`
+        : `${core.places.join(', ')} 부근 비구름은 레이더에서 시간당 ${core.maxMm}밀리미터 안팎으로 추정되지만, 인근의 강한 지상 강수로 뒷받침되지는 않았습니다.`,
     });
     if (core.intensityChange) {
       facts.push({
         type: 'intensity-change',
-        coreIndex: index,
+        coreIndex,
         text: `${core.places.join(', ')} 부근은 ${minutesAgoText(core.intensityChange.minutesAgo)}보다 같은 위치의 레이더상 비의 강도가 뚜렷하게 ${core.intensityChange.direction === 'stronger' ? '강해졌습니다' : '약해졌습니다'}.`,
       });
     }
@@ -288,18 +360,23 @@ export const buildRadarScriptAnalysis = (input) => {
     forecastGroups.forEach((group) => {
       facts.push({
         type: 'forecast-group',
-        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 앞으로 한 시간 동안 ${group.places.join(', ')} 부근에 시간당 ${forecastAmountText(group.amount)} 추정되는 비구름이 나타날 가능성이 있습니다.`,
+        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 앞으로 한 시간 동안 ${group.places.join(', ')} 부근에 시간당 ${forecastAmountText(group.amount)} 추정되는 비구름이 나타날 가능성이 있습니다.${group.trend === 'weaker' ? ' 예측 후반으로 갈수록 강도는 점차 약해질 것으로 예측됐습니다.' : group.trend === 'stronger' ? ' 예측 후반으로 갈수록 강도는 점차 강해질 것으로 예측됐습니다.' : ''}`,
       });
     });
   }
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     observedAt,
     observedLabel: observedText,
     thresholdMmPerHour: 10,
     areas,
     landCores,
+    focus: {
+      mode: corroboratedEntries.length > 0 ? 'radar-observation-match' : 'radar-only-fallback',
+      coreIndexes: focusedEntries.map(({ coreIndex }) => coreIndex),
+      areas: focusedAreas,
+    },
     nearbyObservations: landCores
       .flatMap((core) => core.observations),
     observationGroups,
