@@ -440,10 +440,11 @@ export const buildRadarScriptAnalysis = (input) => {
         : `${core.places.join(', ')} 부근에는 레이더에서 시간당 ${core.maxMm}밀리미터 안팎의 비를 뿌릴 수 있는 구름대가 확인됩니다.`,
     });
     if (core.intensityChange) {
+      const regionReference = core.places.length > 1 ? '이들 지역에서는' : '이 지역에서는';
       facts.push({
         type: 'intensity-change',
         coreIndex,
-        text: `${core.places.join(', ')} 부근은 최근 30분 동안 레이더상 ${intensityTrendText(core.intensityChange.direction)}.`,
+        text: `${regionReference} 최근 30분 동안 레이더상 ${intensityTrendText(core.intensityChange.direction)}.`,
       });
     }
   });
