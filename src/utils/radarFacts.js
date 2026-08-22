@@ -3,11 +3,12 @@
 //
 // 이동 방향과 강수 구역 확대·축소는 뽑지 않는다. 무게중심으로 계산하면
 // 비구름이 여러 곳에 흩어져 있을 때 실제와 다른 방향이 나와, 방송 원고에
-// 틀린 이야기가 실렸다. 다만 같은 위치의 강수 강도 변화는 과거 격자와 직접
-// 비교해 쓸 수 있게 한다. 앞일은 우리가 셈하지 않고 기상청 초단기예측만 쓴다.
+// 틀린 이야기가 실렸다. 강수 강도 경향은 최근 약 30분의 여러 프레임에서
+// 대표 강도와 강한 강수 비율을 함께 확인한다. 앞일은 우리가 셈하지 않고
+// 기상청 초단기예측만 쓴다.
 //
 // 기사를 LLM에 맡길 때 레이더 이미지를 그대로 보여주면 지명을 지어내기 때문에,
-// 여기서 위치·강도·같은 위치의 변화만 수치로 확정한 뒤 문장 쓰기만 넘긴다.
+// 여기서 위치·강도·최근 경향만 수치로 확정한 뒤 문장 쓰기만 넘긴다.
 // 화면이 이미 들고 있는 격자(buckets)와 좌표 매핑을 그대로 쓰므로 추가 통신이 없다.
 
 import sggLabels from '../data/map/kr-sgg-labels-20260701.json';
@@ -134,8 +135,8 @@ const summarizeFrame = ({
       const [lon, lat] = toLonLat(x, y);
       if (landOnly && !isSouthKoreanLand(lon, lat)) continue;
       const weight = bucketToMm(bucket);
-      // sourceIndex를 보존하면 과거 프레임의 정확히 같은 격자를 다시 읽을 수 있다.
-      // 이를 이용해 이동 방향을 추측하지 않고 해당 지역의 강도 변화만 비교한다.
+      // sourceIndex를 보존하면 과거 프레임에서도 현재 강수 핵의 지역 범위를
+      // 일관되게 읽을 수 있다. 이를 이동 방향 추정에는 사용하지 않는다.
       cells.push({ lon, lat, bucket, sourceIndex });
       lonSum += lon * weight;
       latSum += lat * weight;
@@ -298,39 +299,111 @@ const intensityTier = (mm) => {
   return 0;
 };
 
-// 현재 강수 핵이 놓인 격자의 10여 분 전 강도와 현재 강도를 비교한다.
-// 중심점 이동이나 면적 변화는 전혀 사용하지 않으며, 단계가 달라질 만큼
-// 뚜렷한 변화만 기사 재료로 남긴다.
-const intensityChangeAtSamePlace = (cluster, referenceFrame, latestFrame, bucketToMm) => {
-  if (!referenceFrame?.buckets || !latestFrame?.validTime || !referenceFrame?.validTime) return null;
+const median = (values) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+const percentile = (values, ratio) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor((sorted.length - 1) * ratio)];
+};
+
+// 한 장의 최고값은 몇 화소짜리 잡음에도 크게 흔들린다. 현재 강수 핵의 지역
+// 범위에서 최근 약 30분(최소 4장)의 상위 10% 대표 강도와 30mm/h 이상 셀의
+// 비율을 함께 본다. 오르내림이 일관되지 않으면 '등락', 변화가 작으면 '유지',
+// 어느 쪽도 확실하지 않으면 원고 재료에서 제외한다.
+const intensityTrendForRegion = (cluster, frames, latestFrame, bucketToMm) => {
+  if (!latestFrame?.validTime) return null;
   const sourceIndexes = [...new Set(
     (cluster.footprint ?? []).map((point) => point.sourceIndex).filter(Number.isInteger),
   )];
   if (sourceIndexes.length < 5) return null;
 
-  let previousMaxBucket = 0;
-  sourceIndexes.forEach((sourceIndex) => {
-    previousMaxBucket = Math.max(previousMaxBucket, referenceFrame.buckets[sourceIndex] ?? 0);
-  });
-  const previousMaxMm = toBroadcastMm(bucketToMm(previousMaxBucket));
-  const currentMaxMm = cluster.maxMm;
-  const minuteGap = Math.round(
-    (latestFrame.validTime.getTime() - referenceFrame.validTime.getTime()) / 60000,
-  );
-  const tierGap = intensityTier(currentMaxMm) - intensityTier(previousMaxMm);
-  const strengthened = tierGap >= 1
-    || (currentMaxMm - previousMaxMm >= 10 && currentMaxMm >= Math.max(10, previousMaxMm * 1.5));
-  const weakened = tierGap <= -1
-    || (previousMaxMm - currentMaxMm >= 10 && previousMaxMm >= Math.max(10, currentMaxMm * 1.5));
-  if (!strengthened && !weakened) return null;
+  const latestAt = new Date(latestFrame.validTime).getTime();
+  if (!Number.isFinite(latestAt)) return null;
+  const signals = (frames ?? [])
+    .filter((frame) => frame?.buckets && frame?.validTime)
+    .map((frame) => {
+      const validAt = new Date(frame.validTime).getTime();
+      const minutesAgo = (latestAt - validAt) / 60000;
+      if (!Number.isFinite(validAt) || minutesAgo < 0 || minutesAgo > 35) return null;
+      const values = sourceIndexes.map((sourceIndex) => bucketToMm(frame.buckets[sourceIndex] ?? 0));
+      return {
+        validAt,
+        representativeMm: percentile(values, 0.9),
+        heavyShare: values.filter((value) => value >= 30).length / values.length,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.validAt - right.validAt)
+    .slice(-8);
+  if (signals.length < 4) return null;
+
+  const windowMinutes = Math.round((signals.at(-1).validAt - signals[0].validAt) / 60000);
+  if (windowMinutes < 25) return null;
+
+  // 시작과 끝을 각각 두 장의 중앙값으로 잡아 단일 프레임의 튐을 누른다.
+  const edgeCount = Math.min(2, Math.floor(signals.length / 2));
+  const early = signals.slice(0, edgeCount);
+  const recent = signals.slice(-edgeCount);
+  const earlyMm = median(early.map((signal) => signal.representativeMm));
+  const recentMm = median(recent.map((signal) => signal.representativeMm));
+  const earlyShare = median(early.map((signal) => signal.heavyShare));
+  const recentShare = median(recent.map((signal) => signal.heavyShare));
+
+  let upCount = 0;
+  let downCount = 0;
+  for (let index = 1; index < signals.length; index += 1) {
+    const previous = signals[index - 1];
+    const current = signals[index];
+    const mmGap = current.representativeMm - previous.representativeMm;
+    const tierGap = intensityTier(current.representativeMm) - intensityTier(previous.representativeMm);
+    const shareGap = current.heavyShare - previous.heavyShare;
+    if (tierGap >= 1 || mmGap >= 10 || (shareGap >= 0.15 && mmGap >= -5)) upCount += 1;
+    else if (tierGap <= -1 || mmGap <= -10 || (shareGap <= -0.15 && mmGap <= 5)) downCount += 1;
+  }
+
+  const stepCount = signals.length - 1;
+  const representativeValues = signals.map((signal) => signal.representativeMm);
+  const shareValues = signals.map((signal) => signal.heavyShare);
+  const mmRange = Math.max(...representativeValues) - Math.min(...representativeValues);
+  const shareRange = Math.max(...shareValues) - Math.min(...shareValues);
+  const endpointTierGap = intensityTier(recentMm) - intensityTier(earlyMm);
+  const endpointMmGap = recentMm - earlyMm;
+  const endpointShareGap = recentShare - earlyShare;
+  const strengthened = endpointTierGap >= 1
+    || (endpointMmGap >= 10 && recentMm >= Math.max(10, earlyMm * 1.25))
+    || (endpointShareGap >= 0.2 && endpointMmGap >= -5);
+  const weakened = endpointTierGap <= -1
+    || (endpointMmGap <= -10 && earlyMm >= Math.max(10, recentMm * 1.25))
+    || (endpointShareGap <= -0.2 && endpointMmGap <= 5);
+  const consistentUp = upCount > downCount && (stepCount - downCount) / stepCount >= 2 / 3;
+  const consistentDown = downCount > upCount && (stepCount - upCount) / stepCount >= 2 / 3;
+
+  let direction = null;
+  if (strengthened && consistentUp) direction = 'stronger';
+  else if (weakened && consistentDown) direction = 'weaker';
+  else if (upCount > 0 && downCount > 0 && (mmRange >= 20 || shareRange >= 0.3)) {
+    direction = 'fluctuating';
+  } else if (mmRange <= 10 && shareRange <= 0.2) {
+    direction = 'steady';
+  }
+  if (!direction) return null;
 
   return {
-    direction: strengthened ? 'stronger' : 'weaker',
-    referenceAt: referenceFrame.validTime,
-    minutesAgo: minuteGap,
-    previousMaxMm,
-    currentMaxMm,
-    basis: 'same-grid',
+    direction,
+    windowMinutes,
+    frameCount: signals.length,
+    earlyMm: toBroadcastMm(earlyMm),
+    recentMm: toBroadcastMm(recentMm),
+    confidence: signals.length >= 6 && windowMinutes >= 28 ? 'high' : 'medium',
+    basis: 'multi-frame-local',
   };
 };
 
@@ -378,15 +451,6 @@ export const buildRadarFacts = ({
   const anyNow = summarize(latest, anyMinBucket);
 
   // 강한 비구름을 덩어리로 나눠 '어디에 얼마나'를 각각 말할 수 있게 한다.
-  const referenceFrame = usable
-    .slice(0, -1)
-    .map((frame) => ({
-      frame,
-      minutesAgo: Math.round((latest.validTime.getTime() - frame.validTime.getTime()) / 60000),
-    }))
-    .filter(({ minutesAgo }) => minutesAgo >= 8 && minutesAgo <= 20)
-    .sort((left, right) => Math.abs(left.minutesAgo - 10) - Math.abs(right.minutesAgo - 10))[0]?.frame;
-
   const clusters = strongNow
     ? clusterCells(strongNow.cells)
         // 좁은 한두 격자에만 잡힌 값은 이상 에코일 수 있어 덩어리로 치지 않는다.
@@ -394,7 +458,7 @@ export const buildRadarFacts = ({
         .map((cells) => describeCluster(cells, bucketToMm))
         .map((cluster) => ({
           ...cluster,
-          intensityChange: intensityChangeAtSamePlace(cluster, referenceFrame, latest, bucketToMm),
+          intensityChange: intensityTrendForRegion(cluster, usable, latest, bucketToMm),
         }))
         .sort((left, right) => right.maxMm - left.maxMm || right.cellCount - left.cellCount)
         .slice(0, 3)

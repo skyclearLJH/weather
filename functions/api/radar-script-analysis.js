@@ -60,18 +60,24 @@ const sanitizeObservation = (observation) => {
 };
 
 const sanitizeIntensityChange = (change, currentMaxMm) => {
-  if (!['stronger', 'weaker'].includes(change?.direction) || change?.basis !== 'same-grid') return null;
-  const minutesAgo = finite(change.minutesAgo, 5, 30);
-  const previousMaxMm = finite(change.previousMaxMm, 0, 300);
-  const referenceAt = isoDate(change.referenceAt);
-  if (minutesAgo === null || previousMaxMm === null || !referenceAt) return null;
+  if (
+    !['stronger', 'weaker', 'fluctuating', 'steady'].includes(change?.direction)
+    || change?.basis !== 'multi-frame-local'
+  ) return null;
+  const windowMinutes = finite(change.windowMinutes, 25, 40);
+  const frameCount = finite(change.frameCount, 4, 12);
+  const earlyMm = finite(change.earlyMm, 0, 300);
+  const recentMm = finite(change.recentMm, 0, 300);
+  if (windowMinutes === null || frameCount === null || earlyMm === null || recentMm === null) return null;
   return {
     direction: change.direction,
-    referenceAt,
-    minutesAgo,
-    previousMaxMm,
+    windowMinutes,
+    frameCount,
+    earlyMm,
+    recentMm,
     currentMaxMm,
-    basis: 'same-grid',
+    confidence: change.confidence === 'high' ? 'high' : 'medium',
+    basis: 'multi-frame-local',
   };
 };
 
@@ -245,9 +251,12 @@ const buildForecastGroups = (summary, focusCores) => {
   }));
 };
 
-const minutesAgoText = (minutes) => minutes >= 8 && minutes <= 14
-  ? '10여 분 전'
-  : `${Math.round(minutes)}분 전`;
+const intensityTrendText = (direction) => ({
+  stronger: '비의 강도가 전반적으로 강해지는 흐름입니다',
+  weaker: '비의 강도가 전반적으로 약해지는 흐름입니다',
+  fluctuating: '비의 강도가 강해졌다 약해지기를 반복하고 있습니다',
+  steady: '비의 강도가 비슷한 수준을 유지하고 있습니다',
+}[direction] ?? '');
 
 const sanitizeForecast = (forecast, observedAt) => {
   if (!forecast?.usable) {
@@ -360,7 +369,7 @@ export const buildRadarScriptAnalysis = (input) => {
       facts.push({
         type: 'intensity-change',
         coreIndex,
-        text: `${core.places.join(', ')} 부근은 ${minutesAgoText(core.intensityChange.minutesAgo)}보다 레이더상 비의 강도가 뚜렷하게 ${core.intensityChange.direction === 'stronger' ? '강해졌습니다' : '약해졌습니다'}.`,
+        text: `${core.places.join(', ')} 부근은 최근 30분 동안 레이더상 ${intensityTrendText(core.intensityChange.direction)}.`,
       });
     }
   });
@@ -385,7 +394,7 @@ export const buildRadarScriptAnalysis = (input) => {
   }
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     observedAt,
     observedLabel: observedText,
     thresholdMmPerHour: 10,
