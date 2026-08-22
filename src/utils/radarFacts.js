@@ -13,6 +13,8 @@
 import sggLabels from '../data/map/kr-sgg-labels-20260701.json';
 import { provinceContaining } from './krLand.js';
 
+const MIN_ARTICLE_OBSERVATION_MM = 10;
+
 const SIDO_SHORT = {
   서울특별시: '서울', 부산광역시: '부산', 대구광역시: '대구', 인천광역시: '인천',
   대전광역시: '대전', 울산광역시: '울산', 세종특별자치시: '세종', 경기도: '경기',
@@ -484,7 +486,8 @@ export const attachNearbyObservations = (
     const { footprint, ...publicCluster } = cluster;
     const candidates = observations
       .filter((row) => Number.isFinite(row.lon) && Number.isFinite(row.lat))
-      .filter((row) => Number.isFinite(row.value) && row.value >= 0)
+      // 지난 1시간 강수량이 10밀리미터 이하인 지점은 기사 분석 대상에서 제외한다.
+      .filter((row) => Number.isFinite(row.value) && row.value > MIN_ARTICLE_OBSERVATION_MM)
       .filter((row) => !used.has(row.stationId ?? row.name))
       .map((row) => ({
         ...row,
@@ -564,8 +567,10 @@ export const formatRadarFacts = (facts, extras = {}) => {
 
   // 라벨만 주면 '3시간 전'을 '3시간 후'로 뒤집어 쓰는 일이 생겨,
   // 시제가 드러나는 완성 문장으로 준다.
-  if (extras.observations?.length) {
-    lines.push(`- AWS 지상 실측 1시간 최다(레이더 추정이 아닌 실측값): ${extras.observations.slice(0, 3).map((row) => `${row.name} ${row.value}밀리미터`).join(', ')}`);
+  const articleObservations = (extras.observations ?? [])
+    .filter((row) => Number.isFinite(Number(row.value)) && Number(row.value) > MIN_ARTICLE_OBSERVATION_MM);
+  if (articleObservations.length) {
+    lines.push(`- AWS 지상 실측 1시간 최다(레이더 추정이 아닌 실측값): ${articleObservations.slice(0, 3).map((row) => `${row.name} ${row.value}밀리미터`).join(', ')}`);
   }
   if (extras.warnings?.length) {
     lines.push(`- 발효 중인 특보: ${extras.warnings.join(', ')}`);

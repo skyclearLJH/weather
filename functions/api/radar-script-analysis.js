@@ -7,6 +7,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'content-type',
 };
 
+const MIN_ARTICLE_OBSERVATION_MM = 10;
+
 const json = (payload, status = 200) => new Response(JSON.stringify(payload), {
   status,
   headers: {
@@ -44,7 +46,8 @@ const kstTimeText = (value) => {
 
 const sanitizeObservation = (observation) => {
   const value = finite(observation?.value, 0, 500);
-  if (value === null) return null;
+  // 클라이언트 필터를 우회한 입력도 10밀리미터 이하면 분석 JSON에 넣지 않는다.
+  if (value === null || value <= MIN_ARTICLE_OBSERVATION_MM) return null;
   return {
     stationId: cleanText(observation.stationId, 20) || null,
     name: cleanText(observation.name, 40),
@@ -138,7 +141,7 @@ const buildObservationGroups = (landCores) => {
   const used = new Set();
   return landCores.map((core, coreIndex) => {
     const ranked = core.observations
-      .filter((observation) => observation.value > 0)
+      .filter((observation) => observation.value > MIN_ARTICLE_OBSERVATION_MM)
       .filter((observation) => {
         const key = observation.stationId || observation.label || observation.name;
         if (used.has(key)) return false;
