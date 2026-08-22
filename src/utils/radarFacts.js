@@ -15,6 +15,15 @@ import { provinceContaining } from './krLand.js';
 
 const MIN_ARTICLE_OBSERVATION_MM = 10;
 
+const approximateObservationText = (rawValue) => {
+  const value = Number(rawValue);
+  const lower = Math.floor(value / 10) * 10;
+  const upper = Math.ceil(value / 10) * 10;
+  if (value === lower) return `${lower}밀리미터 안팎`;
+  if (upper > lower && upper - value <= 2) return `${upper}밀리미터에 가까움`;
+  return `${lower}밀리미터 초과`;
+};
+
 const SIDO_SHORT = {
   서울특별시: '서울', 부산광역시: '부산', 대구광역시: '대구', 인천광역시: '인천',
   대전광역시: '대전', 울산광역시: '울산', 세종특별자치시: '세종', 경기도: '경기',
@@ -572,7 +581,7 @@ export const formatRadarFacts = (facts, extras = {}) => {
   const articleObservations = (extras.observations ?? [])
     .filter((row) => Number.isFinite(Number(row.value)) && Number(row.value) > MIN_ARTICLE_OBSERVATION_MM);
   if (articleObservations.length) {
-    lines.push(`- AWS 지상 실측 1시간 최다(레이더 추정이 아닌 실측값): ${articleObservations.slice(0, 3).map((row) => `${row.name} ${row.value}밀리미터`).join(', ')}`);
+    lines.push(`- AWS 지상 실측 1시간 최다(레이더 추정이 아닌 실측값, 원고에는 근삿값만 사용): ${articleObservations.slice(0, 3).map((row) => `${row.name} ${approximateObservationText(row.value)}`).join(', ')}`);
   }
   if (extras.warnings?.length) {
     lines.push(`- 발효 중인 특보: ${extras.warnings.join(', ')}`);

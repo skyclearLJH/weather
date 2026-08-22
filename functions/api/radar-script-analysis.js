@@ -104,13 +104,30 @@ const sanitizeCluster = (cluster) => {
 
 const formatNumber = (value) => Number.isInteger(value) ? String(value) : String(value).replace(/\.0$/, '');
 
-const intensitySummary = (values) => {
+const approximateObservation = (value) => {
+  const lower = Math.floor(value / 10) * 10;
+  const upper = Math.ceil(value / 10) * 10;
+  if (lower < 10) return { kind: 'around', value: String(Math.max(10, upper)) };
+  if (value === lower) return { kind: 'around', value: String(lower) };
+  if (upper > lower && upper - value <= 2) return { kind: 'near', value: String(upper) };
+  return { kind: 'above', value: String(lower) };
+};
+
+const intensitySummary = (values, approximateSingle = false) => {
   const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
   const min = sorted[0];
   const max = sorted.at(-1);
   if (min === undefined) return null;
-  if (sorted.length === 1) return { kind: 'exact', value: formatNumber(min) };
-  if (min === max) return { kind: 'around', value: formatNumber(min) };
+  if (sorted.length === 1) {
+    return approximateSingle
+      ? approximateObservation(min)
+      : { kind: 'exact', value: formatNumber(min) };
+  }
+  if (min === max) {
+    return approximateSingle
+      ? approximateObservation(min)
+      : { kind: 'around', value: formatNumber(min) };
+  }
 
   const lowerBand = Math.floor(min / 10) * 10;
   const upperBand = Math.ceil(max / 10) * 10;
@@ -131,6 +148,7 @@ const intensitySummary = (values) => {
 
 const observationAmountText = (summary) => {
   if (summary.kind === 'above') return `${summary.value}밀리미터가 넘는`;
+  if (summary.kind === 'near') return `${summary.value}밀리미터에 가까운`;
   if (summary.kind === 'around') return `${summary.value}밀리미터 안팎의`;
   if (summary.kind === 'range') return `${summary.lower}에서 ${summary.upper}밀리미터의`;
   return `${summary.value}밀리미터의`;
@@ -138,6 +156,7 @@ const observationAmountText = (summary) => {
 
 const forecastAmountText = (summary) => {
   if (summary.kind === 'above') return `${summary.value}밀리미터 이상으로`;
+  if (summary.kind === 'near') return `${summary.value}밀리미터에 가까운 수준으로`;
   if (summary.kind === 'around') return `${summary.value}밀리미터 안팎으로`;
   if (summary.kind === 'range') return `${summary.lower}에서 ${summary.upper}밀리미터로`;
   return `${summary.value}밀리미터 안팎으로`;
@@ -204,7 +223,7 @@ const buildObservationGroups = (landCores) => {
       coreIndex,
       places: core.places,
       observations,
-      amount: intensitySummary(observations.map((item) => item.value)),
+      amount: intensitySummary(observations.map((item) => item.value), true),
     };
   }).filter(Boolean);
 };
