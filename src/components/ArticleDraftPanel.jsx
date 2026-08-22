@@ -60,7 +60,9 @@ function ArticleDraftPanel({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ analysis, durationSeconds, speakingRate }),
-        signal: AbortSignal.timeout(120000),
+        // 서버가 스스로 90초를 마감으로 삼는다. 화면은 그보다 넉넉히 기다려,
+        // 원인이 적힌 서버 응답을 받아 보여 준다.
+        signal: AbortSignal.timeout(110000),
       });
       // 서버가 죽거나 경로가 안 잡히면 HTML(오류 페이지)이 온다.
       // 그대로 파싱하면 'Unexpected token <'만 보여서 원인을 알 수 없으므로 구분해 준다.
@@ -91,7 +93,17 @@ function ArticleDraftPanel({
         setWaitSeconds(null);
         return generate(true);
       }
-      if (!response.ok) throw new Error(payload?.error || `기사 생성 실패 (${response.status})`);
+      if (!response.ok) {
+        // 어느 모델에서 몇 초 만에 막혔는지 함께 보여 준다. 'signal timed out'만으로는
+        // 화면에서 원인을 가릴 수 없었다.
+        const trail = (payload?.attempts ?? [])
+          .map((a) => `${a.model} ${Math.round((a.ms ?? 0) / 1000)}초${a.error ? ` — ${a.error}` : ''}`)
+          .join(' / ');
+        throw new Error(
+          (payload?.error || `기사 생성 실패 (${response.status})`) + (trail ? `
+시도: ${trail}` : ''),
+        );
+      }
       onScriptChange(payload.script ?? '');
       setMeta({
         charCount: payload.charCount,
@@ -289,7 +301,7 @@ function ArticleDraftPanel({
           {/* AI가 못 써 줘도 원고를 직접 붙여넣어 음성과 영상은 만들 수 있어야 한다.
               그래서 실패는 배너로만 알리고 입력창은 늘 남겨 둔다. */}
           {status === 'error' ? (
-            <div className="mb-2 rounded-md border border-red-400/40 bg-red-400/10 px-3 py-2 text-[12px] font-bold text-red-100">
+            <div className="mb-2 whitespace-pre-line rounded-md border border-red-400/40 bg-red-400/10 px-3 py-2 text-[12px] font-bold text-red-100">
               {error}
               <div className="mt-1 font-semibold text-red-100/80">
                 아래 칸에 원고를 직접 붙여넣어도 미리듣기와 영상 만들기는 그대로 됩니다.

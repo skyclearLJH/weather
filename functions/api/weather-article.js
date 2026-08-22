@@ -306,16 +306,48 @@ ${placeBlock}
   // 어떤 모델이 원고를 써 줬는지 화면에 알려 주려고 기억해 둔다.
   let usedModel = MODELS[0];
 
+  // 화면 쪽은 120초를 기다린다. 서버가 그보다 늦게 답하면 화면에는 원인을 알 수 없는
+  // 'signal timed out'만 남는다. 그래서 서버는 90초를 스스로의 마감으로 삼고, 남은
+  // 시간 안에서만 다음 모델을 시도한다. 무엇을 시도해 어떻게 실패했는지도 함께 남긴다.
+  const DEADLINE_MS = 90000;
+  const ATTEMPT_MS = 45000;
+  const startedAt = Date.now();
+  const remainingMs = () => DEADLINE_MS - (Date.now() - startedAt);
+  const attempts = [];
+
   const callModel = async (model, retryNote) => {
-    const response = await fetch(endpointOf(model), {
-      method: 'POST',
-      headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPayload(retryNote)),
-      signal: AbortSignal.timeout(120000),
-    });
+    const budget = Math.min(ATTEMPT_MS, remainingMs());
+    if (budget <= 3000) {
+      const late = new Error(`시간 안에 원고를 받지 못했습니다. (${Math.round((Date.now() - startedAt) / 1000)}초 경과)`);
+      late.exhaustedTime = true;
+      throw late;
+    }
+    const attemptAt = Date.now();
+    const note = (message) => {
+      attempts.push({ model, ms: Date.now() - attemptAt, error: message });
+    };
+    let response;
+    try {
+      response = await fetch(endpointOf(model), {
+        method: 'POST',
+        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildPayload(retryNote)),
+        signal: AbortSignal.timeout(budget),
+      });
+    } catch (error) {
+      // 끊긴 이유가 우리 마감 때문이라는 것을 화면에서 알아볼 수 있게 바꿔 준다.
+      const timedOut = /abort|timeout/i.test(error?.message ?? '');
+      const wrapped = timedOut
+        ? new Error(`${model} 응답이 ${Math.round(budget / 1000)}초 안에 오지 않았습니다.`)
+        : error;
+      wrapped.timedOut = timedOut;
+      note(wrapped.message);
+      throw wrapped;
+    }
     const result = await response.json();
     if (!response.ok || result?.error) {
       const raw = result?.error?.message || `기사 생성 실패 (${response.status})`;
+      note(`${response.status} ${raw}`.slice(0, 160));
       if (response.status === 429 || /quota|rate limit/i.test(raw)) {
         // 하루치를 다 쓴 것과 잠깐 몰린 것은 전혀 다르다. 기다려서 될 일이 아니면
         // 기다리라고 하지 않는다.
@@ -333,6 +365,7 @@ ${placeBlock}
     }
     const candidate = result?.candidates?.[0];
     const parts = candidate?.content?.parts ?? [];
+    attempts.push({ model, ms: Date.now() - attemptAt, error: null });
     return {
       script: parts.map((part) => part?.text ?? '').join('').trim(),
       finishReason: candidate?.finishReason ?? null,
@@ -350,7 +383,9 @@ ${placeBlock}
         return answer;
       } catch (error) {
         lastError = error;
-        if (!error.daily) throw error;
+        // 하루치를 다 쓴 모델과, 제때 답하지 않은 모델은 건너뛰고 다음 모델로 간다.
+        if (error.exhaustedTime) throw error;
+        if (!error.daily && !error.timedOut) throw error;
       }
     }
     throw lastError ?? new Error('기사 생성에 실패했습니다.');
@@ -359,7 +394,7 @@ ${placeBlock}
   try {
     let attempt = await askOnce('');
     let foreign = findForeignPlaces(attempt.script, allowedPlaces);
-    if (attempt.script && foreign.length) {
+    if (attempt.script && foreign.length && remainingMs() > ATTEMPT_MS / 2) {
       const note = `
 앞서 쓴 원고에 사실에 없는 지명 ${foreign.join(', ')}이(가) 들어갔습니다. `
         + '이 지명은 빼고, 쓸 수 있는 지명만으로 다시 쓰세요.';
@@ -389,6 +424,7 @@ ${placeBlock}
       finishReason: attempt.finishReason,
       // 끝내 남은 낯선 지명은 숨기지 말고 화면에서 눈에 띄게 알린다.
       foreignPlaces: foreign,
+      attempts,
       generatedAt: new Date().toISOString(),
     }), {
       status: 200,
@@ -399,6 +435,8 @@ ${placeBlock}
       error: error.message || '기사 생성 중 오류가 발생했습니다.',
       // 하루 한도면 화면에서 기다리게 하지 않는다.
       dailyQuotaExhausted: Boolean(error.daily),
+      // 어느 모델을 몇 초씩 부르다 실패했는지 남긴다. 원인을 화면에서 바로 읽을 수 있다.
+      attempts,
     }), {
       status: error.status === 429 ? 429 : 502,
       headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' },
