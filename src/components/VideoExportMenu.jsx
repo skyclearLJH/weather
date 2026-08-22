@@ -66,12 +66,14 @@ const NARRATION_TAIL_SEC = 1.2;
 // 음성 영상의 사이클 구성. 관측을 두 번 보여 준 뒤 마지막에 초단기 예측으로
 // 넘어가고, 예측 마지막 장면은 낭독이 끝날 때까지 그대로 둔다.
 const CYCLES = [
+  // 사이클 0: 첫 화면(3시간 전)에서 잠깐 멈춰 시작을 알린다. 재생 없이 정지만.
+  { phase: 'start', play: 0, hold: 5 },
   { phase: 'observation', play: 15, hold: 5 },
   { phase: 'observation', play: 15, hold: 5, ranking: true },
   // hold가 null이면 '끝까지'라는 뜻이다.
   { phase: 'forecast', play: 10, hold: null },
 ];
-// 마지막 사이클의 정지를 뺀, 정해진 길이의 합(20 + 20 + 10 = 50초).
+// 마지막 사이클의 정지를 뺀, 정해진 길이의 합(5 + 20 + 20 + 10 = 55초).
 const CYCLES_FIXED_SEC = CYCLES.reduce(
   (sum, cycle) => sum + cycle.play + (cycle.hold ?? 0),
   0,
@@ -405,9 +407,13 @@ function VideoExportMenu({
           const task = schedule[scheduleIndex];
           scheduleIndex += 1;
           if (task.kind === 'cycle-start') {
-            // 화면을 처음 위치로 돌리고, 관측이 도는 동안에만 줌인이 진행되게 한다.
+            // 화면을 처음 위치로 돌리고, 재생이 도는 동안에만 줌인이 진행되게 한다.
             map?.jumpTo?.(startCamera);
-            map?.easeTo?.({ ...endCamera, duration: task.cameraSeconds * 1000, essential: true });
+            // 재생 없이 멈춰 서는 구간(사이클 0)에서는 시작 화면 그대로 둔다.
+            // duration 0으로 easeTo를 부르면 그 자리에서 곧바로 줌인돼 버린다.
+            if (task.cameraSeconds > 0) {
+              map?.easeTo?.({ ...endCamera, duration: task.cameraSeconds * 1000, essential: true });
+            }
             onRankingTable?.(task.ranking);
             rankingTouched = true;
           } else if (task.kind === 'phase') {
@@ -582,9 +588,10 @@ function VideoExportMenu({
             {withNarration ? (
               <div className="col-span-2 -mt-1 space-y-1 text-[11px] font-semibold leading-relaxed text-white/45">
                 <div>
-                  1·2사이클은 레이더 {CYCLES[0].play}초 재생 + 현재에서 {CYCLES[0].hold}초 정지,
-                  3사이클은 초단기 예측 {CYCLES[2].play}초 재생 뒤 마지막 장면을 끝까지 둡니다.
-                  두 번째 사이클에서만 시간당 강수량 순위표가 나옵니다.
+                  시작 화면에서 {CYCLES[0].hold}초 멈춘 뒤, 레이더 {CYCLES[1].play}초 재생 +
+                  현재에서 {CYCLES[1].hold}초 정지를 두 번 하고, 초단기 예측 {CYCLES[3].play}초 재생 뒤
+                  마지막 장면을 끝까지 둡니다.
+                  두 번째 재생 구간에서만 시간당 강수량 순위표가 나옵니다.
                   영상 길이는 낭독에 맞춰집니다.
                 </div>
                 <div className="text-cyan-200/70">

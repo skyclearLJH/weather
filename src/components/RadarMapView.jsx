@@ -3063,11 +3063,20 @@ const RadarMapView = ({
     ({ phase, start, end, seconds }) => {
       const range = findTimelineRange(videoTimelineDates, start, end);
       if (!range) return;
-      // 관측과 예측의 경계는 '현재 시각 이후 첫 프레임' 앞이다.
-      const nowMs = Date.now();
-      let boundary = videoTimelineDates.findIndex((date) => date.getTime() > nowMs) - 1;
+      // 관측과 예측의 경계는 '마지막 관측 프레임'이다. 시계 시각으로 자르면
+      // 관측이 몇 분 늦게 들어오는 사이에 만들어진 예측 첫 프레임이 딸려 들어와,
+      // '현재'라며 예측 화면을 보여 주게 된다.
+      let boundary = frames.findLastIndex((frame) => frame.kind === 'obs');
       if (boundary < range.startIndex) boundary = range.startIndex;
       if (boundary > range.endIndex || boundary < 0) boundary = range.endIndex;
+
+      // 시작 지점에 그대로 멈춰 서는 단계.
+      if (phase === 'start') {
+        setIsPlaying(false);
+        setPlayTarget(null);
+        setFrameIndex(range.startIndex);
+        return;
+      }
 
       const from = phase === 'forecast' ? boundary : range.startIndex;
       const to = phase === 'forecast' ? range.endIndex : boundary;
@@ -3079,7 +3088,7 @@ const RadarMapView = ({
       setPlayIntervalMs(Math.max(45, Math.round((seconds * 1000) / steps)));
       window.requestAnimationFrame(() => setIsPlaying(true));
     },
-    [videoTimelineDates],
+    [videoTimelineDates, frames],
   );
 
   // 두 번째 사이클에서만 순위표를 띄우기 위해 영상 쪽에서 켜고 끈다.
