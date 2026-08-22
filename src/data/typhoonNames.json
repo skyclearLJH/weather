@@ -1,0 +1,568 @@
+{
+ "_설명": "태풍위원회 공식 태풍 이름 140개. 1조부터 5조까지 각 조를 위에서 아래로 이어 붙인 순서다.",
+ "_출처": "https://www.weather.go.kr/w/hazard/typhoon/basic/info2.do",
+ "_받은날": "2026-08-22",
+ "_기준": "2026년 13호가 이 목록의 73번째(0부터 셈)인 돌핀. 18호 사우델(78)로 교차 확인함.",
+ "names": [
+  {
+   "ko": "담레이",
+   "en": "DAMREY"
+  },
+  {
+   "ko": "톈마",
+   "en": "TIANMA"
+  },
+  {
+   "ko": "기러기",
+   "en": "KIROGI"
+  },
+  {
+   "ko": "윈욍",
+   "en": "YUN-YEUNG"
+  },
+  {
+   "ko": "고이누",
+   "en": "KOINU"
+  },
+  {
+   "ko": "볼라벤",
+   "en": "BOLAVEN"
+  },
+  {
+   "ko": "산바",
+   "en": "SANBA"
+  },
+  {
+   "ko": "즐라왓",
+   "en": "JELAWAT"
+  },
+  {
+   "ko": "티로우",
+   "en": "TIROU"
+  },
+  {
+   "ko": "말릭시",
+   "en": "MALIKSI"
+  },
+  {
+   "ko": "개미",
+   "en": "GAEMI"
+  },
+  {
+   "ko": "프라피룬",
+   "en": "PRAPIROON"
+  },
+  {
+   "ko": "마리아",
+   "en": "MARIA"
+  },
+  {
+   "ko": "손띤",
+   "en": "SON-TINH"
+  },
+  {
+   "ko": "암필",
+   "en": "AMPIL"
+  },
+  {
+   "ko": "우쿵",
+   "en": "WUKONG"
+  },
+  {
+   "ko": "종다리",
+   "en": "JONGDARI"
+  },
+  {
+   "ko": "산산",
+   "en": "SHANSHAN"
+  },
+  {
+   "ko": "도모",
+   "en": "TOMO"
+  },
+  {
+   "ko": "리피",
+   "en": "LEEPI"
+  },
+  {
+   "ko": "버빙카",
+   "en": "BEBINCA"
+  },
+  {
+   "ko": "풀라산",
+   "en": "PULASAN"
+  },
+  {
+   "ko": "솔릭",
+   "en": "SOULIK"
+  },
+  {
+   "ko": "시마론",
+   "en": "CIMARON"
+  },
+  {
+   "ko": "나래",
+   "en": "NARAE"
+  },
+  {
+   "ko": "부라파",
+   "en": "BURAPHA"
+  },
+  {
+   "ko": "바리자트",
+   "en": "BARIJAT"
+  },
+  {
+   "ko": "호아반",
+   "en": "HOABAN"
+  },
+  {
+   "ko": "코키",
+   "en": "KOKI"
+  },
+  {
+   "ko": "인싱",
+   "en": "YINXING"
+  },
+  {
+   "ko": "개구리",
+   "en": "GAEGURI"
+  },
+  {
+   "ko": "딤섬",
+   "en": "DIM-SUM"
+  },
+  {
+   "ko": "헤비",
+   "en": "HEBI"
+  },
+  {
+   "ko": "파북",
+   "en": "PABUK"
+  },
+  {
+   "ko": "우딥",
+   "en": "WUTIP"
+  },
+  {
+   "ko": "스팟",
+   "en": "SEPAT"
+  },
+  {
+   "ko": "문",
+   "en": "MUN"
+  },
+  {
+   "ko": "다나스",
+   "en": "DANAS"
+  },
+  {
+   "ko": "나리",
+   "en": "NARI"
+  },
+  {
+   "ko": "위파",
+   "en": "WIPHA"
+  },
+  {
+   "ko": "프란시스코",
+   "en": "FRANCISCO"
+  },
+  {
+   "ko": "꼬마이",
+   "en": "CO-MAY"
+  },
+  {
+   "ko": "크로사",
+   "en": "KROSA"
+  },
+  {
+   "ko": "바이루",
+   "en": "BAILU"
+  },
+  {
+   "ko": "버들",
+   "en": "PODUL"
+  },
+  {
+   "ko": "링링",
+   "en": "LINGLING"
+  },
+  {
+   "ko": "가지키",
+   "en": "KAJIKI"
+  },
+  {
+   "ko": "농파",
+   "en": "NONGFA"
+  },
+  {
+   "ko": "페이파",
+   "en": "PEIPAH"
+  },
+  {
+   "ko": "타파",
+   "en": "TAPAH"
+  },
+  {
+   "ko": "미탁",
+   "en": "MITAG"
+  },
+  {
+   "ko": "라가사",
+   "en": "RAGASA"
+  },
+  {
+   "ko": "너구리",
+   "en": "NEOGURI"
+  },
+  {
+   "ko": "부알로이",
+   "en": "BUALOI"
+  },
+  {
+   "ko": "마트모",
+   "en": "MATMO"
+  },
+  {
+   "ko": "할롱",
+   "en": "HALONG"
+  },
+  {
+   "ko": "나크리",
+   "en": "NAKRI"
+  },
+  {
+   "ko": "펑선",
+   "en": "FENGSHEN"
+  },
+  {
+   "ko": "갈매기",
+   "en": "KALMAEGI"
+  },
+  {
+   "ko": "풍웡",
+   "en": "FUNG-WONG"
+  },
+  {
+   "ko": "고토",
+   "en": "KOTO"
+  },
+  {
+   "ko": "노카엔",
+   "en": "NOKAEN"
+  },
+  {
+   "ko": "페냐",
+   "en": "PENHA"
+  },
+  {
+   "ko": "누리",
+   "en": "NURI"
+  },
+  {
+   "ko": "실라코",
+   "en": "SINLAKU"
+  },
+  {
+   "ko": "하구핏",
+   "en": "HAGUPIT"
+  },
+  {
+   "ko": "장미",
+   "en": "JANGMI"
+  },
+  {
+   "ko": "메칼라",
+   "en": "MEKKHALA"
+  },
+  {
+   "ko": "히고스",
+   "en": "HIGOS"
+  },
+  {
+   "ko": "바비",
+   "en": "BAVI"
+  },
+  {
+   "ko": "마이삭",
+   "en": "MAYSAK"
+  },
+  {
+   "ko": "하이선",
+   "en": "HAISHEN"
+  },
+  {
+   "ko": "노을",
+   "en": "NOUL"
+  },
+  {
+   "ko": "돌핀",
+   "en": "DOLPHIN"
+  },
+  {
+   "ko": "구지라",
+   "en": "KUJIRA"
+  },
+  {
+   "ko": "찬홈",
+   "en": "CHAN-HOM"
+  },
+  {
+   "ko": "페이러우",
+   "en": "PEILOU"
+  },
+  {
+   "ko": "낭카",
+   "en": "NANGKA"
+  },
+  {
+   "ko": "사우델",
+   "en": "SAUDEL"
+  },
+  {
+   "ko": "나라",
+   "en": "NARRA"
+  },
+  {
+   "ko": "개나리",
+   "en": "GAENARI"
+  },
+  {
+   "ko": "앗사니",
+   "en": "ATSANI"
+  },
+  {
+   "ko": "아타우",
+   "en": "ETAU"
+  },
+  {
+   "ko": "방랑",
+   "en": "BANG-LANG"
+  },
+  {
+   "ko": "크로반",
+   "en": "KROVANH"
+  },
+  {
+   "ko": "두쥐안",
+   "en": "DUJUAN"
+  },
+  {
+   "ko": "수리개",
+   "en": "SURIGAE"
+  },
+  {
+   "ko": "초이완",
+   "en": "CHOI-WAN"
+  },
+  {
+   "ko": "고구마",
+   "en": "KOGUMA"
+  },
+  {
+   "ko": "참피",
+   "en": "CHAMPI"
+  },
+  {
+   "ko": "인파",
+   "en": "IN-FA"
+  },
+  {
+   "ko": "츰파카",
+   "en": "CEMPAKA"
+  },
+  {
+   "ko": "네파탁",
+   "en": "NEPARTAK"
+  },
+  {
+   "ko": "루핏",
+   "en": "LUPIT"
+  },
+  {
+   "ko": "미리내",
+   "en": "MIRINAE"
+  },
+  {
+   "ko": "니다",
+   "en": "NIDA"
+  },
+  {
+   "ko": "오마이스",
+   "en": "OMAIS"
+  },
+  {
+   "ko": "룩빈",
+   "en": "LUC-BINH"
+  },
+  {
+   "ko": "찬투",
+   "en": "CHANTHU"
+  },
+  {
+   "ko": "뎬무",
+   "en": "DIANMU"
+  },
+  {
+   "ko": "민들레",
+   "en": "MINDULLE"
+  },
+  {
+   "ko": "라이언록",
+   "en": "LIONROCK"
+  },
+  {
+   "ko": "도케이",
+   "en": "TOKEI"
+  },
+  {
+   "ko": "남테운",
+   "en": "NAMTHEUN"
+  },
+  {
+   "ko": "말로",
+   "en": "MALOU"
+  },
+  {
+   "ko": "냐토",
+   "en": "NYATOH"
+  },
+  {
+   "ko": "사르불",
+   "en": "SARBUL"
+  },
+  {
+   "ko": "아무야오",
+   "en": "AMUYAO"
+  },
+  {
+   "ko": "고사리",
+   "en": "GOSARI"
+  },
+  {
+   "ko": "차바",
+   "en": "CHABA"
+  },
+  {
+   "ko": "에어리",
+   "en": "AERE"
+  },
+  {
+   "ko": "송다",
+   "en": "SONGDA"
+  },
+  {
+   "ko": "트라세",
+   "en": "TRASES"
+  },
+  {
+   "ko": "무란",
+   "en": "MULAN"
+  },
+  {
+   "ko": "메아리",
+   "en": "MEARI"
+  },
+  {
+   "ko": "칭마",
+   "en": "TSING-MA"
+  },
+  {
+   "ko": "도카게",
+   "en": "TOKAGE"
+  },
+  {
+   "ko": "옹망",
+   "en": "ONG-MANG"
+  },
+  {
+   "ko": "무이파",
+   "en": "MUIFA"
+  },
+  {
+   "ko": "므르복",
+   "en": "MERBOK"
+  },
+  {
+   "ko": "난마돌",
+   "en": "NANMADOL"
+  },
+  {
+   "ko": "탈라스",
+   "en": "TALAS"
+  },
+  {
+   "ko": "호두",
+   "en": "HODU"
+  },
+  {
+   "ko": "꿀랍",
+   "en": "KULAP"
+  },
+  {
+   "ko": "로키",
+   "en": "ROKE"
+  },
+  {
+   "ko": "선까",
+   "en": "SONCA"
+  },
+  {
+   "ko": "네삿",
+   "en": "NESAT"
+  },
+  {
+   "ko": "하이탕",
+   "en": "HAITANG"
+  },
+  {
+   "ko": "잠자리",
+   "en": "JAMJARI"
+  },
+  {
+   "ko": "바냔",
+   "en": "BANYAN"
+  },
+  {
+   "ko": "야마네코",
+   "en": "YAMANEKO"
+  },
+  {
+   "ko": "파카르",
+   "en": "PAKHAR"
+  },
+  {
+   "ko": "상우",
+   "en": "SANVU"
+  },
+  {
+   "ko": "마와르",
+   "en": "MAWAR"
+  },
+  {
+   "ko": "구촐",
+   "en": "GUCHOL"
+  },
+  {
+   "ko": "탈림",
+   "en": "TALIM"
+  },
+  {
+   "ko": "보리",
+   "en": "BORI"
+  },
+  {
+   "ko": "카눈",
+   "en": "KHANUN"
+  },
+  {
+   "ko": "란",
+   "en": "LAN"
+  },
+  {
+   "ko": "사오비엔",
+   "en": "SAOBIEN"
+  }
+ ]
+}

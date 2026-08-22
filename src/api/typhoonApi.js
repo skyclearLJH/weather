@@ -6,18 +6,46 @@
 
 // 프록시(/api/kma/)는 뒤 경로를 apihub.kma.go.kr/ 뒤에 그대로 붙이므로
 // apihub 실제 경로인 'api/typ01/url/...'을 포함해야 한다.
+import TYPHOON_NAME_LIST from '../data/typhoonNames.json';
+
 const KMA_BASE = '/api/kma/api/typ01/url';
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 // 번호→이름 표(직접 관리). 미등록 태풍은 "제N호 태풍"으로 폴백한다.
 // 형식: `${YY}-${TYP}` : { ko, en }
-const TYPHOON_NAMES = {
-  '2026-13': { ko: '돌핀', en: 'Dolphin' },
-  '2026-14': { ko: '구지라', en: 'Kujira' },
-  '2026-15': { ko: '찬홈', en: 'Chan-hom' },
+// 태풍 이름은 기상청 API가 주지 않는다(항목 자체가 없다). 그래서 태풍위원회
+// 공식 목록을 두고 번호로 찾아 쓴다. 이름은 해마다 새로 시작하지 않고 목록을
+// 순서대로 이어 쓰므로, 한 해의 기준점 하나만 알면 그 뒤는 저절로 정해진다.
+//
+// 새해 첫 태풍이 나오면 그 이름을 기상청에서 확인해 아래 표에 한 줄만 더하면
+// 된다(예: 2027년 1호가 '란'이면 { number: 1, index: 138 }).
+// 목록에서 몇 번째인지는 typhoonNames.json의 순서(0부터)를 세면 된다.
+const NAME_ANCHORS = {
+  // 2026년 13호 = 돌핀(73번째). 18호 사우델(78)·19호 나라·20호 개나리로 확인함.
+  2026: { number: 13, index: 73 },
 };
 
-export const getTyphoonName = (year, number) => TYPHOON_NAMES[`${year}-${number}`] ?? null;
+// 목록에 없는 이름을 써야 할 때만 여기에 적는다(이름이 바뀌는 등 예외).
+const NAME_OVERRIDES = {
+  // '2026-21': { ko: '...', en: '...' },
+};
+
+export const getTyphoonName = (year, number) => {
+  const override = NAME_OVERRIDES[`${year}-${number}`];
+  if (override) return override;
+
+  const anchor = NAME_ANCHORS[year];
+  if (!anchor || !Number.isFinite(number)) return null;
+
+  const names = TYPHOON_NAME_LIST.names ?? [];
+  if (names.length === 0) return null;
+
+  // 기준 태풍보다 앞선 번호는 지난해에서 이어져 온 것이라 이 표로는 알 수 없다.
+  if (number < anchor.number) return null;
+
+  const offset = anchor.index + (number - anchor.number);
+  return names[offset % names.length] ?? null;
+};
 
 // KMA 태풍 강도 → 숫자 등급 (최대풍속 WS, m/s 기준)
 //  약(17~25)=1, 중(25~33)=2, 강(33~44)=3, 매우강(44~54)=4, 초강력(54↑)=5
