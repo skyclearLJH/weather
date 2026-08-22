@@ -11,6 +11,9 @@ const corsHeaders = {
 
 // 무료 한도는 모델마다 따로 센다(하루 20회). 주 모델을 다 쓰면 다음 모델로 넘어가
 // 하루에 쓸 수 있는 횟수를 늘린다. 앞쪽일수록 원고 품질이 낫다.
+// 낭독이 이보다 길어지면 안 된다. 글자 수 상한을 여기서 거꾸로 계산한다.
+const MAX_NARRATION_SEC = 75;
+
 const MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
 const endpointOf = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -222,12 +225,18 @@ export async function onRequestPost(context) {
 
   let facts = '';
   let durationSeconds = 70;
+  let speakingRate = 1.1;
   try {
     const body = await context.request.json();
     const structuredFacts = body?.analysis?.factsText;
     facts = String(structuredFacts || body?.facts || '').slice(0, 6000);
     if (Number.isFinite(body?.durationSeconds)) {
       durationSeconds = Math.min(180, Math.max(20, Number(body.durationSeconds)));
+    }
+    // 낭독 속도가 빠르면 같은 글자 수라도 더 짧게 끝난다. 길이를 초로 맞추려면
+    // 속도를 함께 봐야 한다.
+    if (Number.isFinite(body?.speakingRate)) {
+      speakingRate = Math.min(1.6, Math.max(0.7, Number(body.speakingRate)));
     }
   } catch {
     return new Response(JSON.stringify({ error: '요청 형식이 올바르지 않습니다.' }), {
@@ -242,11 +251,17 @@ export async function onRequestPost(context) {
     });
   }
 
-  // TTS로 실제 재어 보니 공백 뺀 265자가 46초였다(초당 5.8자). 1분을 채우려면
-  // 그보다 넉넉해야 해서 초당 6자로 잡고, 아래로는 덜 깎이게 폭을 좁게 준다.
-  const targetChars = Math.round(durationSeconds * 6);
-  const minChars = Math.round(targetChars * 0.95);
-  const maxChars = Math.round(targetChars * 1.2);
+  // TTS로 실제 재어 보니 1배속에서 공백 뺀 265자가 46초였다(초당 5.8자).
+  // 속도를 올리면 그만큼 더 읽으므로 초당 글자 수도 함께 커진다.
+  const charsPerSecond = 5.8 * speakingRate;
+  // 방송에 넣을 수 있는 상한. 이 시간을 넘으면 영상이 늘어지고 편성에 걸린다.
+  const ceilingChars = Math.floor(MAX_NARRATION_SEC * charsPerSecond);
+  const targetChars = Math.min(
+    Math.round(durationSeconds * charsPerSecond),
+    Math.round(ceilingChars * 0.95),
+  );
+  const minChars = Math.round(targetChars * 0.9);
+  const maxChars = ceilingChars;
 
   const allowedPlaces = extractAllowedPlaces(facts);
   const placeBlock = allowedPlaces.length
@@ -268,6 +283,7 @@ ${placeBlock}
 `
           + `위 사실만으로 원고를 쓰세요. 공백을 뺀 글자 수가 ${minChars}~${maxChars}자,`
           + ' 문단은 6~8개가 되게 하세요.\n'
+          + `${maxChars}자를 넘기면 방송에 쓸 수 없습니다. 넘칠 것 같으면 덜 중요한 강수대나 부연을 덜어 내세요.\n`
           + '관측·실측·예측 문단이 서로 섞이지 않았는지, 모든 지명과 수치가 사실에 있는지 대조하세요.'
           + `${retryNote}`,
       }],

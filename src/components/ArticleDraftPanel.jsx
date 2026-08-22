@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Copy, FileText, LoaderCircle, Play, RefreshCw, Square, X } from 'lucide-react';
 
 // 방송에 쓸 만한 목소리만 추렸다. Neural2는 또렷하고 Chirp3-HD는 더 자연스럽다.
+// 방송에 넣을 수 있는 낭독 길이의 상한(서버의 글자 수 상한과 같은 기준).
+const MAX_NARRATION_SEC = 75;
+
 const VOICE_OPTIONS = [
   { id: 'ko-KR-Neural2-B', label: '여성 B (또렷) · 기본' },
   { id: 'ko-KR-Neural2-A', label: '여성 A (또렷)' },
@@ -51,7 +54,7 @@ function ArticleDraftPanel({
       const response = await fetch('/api/weather-article', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ analysis, durationSeconds }),
+        body: JSON.stringify({ analysis, durationSeconds, speakingRate }),
         signal: AbortSignal.timeout(120000),
       });
       // 서버가 죽거나 경로가 안 잡히면 HTML(오류 페이지)이 온다.
@@ -99,7 +102,7 @@ function ArticleDraftPanel({
       runningRef.current = false;
     }
     return undefined;
-  }, [analysis, facts, durationSeconds, onScriptChange]);
+  }, [analysis, facts, durationSeconds, speakingRate, onScriptChange]);
 
   // 만든 소리는 blob URL로 잡아 두고, 다시 만들 때마다 이전 것을 놓아준다.
   const releaseAudio = useCallback(() => {
@@ -187,7 +190,11 @@ function ArticleDraftPanel({
   }, [facts]);
 
   // 낭독 시간 어림: TTS로 재어 보니 공백 뺀 글자 기준 초당 5.8자였다.
-  const readSeconds = Math.round((script.replace(/\s/g, '').length / 5.8) || 0);
+  // 1배속에서 초당 5.8자. 속도를 올리면 그만큼 빨리 읽는다.
+  const readSeconds = Math.round(
+    (script.replace(/\s/g, '').length / (5.8 * (speakingRate || 1))) || 0,
+  );
+  const overLimit = readSeconds > MAX_NARRATION_SEC;
 
   return (
     <div
@@ -257,8 +264,9 @@ function ArticleDraftPanel({
           <div className="mb-2 flex items-center gap-2">
             <span className="text-[11px] font-black tracking-wide text-cyan-200">방송 원고</span>
             {script.trim() ? (
-              <span className="text-[11px] font-bold text-white/45">
+              <span className={`text-[11px] font-bold ${overLimit ? 'text-amber-300' : 'text-white/45'}`}>
                 {script.replace(/\s/g, '').length}자 · 약 {readSeconds}초
+                {overLimit ? ` · ${MAX_NARRATION_SEC}초 넘음` : ''}
                 {meta?.finishReason && meta.finishReason !== 'STOP' ? ' · 잘림' : ''}
               </span>
             ) : null}
