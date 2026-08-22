@@ -586,19 +586,10 @@ function VideoExportMenu({
             </label>
 
             {withNarration ? (
-              <div className="col-span-2 -mt-1 space-y-1 text-[11px] font-semibold leading-relaxed text-white/45">
-                <div>
-                  시작 화면에서 {CYCLES[0].hold}초 멈춘 뒤, 레이더 {CYCLES[1].play}초 재생 +
-                  현재에서 {CYCLES[1].hold}초 정지를 두 번 하고, 초단기 예측 {CYCLES[3].play}초 재생 뒤
-                  마지막 장면을 끝까지 둡니다.
-                  두 번째 재생 구간에서만 시간당 강수량 순위표가 나옵니다.
-                  영상 길이는 낭독에 맞춰집니다.
-                </div>
-                <div className="text-cyan-200/70">
-                  시각은 3시간 전 ~ 1시간 뒤, 시작 화면은 전국,
-                  {autoLabel ? ` 종료 화면은 ${autoLabel}로` : ' 종료 화면은 비가 가장 센 곳으로'}
-                  {' '}자동으로 잡았습니다. 바꾸려면 아래에서 다시 지정하세요.
-                </div>
+              <div className="col-span-2 -mt-1 text-[11px] font-semibold leading-relaxed text-cyan-200/70">
+                시각은 3시간 전 ~ 1시간 뒤, 시작 화면은 전국,
+                {autoLabel ? ` 종료 화면은 ${autoLabel}로` : ' 종료 화면은 비가 가장 센 곳으로'}
+                {' '}자동으로 잡았습니다. 바꾸려면 아래에서 다시 지정하세요.
               </div>
             ) : null}
 
