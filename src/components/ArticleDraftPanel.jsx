@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Copy, FileText, LoaderCircle, Play, RefreshCw, Square, X } from 'lucide-react';
 
 // 방송에 쓸 만한 목소리만 추렸다. Neural2는 또렷하고 Chirp3-HD는 더 자연스럽다.
-// 방송에 넣을 수 있는 낭독 길이의 상한(서버의 글자 수 상한과 같은 기준).
-const MAX_NARRATION_SEC = 75;
+// 실제 TTS에서 공백 제외 456자를 1.1배속으로 읽었을 때 78초가 걸렸다.
+// 서버와 같은 실측 비율로 예상 시간을 표시한다.
+const CALIBRATED_CHARS = 456;
+const CALIBRATED_SECONDS = 78;
+const CALIBRATED_RATE = 1.1;
+const MAX_NARRATION_SEC = 60;
 
 const VOICE_OPTIONS = [
   { id: 'ko-KR-Neural2-B', label: '여성 B (또렷) · 기본' },
@@ -20,7 +24,7 @@ const VOICE_OPTIONS = [
 // 원고는 그대로 읽을 게 아니라 손볼 것을 전제로 편집 가능하게 만든다.
 function ArticleDraftPanel({
   analysis,
-  durationSeconds = 70,
+  durationSeconds = 60,
   script,
   onScriptChange,
   voice,
@@ -80,7 +84,6 @@ function ArticleDraftPanel({
         for (let left = wait; left > 0; left -= 1) {
           // 패널을 닫았으면 더 기다릴 이유가 없다.
           if (!aliveRef.current) { setWaitSeconds(null); return undefined; }
-          // eslint-disable-next-line no-await-in-loop
           await new Promise((resolve) => { setTimeout(resolve, 1000); });
           setWaitSeconds(left - 1);
         }
@@ -189,10 +192,11 @@ function ArticleDraftPanel({
     }
   }, [facts]);
 
-  // 낭독 시간 어림: TTS로 재어 보니 공백 뺀 글자 기준 초당 5.8자였다.
-  // 1배속에서 초당 5.8자. 속도를 올리면 그만큼 빨리 읽는다.
+  // 실측 비율을 기준으로 현재 배속에서의 최종 영상 길이를 어림한다.
+  const charsPerSecond = (CALIBRATED_CHARS / CALIBRATED_SECONDS)
+    * ((speakingRate || CALIBRATED_RATE) / CALIBRATED_RATE);
   const readSeconds = Math.round(
-    (script.replace(/\s/g, '').length / (5.8 * (speakingRate || 1))) || 0,
+    (script.replace(/\s/g, '').length / charsPerSecond) || 0,
   );
   const overLimit = readSeconds > MAX_NARRATION_SEC;
 
@@ -207,7 +211,7 @@ function ArticleDraftPanel({
         <FileText className="h-5 w-5 text-cyan-300" aria-hidden="true" />
         <span className="text-base font-black">레이더 방송 원고</span>
         <span className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-[10px] font-black text-cyan-100">
-          목표 1분 10초
+          목표 1분 · 1.1배속
         </span>
         <button
           type="button"

@@ -5189,7 +5189,7 @@ const RadarMapView = ({
             {articleAnalysis ? (
               <ArticleDraftPanel
                 analysis={articleAnalysis}
-                durationSeconds={70}
+                durationSeconds={60}
                 script={narrationScript}
                 onScriptChange={setNarrationScript}
                 voice={narrationVoice}

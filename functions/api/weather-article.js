@@ -11,8 +11,12 @@ const corsHeaders = {
 
 // 무료 한도는 모델마다 따로 센다(하루 20회). 주 모델을 다 쓰면 다음 모델로 넘어가
 // 하루에 쓸 수 있는 횟수를 늘린다. 앞쪽일수록 원고 품질이 낫다.
-// 낭독이 이보다 길어지면 안 된다. 글자 수 상한을 여기서 거꾸로 계산한다.
-const MAX_NARRATION_SEC = 75;
+// 실제 방송 TTS 실측: 공백 제외 456자를 1.1배속으로 읽으면 78초였다.
+// 이 비율을 기준으로 1.1배속 최종 영상이 60초가 되게 글자 수를 계산한다.
+const CALIBRATED_CHARS = 456;
+const CALIBRATED_SECONDS = 78;
+const CALIBRATED_RATE = 1.1;
+const TARGET_NARRATION_SEC = 60;
 
 const MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
 const endpointOf = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -129,7 +133,7 @@ const STYLE_SAMPLES = `[문체 예시 1 - 이 구성과 호흡을 가장 가깝�
 // 레이더 원고 생성기 전용 규칙. 기존 원고 API의 호환성은 유지하되 구조화 분석이
 // 들어오면 이 지침을 우선 적용해 관측·실측·예측의 경계를 분명히 한다.
 const RADAR_SCRIPT_SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스터입니다.
-입력된 구조화 사실만 사용해 약 1분 10초 분량의 한국어 원고를 씁니다.
+입력된 구조화 사실만 사용해 TTS 1.1배속 기준 약 1분 분량의 한국어 원고를 씁니다.
 
 [절대 규칙]
 - 입력 사실에 없는 지명, 수치, 시각, 원인, 특보를 만들거나 보완하지 않습니다.
@@ -224,7 +228,7 @@ export async function onRequestPost(context) {
   }
 
   let facts = '';
-  let durationSeconds = 70;
+  let durationSeconds = TARGET_NARRATION_SEC;
   let speakingRate = 1.1;
   try {
     const body = await context.request.json();
@@ -251,17 +255,14 @@ export async function onRequestPost(context) {
     });
   }
 
-  // TTS로 실제 재어 보니 1배속에서 공백 뺀 265자가 46초였다(초당 5.8자).
-  // 속도를 올리면 그만큼 더 읽으므로 초당 글자 수도 함께 커진다.
-  const charsPerSecond = 5.8 * speakingRate;
-  // 방송에 넣을 수 있는 상한. 이 시간을 넘으면 영상이 늘어지고 편성에 걸린다.
-  const ceilingChars = Math.floor(MAX_NARRATION_SEC * charsPerSecond);
-  const targetChars = Math.min(
-    Math.round(durationSeconds * charsPerSecond),
-    Math.round(ceilingChars * 0.95),
-  );
-  const minChars = Math.round(targetChars * 0.9);
-  const maxChars = ceilingChars;
+  // 456자/78초 실측을 1.1배속 기준으로 삼고, 다른 재생 속도를 선택하면
+  // 그 비율만큼만 글자 수를 보정한다. 1.1배속·60초의 중심값은 351자다.
+  const charsPerSecond = (CALIBRATED_CHARS / CALIBRATED_SECONDS)
+    * (speakingRate / CALIBRATED_RATE);
+  const targetChars = Math.round(durationSeconds * charsPerSecond);
+  // 모델이 목표보다 조금 길게 쓰는 경향을 고려해 상한을 2%로 좁힌다.
+  const minChars = Math.round(targetChars * 0.96);
+  const maxChars = Math.round(targetChars * 1.02);
 
   const allowedPlaces = extractAllowedPlaces(facts);
   const placeBlock = allowedPlaces.length
