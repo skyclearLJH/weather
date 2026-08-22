@@ -1129,7 +1129,7 @@ function HistoricalCaseComparison({
       <div className="pointer-events-none absolute left-[4.4%] top-[9%] z-40">
         <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 text-white shadow-2xl">
           <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
-          <span className="whitespace-nowrap text-3xl font-black">과거 사례 비교</span>
+          <span className="whitespace-nowrap text-[34.5px] font-black">과거 사례 비교</span>
           <div className="ml-auto flex shrink-0 flex-col items-center whitespace-nowrap border-l border-white/30 pl-4 leading-tight text-[#bdd6fb]">
             <span className="text-[11px] font-bold">{kind === 'rain' ? '레이더 · AWS' : 'AWS 기온'}</span>
             <span className="text-[11px] font-bold tabular-nums">{kind === 'rain' ? `${durationHours}시간 누적` : `${durationHours}시간 변화`}</span>

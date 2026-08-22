@@ -1391,7 +1391,7 @@ const HeatwaveBroadcastView = () => {
       <div className="pointer-events-none absolute left-[4.4%] top-[14%] z-20 flex items-center">
         <div className="relative flex h-20 w-[620px] max-w-[72vw] items-center gap-4 overflow-hidden rounded-md bg-gradient-to-r from-[#0a3070]/95 via-[#155bb5]/95 to-[#2f7cd6]/95 px-5 text-white shadow-2xl">
           <div className="flex flex-col leading-none"><span className="text-sm font-black">KBS</span><span className="mt-1 text-[10px] font-bold text-white/75">WEATHER</span></div>
-          <span className="whitespace-nowrap text-3xl font-black">
+          <span className="whitespace-nowrap text-[34.5px] font-black">
             {mode === 'tropical'
               ? '열대야 현황'
               : mode === 'change'

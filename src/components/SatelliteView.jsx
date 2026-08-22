@@ -1703,7 +1703,7 @@ function SatelliteView({
           {/* 타이틀·시각은 현재 상태의 내용만 조건부로 렌더한다(디졸브로 두 내용을
               겹치면 전환 중 잘못된 시각이 번쩍이고, 폭이 남아 시간이 밴드 밖으로
               밀리는 문제가 있어 즉시 전환으로 되돌림). */}
-          <span className="whitespace-nowrap text-3xl font-black">{typhoonActive ? typhoonBandTitle : '위성 영상'}</span>
+          <span className="whitespace-nowrap text-[34.5px] font-black">{typhoonActive ? typhoonBandTitle : '위성 영상'}</span>
           {typhoonActive ? (
             <div className="ml-auto flex shrink-0 flex-col items-center whitespace-nowrap border-l border-white/30 pl-4 leading-tight text-[#bdd6fb]">
               <span className="text-[11px] font-bold tabular-nums">{typhoonBandTime?.day}</span>
