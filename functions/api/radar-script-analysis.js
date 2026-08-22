@@ -360,7 +360,7 @@ export const buildRadarScriptAnalysis = (input) => {
       facts.push({
         type: 'intensity-change',
         coreIndex,
-        text: `${core.places.join(', ')} 부근은 ${minutesAgoText(core.intensityChange.minutesAgo)}보다 같은 위치의 레이더상 비의 강도가 뚜렷하게 ${core.intensityChange.direction === 'stronger' ? '강해졌습니다' : '약해졌습니다'}.`,
+        text: `${core.places.join(', ')} 부근은 ${minutesAgoText(core.intensityChange.minutesAgo)}보다 레이더상 비의 강도가 뚜렷하게 ${core.intensityChange.direction === 'stronger' ? '강해졌습니다' : '약해졌습니다'}.`,
       });
     }
   });
