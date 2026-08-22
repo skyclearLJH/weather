@@ -11,9 +11,28 @@
 
 const STORAGE_KEY = 'weathernow.broadcastPlayRange.v1';
 
+// 저장은 sessionStorage에 한다. localStorage에 두면 어제 지정한 구간이 다음 날
+// 들어와도 남아, 아무것도 안 했는데 구간이 잡혀 있는 상태로 시작됐다.
+// sessionStorage는 같은 탭 안에서는 페이지를 새로 열어도 유지되므로
+// 편집→방송 전달(window.location 변경)은 그대로 되고, 탭을 닫으면 사라진다.
+const storage = () => {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+};
+
+// 예전에 localStorage로 저장하던 값이 남아 있으면 지운다(한 번만).
+try {
+  window.localStorage?.removeItem(STORAGE_KEY);
+} catch {
+  // 저장소를 못 쓰는 환경(프라이빗 모드 등)은 그냥 넘어간다.
+}
+
 const readAll = () => {
   try {
-    return JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}') || {};
+    return JSON.parse(storage()?.getItem(STORAGE_KEY) || '{}') || {};
   } catch {
     return {};
   }
@@ -39,7 +58,7 @@ export const writePlayRange = (viewId, range) => {
     delete all[viewId];
   }
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    storage()?.setItem(STORAGE_KEY, JSON.stringify(all));
   } catch {
     // 저장 실패(프라이빗 모드 등)는 조용히 무시 — 기능만 비활성화된다.
   }
