@@ -3,10 +3,11 @@
 //
 // 이동 방향과 강수 구역 확대·축소는 뽑지 않는다. 무게중심으로 계산하면
 // 비구름이 여러 곳에 흩어져 있을 때 실제와 다른 방향이 나와, 방송 원고에
-// 틀린 이야기가 실렸다. 앞일은 우리가 셈하지 않고 기상청 초단기예측만 쓴다.
+// 틀린 이야기가 실렸다. 다만 같은 위치의 강수 강도 변화는 과거 격자와 직접
+// 비교해 쓸 수 있게 한다. 앞일은 우리가 셈하지 않고 기상청 초단기예측만 쓴다.
 //
 // 기사를 LLM에 맡길 때 레이더 이미지를 그대로 보여주면 지명을 지어내기 때문에,
-// 여기서 위치·강도·이동을 수치로 확정한 뒤 문장 쓰기만 넘긴다.
+// 여기서 위치·강도·같은 위치의 변화만 수치로 확정한 뒤 문장 쓰기만 넘긴다.
 // 화면이 이미 들고 있는 격자(buckets)와 좌표 매핑을 그대로 쓰므로 추가 통신이 없다.
 
 import sggLabels from '../data/map/kr-sgg-labels-20260701.json';
@@ -122,7 +123,9 @@ const summarizeFrame = ({
       const [lon, lat] = toLonLat(x, y);
       if (landOnly && !isSouthKoreanLand(lon, lat)) continue;
       const weight = bucketToMm(bucket);
-      cells.push({ lon, lat, bucket });
+      // sourceIndex를 보존하면 과거 프레임의 정확히 같은 격자를 다시 읽을 수 있다.
+      // 이를 이용해 이동 방향을 추측하지 않고 해당 지역의 강도 변화만 비교한다.
+      cells.push({ lon, lat, bucket, sourceIndex });
       lonSum += lon * weight;
       latSum += lat * weight;
       weightSum += weight;
@@ -237,7 +240,52 @@ const describeCluster = (cells, bucketToMm) => {
     cellCount: cells.length,
     centroid,
     // 관측소 매칭 때만 쓴다. attachNearbyObservations가 API 전송 전에 제거한다.
-    footprint: cells.map(({ lon, lat }) => ({ lon, lat })),
+    footprint: cells.map(({ lon, lat, sourceIndex }) => ({ lon, lat, sourceIndex })),
+  };
+};
+
+const intensityTier = (mm) => {
+  if (mm >= 100) return 5;
+  if (mm >= 50) return 4;
+  if (mm >= 30) return 3;
+  if (mm >= 10) return 2;
+  if (mm > 0) return 1;
+  return 0;
+};
+
+// 현재 강수 핵이 놓인 격자의 10여 분 전 강도와 현재 강도를 비교한다.
+// 중심점 이동이나 면적 변화는 전혀 사용하지 않으며, 단계가 달라질 만큼
+// 뚜렷한 변화만 기사 재료로 남긴다.
+const intensityChangeAtSamePlace = (cluster, referenceFrame, latestFrame, bucketToMm) => {
+  if (!referenceFrame?.buckets || !latestFrame?.validTime || !referenceFrame?.validTime) return null;
+  const sourceIndexes = [...new Set(
+    (cluster.footprint ?? []).map((point) => point.sourceIndex).filter(Number.isInteger),
+  )];
+  if (sourceIndexes.length < 5) return null;
+
+  let previousMaxBucket = 0;
+  sourceIndexes.forEach((sourceIndex) => {
+    previousMaxBucket = Math.max(previousMaxBucket, referenceFrame.buckets[sourceIndex] ?? 0);
+  });
+  const previousMaxMm = toBroadcastMm(bucketToMm(previousMaxBucket));
+  const currentMaxMm = cluster.maxMm;
+  const minuteGap = Math.round(
+    (latestFrame.validTime.getTime() - referenceFrame.validTime.getTime()) / 60000,
+  );
+  const tierGap = intensityTier(currentMaxMm) - intensityTier(previousMaxMm);
+  const strengthened = tierGap >= 1
+    || (currentMaxMm - previousMaxMm >= 10 && currentMaxMm >= Math.max(10, previousMaxMm * 1.5));
+  const weakened = tierGap <= -1
+    || (previousMaxMm - currentMaxMm >= 10 && previousMaxMm >= Math.max(10, currentMaxMm * 1.5));
+  if (!strengthened && !weakened) return null;
+
+  return {
+    direction: strengthened ? 'stronger' : 'weaker',
+    referenceAt: referenceFrame.validTime,
+    minutesAgo: minuteGap,
+    previousMaxMm,
+    currentMaxMm,
+    basis: 'same-grid',
   };
 };
 
@@ -285,11 +333,24 @@ export const buildRadarFacts = ({
   const anyNow = summarize(latest, anyMinBucket);
 
   // 강한 비구름을 덩어리로 나눠 '어디에 얼마나'를 각각 말할 수 있게 한다.
+  const referenceFrame = usable
+    .slice(0, -1)
+    .map((frame) => ({
+      frame,
+      minutesAgo: Math.round((latest.validTime.getTime() - frame.validTime.getTime()) / 60000),
+    }))
+    .filter(({ minutesAgo }) => minutesAgo >= 8 && minutesAgo <= 20)
+    .sort((left, right) => Math.abs(left.minutesAgo - 10) - Math.abs(right.minutesAgo - 10))[0]?.frame;
+
   const clusters = strongNow
     ? clusterCells(strongNow.cells)
         // 좁은 한두 격자에만 잡힌 값은 이상 에코일 수 있어 덩어리로 치지 않는다.
         .filter((cells) => cells.length >= 5)
         .map((cells) => describeCluster(cells, bucketToMm))
+        .map((cluster) => ({
+          ...cluster,
+          intensityChange: intensityChangeAtSamePlace(cluster, referenceFrame, latest, bucketToMm),
+        }))
         .sort((left, right) => right.maxMm - left.maxMm || right.cellCount - left.cellCount)
         .slice(0, 3)
     : [];

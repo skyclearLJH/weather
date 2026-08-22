@@ -55,6 +55,22 @@ const sanitizeObservation = (observation) => {
   };
 };
 
+const sanitizeIntensityChange = (change, currentMaxMm) => {
+  if (!['stronger', 'weaker'].includes(change?.direction) || change?.basis !== 'same-grid') return null;
+  const minutesAgo = finite(change.minutesAgo, 5, 30);
+  const previousMaxMm = finite(change.previousMaxMm, 0, 300);
+  const referenceAt = isoDate(change.referenceAt);
+  if (minutesAgo === null || previousMaxMm === null || !referenceAt) return null;
+  return {
+    direction: change.direction,
+    referenceAt,
+    minutesAgo,
+    previousMaxMm,
+    currentMaxMm,
+    basis: 'same-grid',
+  };
+};
+
 const sanitizeCluster = (cluster) => {
   const maxMm = finite(cluster?.maxMm, 0, 300);
   const lon = finite(cluster?.centroid?.lon, 120, 134);
@@ -73,8 +89,96 @@ const sanitizeCluster = (cluster) => {
     centroid: { lon, lat },
     observations,
     observation: observations[0] ?? null,
+    intensityChange: sanitizeIntensityChange(cluster?.intensityChange, maxMm),
   };
 };
+
+const formatNumber = (value) => Number.isInteger(value) ? String(value) : String(value).replace(/\.0$/, '');
+
+const intensitySummary = (values) => {
+  const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
+  const min = sorted[0];
+  const max = sorted.at(-1);
+  if (min === undefined) return null;
+  if (sorted.length === 1) return { kind: 'exact', value: formatNumber(min) };
+  if (min === max) return { kind: 'around', value: formatNumber(min) };
+
+  const lowerBand = Math.floor(min / 10) * 10;
+  const upperBand = Math.ceil(max / 10) * 10;
+  if (lowerBand >= 10 && min > lowerBand && max < lowerBand + 10) {
+    return { kind: 'above', value: String(lowerBand) };
+  }
+
+  const anchor = Math.round(((min + max) / 2) / 10) * 10;
+  if (anchor >= 10 && max - min <= 6 && min >= anchor - 5 && max <= anchor + 5) {
+    return { kind: 'around', value: String(anchor) };
+  }
+  return {
+    kind: 'range',
+    lower: formatNumber(lowerBand),
+    upper: formatNumber(upperBand || max),
+  };
+};
+
+const observationAmountText = (summary) => {
+  if (summary.kind === 'above') return `${summary.value}밀리미터가 넘는`;
+  if (summary.kind === 'around') return `${summary.value}밀리미터 안팎의`;
+  if (summary.kind === 'range') return `${summary.lower}에서 ${summary.upper}밀리미터의`;
+  return `${summary.value}밀리미터의`;
+};
+
+const forecastAmountText = (summary) => {
+  if (summary.kind === 'above') return `${summary.value}밀리미터 이상으로`;
+  if (summary.kind === 'around') return `${summary.value}밀리미터 안팎으로`;
+  if (summary.kind === 'range') return `${summary.lower}에서 ${summary.upper}밀리미터로`;
+  return `${summary.value}밀리미터 안팎으로`;
+};
+
+const buildObservationGroups = (landCores) => {
+  const used = new Set();
+  return landCores.map((core, coreIndex) => {
+    const ranked = core.observations
+      .filter((observation) => observation.value > 0)
+      .filter((observation) => {
+        const key = observation.stationId || observation.label || observation.name;
+        if (used.has(key)) return false;
+        used.add(key);
+        return true;
+      })
+      .sort((left, right) => right.value - left.value);
+    const topValue = ranked[0]?.value;
+    // 한 지역 안에서도 값 차이가 지나치게 큰 지점은 같은 표현으로 묶지 않는다.
+    // 최고값과 10밀리미터 이내인 지점만 최대 3곳 골라 간결하게 요약한다.
+    const observations = ranked
+      .filter((observation) => topValue - observation.value <= 10)
+      .slice(0, 3);
+    if (observations.length === 0) return null;
+    return {
+      coreIndex,
+      places: core.places,
+      observations,
+      amount: intensitySummary(observations.map((item) => item.value)),
+    };
+  }).filter(Boolean);
+};
+
+const buildForecastGroups = (summary) => {
+  const selected = summary.slice(0, 3);
+  if (selected.length === 0) return [];
+  const maxValue = Math.max(...selected.map((item) => item.maxMm));
+  const high = selected.filter((item) => maxValue - item.maxMm <= 20);
+  const low = selected.filter((item) => maxValue - item.maxMm > 20);
+  return [high, low].filter((items) => items.length > 0).map((items) => ({
+    places: [...new Set(items.flatMap((item) => item.places.slice(0, 1)))].slice(0, 3),
+    firstValidAt: items.map((item) => item.firstValidAt).sort()[0],
+    lastValidAt: items.map((item) => item.lastValidAt).sort().at(-1),
+    amount: intensitySummary(items.map((item) => item.maxMm)),
+  }));
+};
+
+const minutesAgoText = (minutes) => minutes >= 8 && minutes <= 14
+  ? '10여 분 전'
+  : `${Math.round(minutes)}분 전`;
 
 const sanitizeForecast = (forecast, observedAt) => {
   if (!forecast?.usable) {
@@ -136,6 +240,8 @@ export const buildRadarScriptAnalysis = (input) => {
   const landCores = (radar.clusters ?? []).map(sanitizeCluster).filter(Boolean).slice(0, 3);
   const areas = (radar.areas ?? []).map((area) => cleanText(area, 20)).filter(Boolean).slice(0, 5);
   const forecast = sanitizeForecast(input?.forecast, observedAt);
+  const observationGroups = buildObservationGroups(landCores);
+  const forecastGroups = forecast.available ? buildForecastGroups(forecast.summary) : [];
   const facts = [];
   const observedText = kstTimeText(observedAt);
 
@@ -156,26 +262,36 @@ export const buildRadarScriptAnalysis = (input) => {
       coreIndex: index,
       text: `${core.places.join(', ')} 부근 비구름은 레이더에서 시간당 ${core.maxMm}밀리미터 안팎으로 추정됩니다.`,
     });
-    core.observations.forEach((observation) => {
+    if (core.intensityChange) {
       facts.push({
-        type: 'nearby-observation',
+        type: 'intensity-change',
         coreIndex: index,
-        text: `가까운 ${observation.label || observation.name} 지점에서는 지난 1시간 동안 ${observation.value}밀리미터의 비가 관측됐습니다.`,
+        text: `${core.places.join(', ')} 부근은 ${minutesAgoText(core.intensityChange.minutesAgo)}보다 같은 위치의 레이더상 비의 강도가 뚜렷하게 ${core.intensityChange.direction === 'stronger' ? '강해졌습니다' : '약해졌습니다'}.`,
       });
+    }
+  });
+
+  observationGroups.forEach((group) => {
+    const labels = group.observations.map((observation) => observation.label || observation.name);
+    facts.push({
+      type: 'nearby-observation-group',
+      text: labels.length === 1
+        ? `가까운 ${labels[0]} 지점에서는 지난 1시간 동안 ${observationAmountText(group.amount)} 비가 관측됐습니다.`
+        : `가까운 ${labels.join(', ')} 지점에서는 지난 1시간 동안 모두 ${observationAmountText(group.amount)} 비가 관측됐습니다.`,
     });
   });
 
-  if (forecast.available && forecast.summary.length > 0) {
-    forecast.summary.slice(0, 2).forEach((item) => {
+  if (forecast.available && forecastGroups.length > 0) {
+    forecastGroups.forEach((group) => {
       facts.push({
-        type: 'forecast',
-        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 ${kstTimeText(item.firstValidAt)}부터 ${item.places.join(', ')} 부근에 시간당 최대 ${item.maxMm}밀리미터 안팎으로 추정되는 비구름이 나타날 가능성이 있습니다.`,
+        type: 'forecast-group',
+        text: `레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는 앞으로 한 시간 동안 ${group.places.join(', ')} 부근에 시간당 ${forecastAmountText(group.amount)} 추정되는 비구름이 나타날 가능성이 있습니다.`,
       });
     });
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     observedAt,
     observedLabel: observedText,
     thresholdMmPerHour: 10,
@@ -183,7 +299,9 @@ export const buildRadarScriptAnalysis = (input) => {
     landCores,
     nearbyObservations: landCores
       .flatMap((core) => core.observations),
+    observationGroups,
     forecast,
+    forecastGroups,
     facts,
     factsText: facts.map((fact) => `- ${fact.text}`).join('\n'),
     generatedAt: new Date().toISOString(),
