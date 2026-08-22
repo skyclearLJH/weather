@@ -425,7 +425,7 @@ export const buildRadarScriptAnalysis = (input) => {
   facts.push({
     type: 'distribution',
     text: corroboratedEntries.length > 0
-      ? `현재 ${focusedAreas.length ? focusedAreas.join(', ') : focusedCores.flatMap((core) => core.places).join(', ')}에는 레이더상 강한 비구름이 걸쳐 있습니다.`
+      ? `현재 ${focusedAreas.length ? focusedAreas.join(', ') : focusedCores.flatMap((core) => core.places).join(', ')}에는 강한 비구름이 걸쳐 있습니다.`
       : landCores.length > 0
         ? `육지에서 시간당 10밀리미터 이상으로 추정되는 비구름이 ${areas.length ? areas.join(', ') : landCores.flatMap((core) => core.places).slice(0, 4).join(', ')}에 분포합니다.`
       : '육지에는 시간당 10밀리미터 이상의 뚜렷한 강수 핵이 없습니다.',
@@ -444,7 +444,7 @@ export const buildRadarScriptAnalysis = (input) => {
       facts.push({
         type: 'intensity-change',
         coreIndex,
-        text: `${regionReference} 최근 30분 동안 레이더상 ${intensityTrendText(core.intensityChange.direction)}.`,
+        text: `${regionReference} 최근 30분 동안 ${intensityTrendText(core.intensityChange.direction)}.`,
       });
     }
   });
@@ -497,7 +497,8 @@ export const buildRadarScriptAnalysis = (input) => {
       if (lateForecast.strongest) {
         lateText += `${lateText ? ' ' : forecastLeadText(lateForecast.minutesAhead) + ' '}특히 ${lateForecast.strongest.place} 부근은 시간당 ${forecastAmountText(intensitySummary([lateForecast.strongest.maxMm]))} 추정되는 비구름이 이 시각 가장 강할 것으로 예상됩니다.`;
       }
-      facts.push({ type: 'forecast-late', text: lateText });
+      const contrast = lateForecast.weakeningPlaces.length > 0 ? '반면, ' : '';
+      facts.push({ type: 'forecast-late', text: `${contrast}${lateText}` });
     }
   }
 
