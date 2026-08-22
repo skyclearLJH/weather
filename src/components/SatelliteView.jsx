@@ -1477,10 +1477,11 @@ function SatelliteView({
   // 밴드를 레이더 등과 같은 폭으로 유지하려고 '제'는 빼고 'N호 태풍 이름'으로 쓴다.
   // 이름이 3글자 이상이면 더 좁게 '태풍 이름'만 표시한다.
   const typhoonActive = typhoonEnabled && !!selectedTyphoon;
+  // 밴드 제목은 늘 호수를 붙인다. 예전에는 이름이 길면 호수를 빼서 폭을 아꼈는데,
+  // 어떤 태풍은 호수가 있고 어떤 태풍은 없어 들쭉날쭉했다. 제목 폭을 다시 재어
+  // 보니 가장 긴 이름(5글자)이라도 327px로 허용폭 425px 안에 들어온다.
   const typhoonBandTitle = selectedTyphoon
-    ? selectedTyphoon.name && selectedTyphoon.name.length >= 3
-      ? `태풍 ‘${selectedTyphoon.name}’`
-      : `${selectedTyphoon.number}호 태풍${selectedTyphoon.name ? ` ‘${selectedTyphoon.name}’` : ''}`
+    ? `${selectedTyphoon.number}호 태풍${selectedTyphoon.name ? ` ‘${selectedTyphoon.name}’` : ''}`
     : null;
   const typhoonBandTime = selectedTyphoon ? formatAnnounceLabel(selectedTyphoon.announceTime) : null;
 
