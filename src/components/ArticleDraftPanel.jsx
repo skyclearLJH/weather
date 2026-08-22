@@ -16,8 +16,8 @@ const VOICE_OPTIONS = [
 // 사실이 틀리면 원고도 틀리므로, 검수는 사실 쪽을 먼저 보게 위에 둔다.
 // 원고는 그대로 읽을 게 아니라 손볼 것을 전제로 편집 가능하게 만든다.
 function ArticleDraftPanel({
-  facts,
-  durationSeconds = 60,
+  analysis,
+  durationSeconds = 70,
   script,
   onScriptChange,
   voice,
@@ -26,6 +26,7 @@ function ArticleDraftPanel({
   onRateChange,
   onClose,
 }) {
+  const facts = analysis?.factsText ?? '';
   const [status, setStatus] = useState('idle'); // idle | loading | ready | error
   const [error, setError] = useState('');
   const [meta, setMeta] = useState(null);
@@ -50,7 +51,7 @@ function ArticleDraftPanel({
       const response = await fetch('/api/weather-article', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ facts, durationSeconds }),
+        body: JSON.stringify({ analysis, durationSeconds }),
         signal: AbortSignal.timeout(120000),
       });
       // 서버가 죽거나 경로가 안 잡히면 HTML(오류 페이지)이 온다.
@@ -98,7 +99,7 @@ function ArticleDraftPanel({
       runningRef.current = false;
     }
     return undefined;
-  }, [facts, durationSeconds, onScriptChange]);
+  }, [analysis, facts, durationSeconds, onScriptChange]);
 
   // 만든 소리는 blob URL로 잡아 두고, 다시 만들 때마다 이전 것을 놓아준다.
   const releaseAudio = useCallback(() => {
@@ -197,7 +198,10 @@ function ArticleDraftPanel({
     >
       <div className="flex items-center gap-3 border-b border-white/15 px-5 py-3.5">
         <FileText className="h-5 w-5 text-cyan-300" aria-hidden="true" />
-        <span className="text-base font-black">레이더 기사 미리보기</span>
+        <span className="text-base font-black">레이더 방송 원고</span>
+        <span className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-[10px] font-black text-cyan-100">
+          목표 1분 10초
+        </span>
         <button
           type="button"
           onClick={() => generate()}
@@ -242,6 +246,11 @@ function ArticleDraftPanel({
           <pre className="whitespace-pre-wrap break-words text-[13px] font-semibold leading-relaxed text-white/85">
             {facts || '레이더 자료를 불러오는 중입니다.'}
           </pre>
+          {analysis?.forecast?.available === false ? (
+            <div className="mt-3 rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-[11px] font-bold text-amber-100">
+              초단기예측 자료가 오래됐거나 충분하지 않아 미래 전망은 원고에서 제외합니다.
+            </div>
+          ) : null}
         </div>
 
         <div className="px-5 py-4">

@@ -37,6 +37,10 @@ import {
   onRequestOptions as weatherArticleOptions,
 } from './functions/api/weather-article.js';
 import {
+  onRequestPost as radarScriptAnalysisPost,
+  onRequestOptions as radarScriptAnalysisOptions,
+} from './functions/api/radar-script-analysis.js';
+import {
   onRequestPost as weatherTtsPost,
   onRequestOptions as weatherTtsOptions,
 } from './functions/api/weather-tts.js';
@@ -141,6 +145,25 @@ const localFunctionsPlugin = (env) => ({
             }),
           };
           await sendFunctionResponse(await weatherArticlePost(articleContext), res);
+          return;
+        }
+
+        if (requestUrl.pathname === '/api/radar-script-analysis') {
+          if (req.method === 'OPTIONS') {
+            await sendFunctionResponse(await radarScriptAnalysisOptions(), res);
+            return;
+          }
+          const analysisChunks = [];
+          for await (const chunk of req) analysisChunks.push(chunk);
+          const analysisContext = {
+            env: localEnv,
+            request: new Request(requestUrl.toString(), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: Buffer.concat(analysisChunks),
+            }),
+          };
+          await sendFunctionResponse(await radarScriptAnalysisPost(analysisContext), res);
           return;
         }
 

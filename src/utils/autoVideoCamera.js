@@ -1,61 +1,10 @@
 // 음성을 넣은 영상은 '지금 비가 가장 센 곳'으로 밀고 들어가며 끝난다.
 // 그 종료 화면을 자동으로 잡아 주기 위한 계산들.
 
-import provinces from '../data/map/krProvinces.json';
 import sggLabels from '../data/map/kr-sgg-labels-20260701.json';
+import { eachPolygon, provinceBoxes, provinceContaining } from './krLand.js';
 
-// 시도마다 사각 범위를 미리 재 둔다. 육지 판정을 후보마다 하므로
-// 범위 밖이면 곧바로 걸러 내야 빠르다.
-const provinceBoxes = (provinces.features ?? []).map((feature) => {
-  let west = 180;
-  let east = -180;
-  let south = 90;
-  let north = -90;
-  const visit = (polygon) => {
-    for (const [x, y] of polygon[0]) {
-      if (x < west) west = x;
-      if (x > east) east = x;
-      if (y < south) south = y;
-      if (y > north) north = y;
-    }
-  };
-  const geometry = feature.geometry;
-  if (geometry?.type === 'Polygon') visit(geometry.coordinates);
-  else if (geometry?.type === 'MultiPolygon') geometry.coordinates.forEach(visit);
-  return { feature, west, east, south, north };
-});
-
-const ringContains = (ring, lon, lat) => {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-    const [xi, yi] = ring[i];
-    const [xj, yj] = ring[j];
-    const straddles = (yi > lat) !== (yj > lat);
-    if (straddles && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-};
-
-const eachPolygon = (geometry, visit) => {
-  if (!geometry) return;
-  if (geometry.type === 'Polygon') visit(geometry.coordinates);
-  else if (geometry.type === 'MultiPolygon') geometry.coordinates.forEach(visit);
-};
-
-// 지점이 육지(어느 시도) 안인지 본다. 바다면 null.
-export const provinceContaining = (lon, lat) => {
-  for (const box of provinceBoxes) {
-    if (lon < box.west || lon > box.east || lat < box.south || lat > box.north) continue;
-    let hit = false;
-    eachPolygon(box.feature.geometry, (polygon) => {
-      if (hit) return;
-      if (ringContains(polygon[0], lon, lat)
-        && !polygon.slice(1).some((hole) => ringContains(hole, lon, lat))) hit = true;
-    });
-    if (hit) return box.feature;
-  }
-  return null;
-};
+export { provinceContaining };
 
 /**
  * 레이더 격자에서 '육지 위' 가장 센 지점을 찾는다.
@@ -112,29 +61,23 @@ export const findPeakPoint = ({
 };
 
 // 지점이 속한 시도를 찾는다. 바다 위라면 가장 가까운 시도로 대신한다.
+// 육지 판정 자체는 krLand.js가 맡고, 여기서는 '가까운 시도' 대체만 더한다.
 export const findProvinceAt = (lon, lat) => {
+  const exact = provinceContaining(lon, lat);
+  if (exact) return exact;
+
+  // 바다에 찍혔으면 경계가 가장 가까운 시도로 대신한다.
   let nearest = null;
   let nearestDistance = Infinity;
-
-  for (const feature of provinces.features ?? []) {
-    let hit = false;
-    eachPolygon(feature.geometry, (polygon) => {
-      if (hit) return;
-      // 첫 고리는 바깥 경계, 나머지는 구멍이다.
-      if (ringContains(polygon[0], lon, lat)
-        && !polygon.slice(1).some((hole) => ringContains(hole, lon, lat))) hit = true;
-    });
-    if (hit) return feature;
-
-    // 바다에 찍힌 경우를 대비해 경계까지의 거리도 재 둔다.
-    eachPolygon(feature.geometry, (polygon) => {
+  for (const box of provinceBoxes) {
+    eachPolygon(box.feature.geometry, (polygon) => {
       for (const [px, py] of polygon[0]) {
         const dx = (px - lon) * Math.cos((lat * Math.PI) / 180);
         const dy = py - lat;
         const distance = dx * dx + dy * dy;
         if (distance < nearestDistance) {
           nearestDistance = distance;
-          nearest = feature;
+          nearest = box.feature;
         }
       }
     });

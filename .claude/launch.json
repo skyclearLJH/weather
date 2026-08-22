@@ -1,6 +1,7 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "weather-dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173 }
+    { "name": "weather-dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173 },
+    { "name": "weather-dev-5174", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "--", "--port", "5174", "--strictPort"], "port": 5174 }
   ]
 }

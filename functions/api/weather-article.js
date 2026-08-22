@@ -14,6 +14,7 @@ const corsHeaders = {
 const MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
 const endpointOf = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
+// 이전 레이더 원고 호출과 비교할 수 있도록 당분간 남겨 둔 구형 지침.
 const SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스터입니다.
 주어진 '관측 사실'만으로 레이더 영상 해설 원고를 씁니다.
 
@@ -122,6 +123,30 @@ const STYLE_SAMPLES = `[문체 예시 1 - 이 구성과 호흡을 가장 가깝�
 지금은 홍성과 예산, 아산 일대를
 지나고 있습니다.//`;
 
+// 레이더 원고 생성기 전용 규칙. 기존 원고 API의 호환성은 유지하되 구조화 분석이
+// 들어오면 이 지침을 우선 적용해 관측·실측·예측의 경계를 분명히 한다.
+const RADAR_SCRIPT_SYSTEM_PROMPT = `당신은 KBS 기상 방송 원고를 쓰는 기상캐스터입니다.
+입력된 구조화 사실만 사용해 약 1분 10초 분량의 한국어 원고를 씁니다.
+
+[절대 규칙]
+- 입력 사실에 없는 지명, 수치, 시각, 원인, 특보를 만들거나 보완하지 않습니다.
+- 첫 문장은 정확히 "레이더 영상을 통해 현재 비구름 상황과 앞으로 한 시간 전망을 함께 살펴보겠습니다."로 씁니다.
+- 레이더 강도는 "레이더에서는 ... 추정되는 비구름"처럼 추정치임을 밝힙니다.
+- 지상 관측은 "가까운 ... 지점에서는 지난 1시간 동안 ... 비가 관측됐습니다"로 씁니다. AWS라는 용어는 쓰지 않습니다.
+- 같은 강수 핵에 지상 관측이 여러 개 있으면 값이 큰 지점부터 최대 3곳을 반영합니다. 레이더 추정치보다 실제 관측값을 빠뜨리지 않는 것을 우선합니다.
+- 관측 사실과 예측은 같은 문단에 섞지 않습니다.
+- 예측은 입력에 forecast 사실이 있을 때만 쓰며, 반드시 "레이더 영상을 바탕으로 기상청이 예측한 초단기 예측에서는"이라는 취지의 문장으로 시작합니다.
+- 예측에는 "가능성이 있습니다" 또는 "예상됩니다"를 쓰고 확정적으로 단정하지 않습니다.
+- 미래 전망은 앞으로 한 시간까지만 다룹니다.
+- 마지막 문장은 정확히 "해당 지역에서는 최신 기상 정보와 특보 상황을 계속 확인하시기 바랍니다."로 쓰고 끝에 //를 붙입니다.
+
+[방송 문체]
+- 쉬운 한국어를 쓰고 API, AWS, 격자, 추정 오차 같은 기술 설명은 넣지 않습니다.
+- 가장 강한 육지 강수 핵부터 1~2곳을 설명하고, 지역을 길게 나열하지 않습니다.
+- 같은 종결어미와 "강한", "매우", "계속" 같은 표현을 잇달아 반복하지 않습니다.
+- 한 줄은 자막에 쓰기 좋게 짧게 끊고, 문단 사이에는 빈 줄을 하나 둡니다.
+- 원고 외의 설명이나 제목은 출력하지 않습니다.`;
+
 // Cloudflare Workers에는 process가 없다. 로컬 dev(node)에서만 있으므로
 // typeof로 감싸지 않으면 키가 비었을 때 그 줄에서 바로 예외(1101)가 난다.
 const readApiKey = (context) => {
@@ -183,10 +208,11 @@ export async function onRequestPost(context) {
   }
 
   let facts = '';
-  let durationSeconds = 60;
+  let durationSeconds = 70;
   try {
     const body = await context.request.json();
-    facts = String(body?.facts ?? '').slice(0, 4000);
+    const structuredFacts = body?.analysis?.factsText;
+    facts = String(structuredFacts || body?.facts || '').slice(0, 6000);
     if (Number.isFinite(body?.durationSeconds)) {
       durationSeconds = Math.min(180, Math.max(20, Number(body.durationSeconds)));
     }
@@ -219,18 +245,17 @@ ${allowedPlaces.join(', ')}
     : '';
 
   const buildPayload = (retryNote = '') => ({
-    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    system_instruction: { parts: [{ text: RADAR_SCRIPT_SYSTEM_PROMPT }] },
     contents: [{
       role: 'user',
       parts: [{
-        text: `${STYLE_SAMPLES}
-
+        text: `[원고에 사용할 수 있는 사실]
 ${facts}
 ${placeBlock}
 `
           + `위 사실만으로 원고를 쓰세요. 공백을 뺀 글자 수가 ${minChars}~${maxChars}자,`
-          + ' 문단은 8~11개가 되게 하세요.\n'
-          + '쓰기 전에 이동 방향과 시제(전/후)를 사실과 한 번 대조하세요.'
+          + ' 문단은 7~10개가 되게 하세요.\n'
+          + '관측·실측·예측 문단이 서로 섞이지 않았는지, 모든 지명과 수치가 사실에 있는지 대조하세요.'
           + `${retryNote}`,
       }],
     }],

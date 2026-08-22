@@ -21,7 +21,11 @@ import VideoExportMenu from './VideoExportMenu.jsx';
 import WeatherWorkspaceMenu from './WeatherWorkspaceMenu.jsx';
 import { updateWorkspaceModeInUrl } from '../utils/weatherWorkspaceMode.js';
 import ArticleDraftPanel from './ArticleDraftPanel.jsx';
-import { buildRadarFacts, formatRadarFacts } from '../utils/radarFacts.js';
+import {
+  attachNearbyObservations,
+  buildForecastFacts,
+  buildRadarFacts,
+} from '../utils/radarFacts.js';
 import {
   findPeakPoint,
   findProvinceAt,
@@ -1592,7 +1596,9 @@ const RadarMapView = ({
   const transitionFromCanvasRef = useRef(null);
   const transitionToCanvasRef = useRef(null);
   const transitionAnimationRef = useRef(null);
-  const [articleFacts, setArticleFacts] = useState(null);
+  const [articleAnalysis, setArticleAnalysis] = useState(null);
+  const [articleBuildStatus, setArticleBuildStatus] = useState('idle');
+  const [articleBuildError, setArticleBuildError] = useState('');
   // 원고와 목소리는 패널 밖에 둔다. 패널을 닫아도 손본 원고가 남아야
   // 그대로 영상에 실린다.
   const [narrationScript, setNarrationScript] = useState('');
@@ -1709,9 +1715,10 @@ const RadarMapView = ({
   const [showHourlyTop5, setShowHourlyTop5] = useState(false);
   const [showAccumTop5, setShowAccumTop5] = useState(false);
   const [hourlyTop5, setHourlyTop5] = useState([]);
+  const [hourlyObservations, setHourlyObservations] = useState([]);
 
   useEffect(() => {
-    if (!isRadarView || !showHourlyTop5) {
+    if (!isRadarView) {
       return undefined;
     }
     let isActive = true;
@@ -1721,16 +1728,24 @@ const RadarMapView = ({
         const data = await fetchServerPrecipitationCurrentRankings();
         if (!isActive) return;
         const rows = (data?.oneHour ?? [])
-          .slice(0, 5)
           .map((item, index) => ({
             id: `${item.rank ?? index}-${item.name ?? ''}`,
+            stationId: item.stationId ?? null,
+            name: item.name ?? '',
             // 누적 강수량 표와 같은 '광역 시군(지점명)' 표기를 그대로 쓴다
             label: formatStationLabel({ name: item.name, address: item.address }),
-            mm: Number.parseFloat(String(item.record ?? '')) || 0,
+            value: Number.parseFloat(String(item.record ?? '')) || 0,
+            lon: Number(item.lon),
+            lat: Number(item.lat),
+            observedAt: data?.observedAt ?? null,
           }));
-        setHourlyTop5(rows);
+        setHourlyObservations(rows);
+        setHourlyTop5(rows.slice(0, 5).map((row) => ({ ...row, mm: row.value })));
       } catch {
-        if (isActive) setHourlyTop5([]);
+        if (isActive) {
+          setHourlyObservations([]);
+          setHourlyTop5([]);
+        }
       }
     };
 
@@ -1741,7 +1756,7 @@ const RadarMapView = ({
       isActive = false;
       clearInterval(timer);
     };
-  }, [isRadarView, showHourlyTop5, refreshToken]);
+  }, [isRadarView, refreshToken]);
   const cacheLimitRef = useRef(FRAME_CACHE_LIMIT);
 
   const loadAccumAnchor = useCallback((hour) => {
@@ -3067,37 +3082,75 @@ const RadarMapView = ({
 
   // 화면에 그려진 레이더 프레임에서 기사용 '관측 사실'을 만든다.
   // 과거 프레임은 이미 캐시에 있으므로 추가 통신 없이 이동·추세까지 계산된다.
-  const handleBuildArticleFacts = useCallback(() => {
+  const handleBuildArticleFacts = useCallback(async () => {
     const mappings = mappingsRef.current;
-    const cache = frameCacheRef.current;
     if (!mappings || frames.length === 0) {
-      setArticleFacts('레이더 자료가 아직 준비되지 않았습니다.');
+      setArticleBuildError('레이더 자료가 아직 준비되지 않았습니다.');
       return;
     }
-    // 현재 시각까지의 관측 프레임 중 캐시된 것만, 최대 3시간 정도를 쓴다.
+    setArticleBuildStatus('loading');
+    setArticleBuildError('');
+    // 현재까지의 레이더와 앞으로 한 시간 QPF를 함께 준비한다. 프레임 요청은 병렬로
+    // 처리하고, RN-60m는 화면 진입 때 이미 별도 요청으로 받아 둔다.
     const observed = frames
       .filter((frame) => frame.kind === 'obs' && frame.validTime <= (currentFrame?.validTime ?? new Date()))
       .slice(-19); // 10분 간격 기준 약 3시간
-    const withBuckets = observed
-      .map((frame) => ({ validTime: frame.validTime, buckets: cache.get(frame.key) }))
-      .filter((frame) => frame.buckets);
-    if (withBuckets.length === 0) {
-      setArticleFacts('레이더 프레임을 아직 다 읽지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
-      return;
+    const latestObservedAt = observed.at(-1)?.validTime;
+    const forecasts = frames.filter((frame) => frame.kind === 'fct'
+      && latestObservedAt
+      && frame.validTime > latestObservedAt
+      && frame.validTime.getTime() <= latestObservedAt.getTime() + 60 * 60 * 1000);
+
+    try {
+      await Promise.allSettled([...observed, ...forecasts].map((frame) => loadFrameData(frame)));
+      const cache = frameCacheRef.current;
+      const withBuckets = observed
+        .map((frame) => ({ validTime: frame.validTime, buckets: cache.get(frame.key) }))
+        .filter((frame) => frame.buckets);
+      if (withBuckets.length === 0) {
+        throw new Error('레이더 프레임을 읽지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
+      }
+      const canvasHeight = mappings.radarMap.length / CANVAS_WIDTH;
+      const radarFacts = buildRadarFacts({
+        frames: withBuckets,
+        mappings: mappings.radarMap,
+        canvasWidth: CANVAS_WIDTH,
+        canvasHeight,
+        toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
+        bucketToMm: (bucket) => bucketLowerValue(bucket),
+      });
+      const landCores = attachNearbyObservations(radarFacts?.clusters, hourlyObservations);
+      const forecastFacts = buildForecastFacts({
+        frames: forecasts.map((frame) => ({
+          validTime: frame.validTime,
+          sourceAt: parseRadarTm(frame.tm),
+          buckets: cache.get(frame.key),
+        })),
+        mappings: mappings.qpfMap,
+        canvasWidth: CANVAS_WIDTH,
+        canvasHeight,
+        toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
+        bucketToMm: (bucket) => bucketLowerValue(bucket),
+        observedAt: radarFacts?.observedAt,
+      });
+      const response = await fetch('/api/radar-script-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          radar: { ...radarFacts, clusters: landCores },
+          forecast: forecastFacts,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const analysis = await response.json();
+      if (!response.ok) throw new Error(analysis?.error || `레이더 분석 실패 (${response.status})`);
+      setArticleAnalysis(analysis);
+      setArticleBuildStatus('ready');
+    } catch (error) {
+      setArticleBuildError(error.message || '레이더 분석에 실패했습니다.');
+      setArticleBuildStatus('error');
     }
-    const canvasHeight = mappings.radarMap.length / CANVAS_WIDTH;
-    const facts = buildRadarFacts({
-      frames: withBuckets,
-      mappings: mappings.radarMap,
-      canvasWidth: CANVAS_WIDTH,
-      canvasHeight,
-      toLonLat: (x, y) => canvasPointToLonLat(x, y, CANVAS_WIDTH, canvasHeight),
-      bucketToMm: (bucket) => bucketLowerValue(bucket),
-    });
-    setArticleFacts(formatRadarFacts(facts, {
-      observations: hourlyTop5.map((row) => ({ name: row.label, value: row.mm })),
-    }));
-  }, [frames, currentFrame, hourlyTop5]);
+  }, [frames, currentFrame, hourlyObservations, loadFrameData]);
 
   // '음성 포함'을 켜면 시각과 화면을 알아서 잡아 준다. 매번 손으로 맞추면
   // 방송 직전에 실수하기 쉬운 값들이라 기본값을 대신 채워 주는 것이다.
@@ -5023,24 +5076,36 @@ const RadarMapView = ({
                 type="button"
                 data-video-hide
                 onClick={handleBuildArticleFacts}
+                disabled={articleBuildStatus === 'loading'}
                 className="absolute bottom-24 left-6 z-40 flex h-10 items-center gap-2 rounded-full border border-cyan-300/50 bg-slate-950/85 px-4 text-xs font-black text-cyan-100 shadow-xl backdrop-blur-md transition hover:bg-slate-900"
               >
-                <FileText className="h-4 w-4" aria-hidden="true" />
-                기사 만들기
+                {articleBuildStatus === 'loading'
+                  ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  : <FileText className="h-4 w-4" aria-hidden="true" />}
+                {articleBuildStatus === 'loading' ? '자료 분석 중' : '기사 생성'}
               </button>
             ) : null}
 
-            {articleFacts ? (
+            {articleBuildError ? (
+              <div
+                data-video-hide
+                className="absolute bottom-36 left-6 z-40 max-w-sm rounded-lg border border-red-300/40 bg-slate-950/90 px-3 py-2 text-xs font-bold text-red-100 shadow-xl"
+              >
+                {articleBuildError}
+              </div>
+            ) : null}
+
+            {articleAnalysis ? (
               <ArticleDraftPanel
-                facts={articleFacts}
-                durationSeconds={60}
+                analysis={articleAnalysis}
+                durationSeconds={70}
                 script={narrationScript}
                 onScriptChange={setNarrationScript}
                 voice={narrationVoice}
                 onVoiceChange={setNarrationVoice}
                 speakingRate={narrationRate}
                 onRateChange={setNarrationRate}
-                onClose={() => setArticleFacts(null)}
+                onClose={() => setArticleAnalysis(null)}
               />
             ) : null}
             {/* 좌상단: 타이틀 밴드(참고 그래픽과 동일 위치·비율) + 현재 프레임 날짜·시각 */}

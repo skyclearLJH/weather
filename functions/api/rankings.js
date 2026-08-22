@@ -41,7 +41,7 @@ const PRECIPITATION_MAX_ONE_HOUR_VISIBLE_LIMIT = 30;
 // 지점이 순위에 뜬다. 1시간 최대 강수량으로 유의미한 값만 노출한다.
 const PRECIPITATION_MAX_ONE_HOUR_MIN_MM = 1.0;
 const AWS_MINUTE_RANGE_REQUEST_TIMEOUT_MS = 12000;
-const RANKING_CACHE_VERSION = 'v8';
+const RANKING_CACHE_VERSION = 'v9';
 const TROPICAL_NIGHT_THRESHOLD_C = 25;
 const TROPICAL_NIGHT_CONFIRMATION_DELAY_MINUTES = 5;
 const TROPICAL_NIGHT_CACHE_MAX_AGE_MS = 60 * 1000;
@@ -344,9 +344,12 @@ const buildRankingRows = (items, unit, sortDirection = 'desc') =>
     .sort((left, right) => (sortDirection === 'asc' ? left.value - right.value : right.value - left.value))
     .map((item, index) => ({
       rank: index + 1,
+      stationId: item.stationId,
       name: item.name,
       record: `${item.value.toFixed(1)}${unit}`,
       address: item.address,
+      lon: item.lon,
+      lat: item.lat,
     }));
 
 const normalizeStationAddress = (value = '') =>
@@ -591,11 +594,15 @@ const parseAwsStationMetadata = (rawText) => {
     }
 
     const stationId = fields[0];
+    const lon = Number.parseFloat(fields[1]);
+    const lat = Number.parseFloat(fields[2]);
     const stationName = fields[8];
     const lawAddress = normalizeStationAddress(fields.slice(13).join(' '));
     stationMetadata.set(stationId, {
       name: stationName,
       address: lawAddress || stationName,
+      lon: Number.isFinite(lon) ? lon : null,
+      lat: Number.isFinite(lat) ? lat : null,
     });
   });
 
@@ -642,6 +649,8 @@ const parseAwsMinuteObservations = (rawText, stationMetadata) =>
         stationId,
         name: metadata.name,
         address: metadata.address,
+        lon: metadata.lon,
+        lat: metadata.lat,
         temperature: parseNumericValue(fields[8]),
         precipitationOneHour: parseNumericValue(fields[11]),
         precipitationToday: parseNumericValue(fields[13]),
@@ -1186,8 +1195,11 @@ const buildPrecipitationCurrent = async (context, stationMetadata, requestedObse
     observedLabel: formatDisplayKoreanDateTime(observedAt),
     oneHour: buildRankingRows(
       rows.filter((item) => item.precipitationOneHour > 0).map((item) => ({
+        stationId: item.stationId,
         name: item.name,
         address: item.address,
+        lon: item.lon,
+        lat: item.lat,
         value: item.precipitationOneHour,
       })),
       'mm',
