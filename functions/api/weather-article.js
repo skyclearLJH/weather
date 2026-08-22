@@ -309,8 +309,10 @@ ${placeBlock}
   // 화면 쪽은 120초를 기다린다. 서버가 그보다 늦게 답하면 화면에는 원인을 알 수 없는
   // 'signal timed out'만 남는다. 그래서 서버는 90초를 스스로의 마감으로 삼고, 남은
   // 시간 안에서만 다음 모델을 시도한다. 무엇을 시도해 어떻게 실패했는지도 함께 남긴다.
-  const DEADLINE_MS = 90000;
-  const ATTEMPT_MS = 45000;
+  const DEADLINE_MS = 95000;
+  // 정상적으로 답할 때가 실측 40여 초다. 여유를 두되, 응답이 아예 오지 않는 경우에는
+  // 남은 시간으로 가벼운 모델(실측 2초)을 부를 수 있게 60초에서 끊는다.
+  const ATTEMPT_MS = 60000;
   const startedAt = Date.now();
   const remainingMs = () => DEADLINE_MS - (Date.now() - startedAt);
   const attempts = [];
